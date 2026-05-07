@@ -93,6 +93,7 @@ export const TransferQueue = ({ nodeId }: { nodeId: string }) => {
   const isIndeterminate = (item: TransferItem): boolean => item.size === 0 && item.state === 'active';
 
   const getProgress = (item: TransferItem): number => {
+    if (item.state === 'completed') return 100;
     if (item.size === 0) return 0;
     return Math.round((item.transferred / item.size) * 100);
   };

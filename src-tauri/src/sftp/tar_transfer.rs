@@ -599,7 +599,7 @@ fn tar_encode_directory(
     fn build_tar<W: Write>(mut writer: W, local_path: &str) -> Result<W, SftpError> {
         let mut builder = tar::Builder::new(&mut writer);
         builder.follow_symlinks(true);
-        builder.mode(tar::HeaderMode::Deterministic);
+        builder.mode(tar::HeaderMode::Complete);
         let base = Path::new(local_path);
         builder
             .append_dir_all(".", base)

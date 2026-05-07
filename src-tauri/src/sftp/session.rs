@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::time::UNIX_EPOCH;
 
 use base64::Engine;
 use futures_util::stream::{self, StreamExt, TryStreamExt};
@@ -86,6 +87,18 @@ struct UploadDirFileJob {
     local_path: String,
     remote_path: String,
     total_bytes: u64,
+    modified_time: Option<u32>,
+}
+
+fn local_mtime_seconds(metadata: &std::fs::Metadata) -> Option<u32> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .try_into()
+        .ok()
 }
 
 fn file_type_from_attrs(metadata: &FileAttributes) -> FileType {
@@ -137,6 +150,30 @@ impl SftpSession {
             session_id,
             cwd,
         })
+    }
+
+    async fn apply_remote_mtime(&self, remote_path: &str, modified_time: Option<u32>) {
+        let Some(mtime) = modified_time else {
+            return;
+        };
+
+        let attrs = FileAttributes {
+            size: None,
+            uid: None,
+            user: None,
+            gid: None,
+            group: None,
+            permissions: None,
+            atime: Some(mtime),
+            mtime: Some(mtime),
+        };
+
+        if let Err(error) = self.sftp.set_metadata(remote_path, attrs).await {
+            warn!(
+                "Failed to preserve uploaded file mtime for {}: {}",
+                remote_path, error
+            );
+        }
     }
 
     /// Get current working directory
@@ -1336,6 +1373,7 @@ impl SftpSession {
                     local_path: local_entry_path.to_string_lossy().to_string(),
                     remote_path: remote_entry_path,
                     total_bytes: metadata.len(),
+                    modified_time: local_mtime_seconds(&metadata),
                 });
             }
         }
@@ -1488,6 +1526,10 @@ impl SftpSession {
                 })
                 .await;
         }
+
+        drop(remote_file);
+        self.apply_remote_mtime(&job.remote_path, job.modified_time)
+            .await;
 
         Ok(())
     }
@@ -2060,6 +2102,7 @@ impl SftpSession {
             .await
             .map_err(SftpError::IoError)?;
         let total_bytes = metadata.len();
+        let modified_time = local_mtime_seconds(&metadata);
 
         // ── Smart Butler: Transfer Integrity Check (Upload) ──
         // Before resuming, check if the local source file size matches what was
@@ -2135,6 +2178,8 @@ impl SftpSession {
                         // Replace the target with the completed temp file.
                         self.replace_remote_file_from_swap(&temp_path, &canonical_path)
                             .await?;
+                        self.apply_remote_mtime(&canonical_path, modified_time)
+                            .await;
 
                         // Guard handles unregister on return
                         return Ok(total_bytes);
@@ -2219,6 +2264,8 @@ impl SftpSession {
 
                 self.replace_remote_file_from_swap(&temp_path, &canonical_path)
                     .await?;
+                self.apply_remote_mtime(&canonical_path, modified_time)
+                    .await;
 
                 info!(
                     "Upload complete: {} -> {} ({} bytes)",

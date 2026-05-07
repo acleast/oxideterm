@@ -8,6 +8,7 @@
 //!
 //! 参考: docs/reference/OXIDE_NEXT_ARCHITECTURE.md §3.2
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -242,6 +243,82 @@ fn update_directory_transfer_progress(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DirectoryProgressFileKey {
+    local_path: String,
+    remote_path: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DirectoryProgressFileState {
+    transferred_bytes: u64,
+    total_bytes: u64,
+    speed: u64,
+}
+
+#[derive(Debug, Default)]
+struct DirectoryProgressAccumulator {
+    files: HashMap<DirectoryProgressFileKey, DirectoryProgressFileState>,
+}
+
+impl DirectoryProgressAccumulator {
+    fn update(
+        &mut self,
+        event: TransferProgress,
+        root_local_path: &str,
+        root_remote_path: &str,
+    ) -> TransferProgress {
+        let key = DirectoryProgressFileKey {
+            local_path: event.local_path.clone(),
+            remote_path: event.remote_path.clone(),
+        };
+        self.files.insert(
+            key,
+            DirectoryProgressFileState {
+                transferred_bytes: event.transferred_bytes,
+                total_bytes: event.total_bytes,
+                speed: if event.total_bytes > 0 && event.transferred_bytes >= event.total_bytes {
+                    0
+                } else {
+                    event.speed
+                },
+            },
+        );
+
+        let total_bytes = self.files.values().map(|file| file.total_bytes).sum();
+        let transferred_bytes = self
+            .files
+            .values()
+            .map(|file| {
+                if file.total_bytes > 0 {
+                    file.transferred_bytes.min(file.total_bytes)
+                } else {
+                    file.transferred_bytes
+                }
+            })
+            .sum::<u64>();
+        let speed = self.files.values().map(|file| file.speed).sum::<u64>();
+        let eta_seconds = if speed > 0 && total_bytes > transferred_bytes {
+            Some((total_bytes - transferred_bytes) / speed)
+        } else {
+            event.eta_seconds
+        };
+
+        TransferProgress {
+            id: event.id,
+            remote_path: root_remote_path.to_string(),
+            local_path: root_local_path.to_string(),
+            direction: event.direction,
+            state: event.state,
+            total_bytes,
+            transferred_bytes,
+            speed,
+            eta_seconds,
+            error: event.error,
+        }
+    }
+}
+
 fn create_cancel_flag_bridge(
     control: std::sync::Arc<crate::sftp::TransferControl>,
 ) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
@@ -268,7 +345,14 @@ fn spawn_directory_progress_forwarder(
     transfer_manager: Arc<crate::sftp::TransferManager>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let root_local_path = stored_progress.source_path.to_string_lossy().to_string();
+        let root_remote_path = stored_progress
+            .destination_path
+            .to_string_lossy()
+            .to_string();
+        let mut accumulator = DirectoryProgressAccumulator::default();
         while let Some(progress) = rx.recv().await {
+            let progress = accumulator.update(progress, &root_local_path, &root_remote_path);
             let _ = app.emit(&format!("sftp:progress:{}", node_id), &progress);
             transfer_manager.update_background_transfer_progress(
                 &progress.id,
@@ -1912,5 +1996,73 @@ mod tests {
 
         assert_eq!(progress.total_bytes, 128);
         assert_eq!(progress.transferred_bytes, 96);
+    }
+
+    #[test]
+    fn directory_progress_accumulator_reports_directory_totals() {
+        let mut accumulator = DirectoryProgressAccumulator::default();
+
+        let first = accumulator.update(
+            TransferProgress {
+                id: "dir-1".to_string(),
+                remote_path: "/remote/dir/a.txt".to_string(),
+                local_path: "/local/dir/a.txt".to_string(),
+                direction: TransferDirection::Upload,
+                state: TransferState::InProgress,
+                total_bytes: 128,
+                transferred_bytes: 64,
+                speed: 2,
+                eta_seconds: None,
+                error: None,
+            },
+            "/local/dir",
+            "/remote/dir",
+        );
+
+        assert_eq!(first.remote_path, "/remote/dir");
+        assert_eq!(first.local_path, "/local/dir");
+        assert_eq!(first.total_bytes, 128);
+        assert_eq!(first.transferred_bytes, 64);
+
+        let second = accumulator.update(
+            TransferProgress {
+                id: "dir-1".to_string(),
+                remote_path: "/remote/dir/b.txt".to_string(),
+                local_path: "/local/dir/b.txt".to_string(),
+                direction: TransferDirection::Upload,
+                state: TransferState::InProgress,
+                total_bytes: 64,
+                transferred_bytes: 32,
+                speed: 4,
+                eta_seconds: None,
+                error: None,
+            },
+            "/local/dir",
+            "/remote/dir",
+        );
+
+        assert_eq!(second.total_bytes, 192);
+        assert_eq!(second.transferred_bytes, 96);
+        assert_eq!(second.speed, 6);
+
+        let third = accumulator.update(
+            TransferProgress {
+                id: "dir-1".to_string(),
+                remote_path: "/remote/dir/a.txt".to_string(),
+                local_path: "/local/dir/a.txt".to_string(),
+                direction: TransferDirection::Upload,
+                state: TransferState::InProgress,
+                total_bytes: 128,
+                transferred_bytes: 128,
+                speed: 10,
+                eta_seconds: None,
+                error: None,
+            },
+            "/local/dir",
+            "/remote/dir",
+        );
+
+        assert_eq!(third.transferred_bytes, 160);
+        assert_eq!(third.speed, 4);
     }
 }

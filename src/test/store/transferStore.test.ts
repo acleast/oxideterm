@@ -88,6 +88,18 @@ describe('useTransferStore', () => {
     expect(transfer?.transferred).toBe(500);
   });
 
+  it('marks completed transfers fully transferred when final progress lags behind', () => {
+    useTransferStore.setState({
+      transfers: new Map([['tx-1', makeTransfer({ id: 'tx-1', state: 'active', transferred: 512, size: 1024 })]]),
+    });
+
+    useTransferStore.getState().setTransferState('tx-1', 'completed');
+
+    const transfer = useTransferStore.getState().transfers.get('tx-1');
+    expect(transfer?.state).toBe('completed');
+    expect(transfer?.transferred).toBe(1024);
+  });
+
   it('interrupts only active or pending transfers for the selected node', () => {
     useTransferStore.setState({
       transfers: new Map([

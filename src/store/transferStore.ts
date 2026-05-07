@@ -159,9 +159,13 @@ export const useTransferStore = create<TransferStore>((set, get) => ({
       const transfer = state.transfers.get(id);
       if (!transfer) return state;
       
+      const transferred = newState === 'completed' && transfer.size > 0
+        ? transfer.size
+        : transfer.transferred;
       const newTransfers = new Map(state.transfers);
       newTransfers.set(id, {
         ...transfer,
+        transferred,
         state: newState,
         error,
         endTime: (newState === 'completed' || newState === 'error') ? Date.now() : transfer.endTime,
