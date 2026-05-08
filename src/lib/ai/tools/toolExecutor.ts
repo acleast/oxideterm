@@ -3833,7 +3833,7 @@ const SETTINGS_SECTION_KEYS: Record<string, string[]> = {
   reconnect: ['enabled', 'maxAttempts', 'initialDelayMs'],
   general: ['language', 'telemetry', 'startOnBoot'],
   ai: ['providers', 'modelContextWindows', 'userContextWindows', 'reasoningSettings'],
-  localTerminal: ['defaultShellId', 'defaultCwd', 'loadShellProfile', 'customEnvVars'],
+  localTerminal: ['defaultShellId', 'defaultCwd', 'gitBashPath', 'loadShellProfile', 'customEnvVars'],
 };
 
 function execOpenSettingsSection(args: Record<string, unknown>, startTime: number, toolCallId: string, skipFocus?: boolean): AiToolResult {

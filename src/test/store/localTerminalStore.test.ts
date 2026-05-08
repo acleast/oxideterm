@@ -24,6 +24,7 @@ const settingsStoreMock = vi.hoisted(() => ({
         defaultShellId: 'zsh',
         recentShellIds: [],
         defaultCwd: '/workspace',
+        gitBashPath: null as string | null,
         loadShellProfile: true,
         ohMyPoshEnabled: false,
         ohMyPoshTheme: null,
@@ -109,6 +110,7 @@ describe('localTerminalStore', () => {
     resetLocalTerminalStore();
     settingsStoreMock.state.settings.localTerminal.defaultShellId = 'zsh';
     settingsStoreMock.state.settings.localTerminal.defaultCwd = '/workspace';
+    settingsStoreMock.state.settings.localTerminal.gitBashPath = null;
   });
 
   it('loads shells on demand and uses configured default shell when creating terminals', async () => {
@@ -131,6 +133,31 @@ describe('localTerminalStore', () => {
     );
     expect(terminal.id).toBe('term-1');
     expect(useLocalTerminalStore.getState().terminals.get('term-1')?.shell.path).toBe('/bin/zsh');
+  });
+
+  it('uses custom Git Bash path when Git Bash is the configured default shell', async () => {
+    settingsStoreMock.state.settings.localTerminal.defaultShellId = 'git-bash';
+    settingsStoreMock.state.settings.localTerminal.gitBashPath = 'D:\\Git\\bin\\bash.exe';
+    apiMocks.localListShells.mockResolvedValue([makeShell()]);
+    apiMocks.localGetDefaultShell.mockResolvedValue(makeShell());
+    apiMocks.localCreateTerminal.mockResolvedValue({
+      sessionId: 'term-1',
+      info: makeTerminal({ shell: makeShell({ id: 'git-bash', label: 'Git Bash', path: 'D:\\Git\\bin\\bash.exe' }) }),
+    });
+
+    await useLocalTerminalStore.getState().createTerminal();
+
+    expect(useLocalTerminalStore.getState().shells).toContainEqual(
+      expect.objectContaining({
+        id: 'git-bash',
+        path: 'D:\\Git\\bin\\bash.exe',
+      }),
+    );
+    expect(apiMocks.localCreateTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shellPath: 'D:\\Git\\bin\\bash.exe',
+      }),
+    );
   });
 
   it('ignores invalid resize requests and updates local terminal dimensions on valid resize', async () => {

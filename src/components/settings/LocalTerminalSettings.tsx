@@ -11,6 +11,24 @@ import { Separator } from '@/components/ui/separator';
 import { platform } from '@/lib/platform';
 import { useLocalTerminalStore } from '@/store/localTerminalStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import type { ShellInfo } from '@/types';
+
+const GIT_BASH_ID = 'git-bash';
+
+function withGitBashOverride(shells: ShellInfo[], gitBashPath: string | null | undefined): ShellInfo[] {
+    const path = gitBashPath?.trim();
+    if (!path) return shells;
+
+    return [
+        ...shells.filter((shell) => shell.id !== GIT_BASH_ID),
+        {
+            id: GIT_BASH_ID,
+            label: 'Git Bash',
+            path,
+            args: ['--login'],
+        },
+    ];
+}
 
 export const LocalTerminalSettings = () => {
     const { t } = useTranslation();
@@ -25,7 +43,8 @@ export const LocalTerminalSettings = () => {
     }, [shellsLoaded, loadShells]);
 
     const defaultShellId = localSettings?.defaultShellId;
-    const defaultShell = shells.find((shell) => shell.id === defaultShellId) || shells[0];
+    const effectiveShells = withGitBashOverride(shells, localSettings?.gitBashPath);
+    const defaultShell = effectiveShells.find((shell) => shell.id === defaultShellId) || effectiveShells[0];
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -51,7 +70,7 @@ export const LocalTerminalSettings = () => {
                                 <SelectValue placeholder={t('settings_view.local_terminal.select_shell')} />
                             </SelectTrigger>
                             <SelectContent>
-                                {shells.map((shell) => (
+                                {effectiveShells.map((shell) => (
                                     <SelectItem key={shell.id} value={shell.id}>
                                         {shell.label}
                                     </SelectItem>
@@ -68,6 +87,21 @@ export const LocalTerminalSettings = () => {
                             </div>
                         </div>
                     )}
+
+                    <Separator className="opacity-50" />
+
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Label className="text-theme-text">{t('settings_view.local_terminal.git_bash_path')}</Label>
+                            <p className="text-xs text-theme-text-muted mt-0.5">{t('settings_view.local_terminal.git_bash_path_hint')}</p>
+                        </div>
+                        <Input
+                            value={localSettings?.gitBashPath || ''}
+                            onChange={(event) => updateLocalTerminal('gitBashPath', event.target.value || null)}
+                            placeholder={t('settings_view.local_terminal.git_bash_path_placeholder')}
+                            className="w-[300px]"
+                        />
+                    </div>
 
                     <Separator className="opacity-50" />
 
@@ -159,12 +193,12 @@ export const LocalTerminalSettings = () => {
             <div className="rounded-lg border border-theme-border bg-theme-bg-card p-5">
                 <h4 className="text-sm font-medium text-theme-text mb-4 uppercase tracking-wider">{t('settings_view.local_terminal.available_shells')}</h4>
                 <div className="space-y-2">
-                    {shells.length === 0 ? (
+                    {effectiveShells.length === 0 ? (
                         <div className="text-center py-8 text-theme-text-muted">
                             {t('settings_view.local_terminal.loading_shells')}
                         </div>
                     ) : (
-                        shells.map((shell) => (
+                        effectiveShells.map((shell) => (
                             <div
                                 key={shell.id}
                                 className="flex items-center justify-between p-3 rounded-md bg-theme-bg-panel/30 border border-theme-border/50"

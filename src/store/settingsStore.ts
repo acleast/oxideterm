@@ -411,6 +411,7 @@ export interface LocalTerminalSettings {
   defaultShellId: string | null;  // User's preferred default shell ID
   recentShellIds: string[];       // Recently used shell IDs (max 5)
   defaultCwd: string | null;      // Default working directory
+  gitBashPath: string | null;     // Optional Git for Windows bash.exe override
   // Shell profile loading
   loadShellProfile: boolean;      // Whether to load shell profile ($PROFILE for PowerShell, ~/.bashrc etc.)
   // Oh My Posh support (Windows)
@@ -658,6 +659,7 @@ const defaultLocalTerminalSettings: LocalTerminalSettings = {
   defaultShellId: null,
   recentShellIds: [],
   defaultCwd: null,
+  gitBashPath: null,
   loadShellProfile: true,       // Default: load profile for complete shell environment
   ohMyPoshEnabled: false,       // Default: disabled
   ohMyPoshTheme: null,          // No theme selected
@@ -1933,6 +1935,7 @@ const LOCAL_TERMINAL_KEYS: Array<keyof LocalTerminalSettings> = [
   'defaultShellId',
   'recentShellIds',
   'defaultCwd',
+  'gitBashPath',
   'loadShellProfile',
   'ohMyPoshEnabled',
   'ohMyPoshTheme',

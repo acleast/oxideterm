@@ -492,6 +492,7 @@ fn build_sectioned_app_settings_sections(
                         "defaultShellId",
                         "recentShellIds",
                         "defaultCwd",
+                        "gitBashPath",
                         "loadShellProfile",
                         "ohMyPoshEnabled",
                         "ohMyPoshTheme",

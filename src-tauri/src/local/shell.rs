@@ -375,10 +375,18 @@ fn scan_windows_shells() -> Vec<ShellInfo> {
     }
 
     // 4. Git Bash (if installed)
-    // Check standard install locations using %ProgramFiles%, then fallback to PATH
+    // Check standard install locations and a few common alternate drive paths,
+    // then fallback to PATH. Users can still override the path from settings.
+    let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| r"C:".to_string());
     let git_bash_paths = [
         PathBuf::from(&program_files).join(r"Git\bin\bash.exe"),
         PathBuf::from(&program_files_x86).join(r"Git\bin\bash.exe"),
+        PathBuf::from(&system_drive).join(r"Program Files\Git\bin\bash.exe"),
+        PathBuf::from(&system_drive).join(r"Program Files (x86)\Git\bin\bash.exe"),
+        PathBuf::from(r"D:\Program Files\Git\bin\bash.exe"),
+        PathBuf::from(r"D:\Program Files (x86)\Git\bin\bash.exe"),
+        PathBuf::from(r"E:\Program Files\Git\bin\bash.exe"),
+        PathBuf::from(r"E:\Program Files (x86)\Git\bin\bash.exe"),
     ];
     for path in git_bash_paths {
         if path.exists() {
@@ -437,14 +445,7 @@ fn scan_wsl_distributions(shells: &mut Vec<ShellInfo>) {
         .output()
     {
         Ok(output) if output.status.success() => output,
-        _ => {
-            // Fallback: add generic WSL entry if we can't enumerate
-            shells.push(
-                ShellInfo::new("wsl", "WSL (Default)", wsl_path.clone())
-                    .with_args(vec!["--cd".to_string(), "~".to_string()]),
-            );
-            return;
-        }
+        _ => return,
     };
 
     // Parse distribution list (UTF-16 LE output on Windows)
@@ -463,11 +464,6 @@ fn scan_wsl_distributions(shells: &mut Vec<ShellInfo>) {
         .collect();
 
     if distros.is_empty() {
-        // No distributions installed, add generic WSL entry
-        shells.push(
-            ShellInfo::new("wsl", "WSL (Default)", wsl_path)
-                .with_args(vec!["--cd".to_string(), "~".to_string()]),
-        );
         return;
     }
 

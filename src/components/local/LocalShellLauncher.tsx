@@ -20,6 +20,23 @@ import { useSettingsStore } from '../../store/settingsStore';
 import { ShellInfo } from '../../types';
 import { cn } from '../../lib/utils';
 
+const GIT_BASH_ID = 'git-bash';
+
+function withGitBashOverride(shells: ShellInfo[], gitBashPath: string | null | undefined): ShellInfo[] {
+  const path = gitBashPath?.trim();
+  if (!path) return shells;
+
+  return [
+    ...shells.filter((shell) => shell.id !== GIT_BASH_ID),
+    {
+      id: GIT_BASH_ID,
+      label: 'Git Bash',
+      path,
+      args: ['--login'],
+    },
+  ];
+}
+
 interface LocalShellLauncherProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -45,19 +62,22 @@ export const LocalShellLauncher: React.FC<LocalShellLauncherProps> = ({
     }
   }, [open, shellsLoaded, loadShells]);
 
-  // Set default selection
-  useEffect(() => {
-    if (open && defaultShell && !selectedShell) {
-      setSelectedShell(defaultShell);
-    }
-  }, [open, defaultShell, selectedShell]);
-
   // Get recent shells from settings
   const recentShellIds = settings.localTerminal?.recentShellIds || [];
   const defaultShellId = settings.localTerminal?.defaultShellId;
+  const effectiveShells = withGitBashOverride(shells, settings.localTerminal?.gitBashPath);
+
+  // Set default selection
+  useEffect(() => {
+    if (!open || selectedShell) return;
+    const configuredShell = defaultShellId
+      ? effectiveShells.find((shell) => shell.id === defaultShellId)
+      : null;
+    setSelectedShell(configuredShell ?? defaultShell ?? effectiveShells[0] ?? null);
+  }, [open, defaultShell, defaultShellId, effectiveShells, selectedShell]);
 
   // Sort shells: default first, then recent, then others
-  const sortedShells = [...shells].sort((a, b) => {
+  const sortedShells = [...effectiveShells].sort((a, b) => {
     if (a.id === defaultShellId) return -1;
     if (b.id === defaultShellId) return 1;
     const aRecent = recentShellIds.indexOf(a.id);

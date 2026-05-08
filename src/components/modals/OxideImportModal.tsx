@@ -332,6 +332,8 @@ export function OxideImportModal({ isOpen, onClose, mode = 'default' }: OxideImp
         return t('modals.import.app_settings_field_recent_shells');
       case 'defaultCwd':
         return t('settings_view.local_terminal.default_cwd');
+      case 'gitBashPath':
+        return t('settings_view.local_terminal.git_bash_path');
       case 'loadShellProfile':
         return t('settings_view.local_terminal.load_shell_profile');
       case 'ohMyPoshEnabled':

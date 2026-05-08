@@ -15,6 +15,34 @@ import {
   CreateTelnetTerminalRequest,
 } from '../types';
 
+const GIT_BASH_ID = 'git-bash';
+
+function normalizeCustomPath(path: string | null | undefined): string | null {
+  const trimmed = path?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function buildGitBashOverride(path: string | null | undefined): ShellInfo | null {
+  const normalizedPath = normalizeCustomPath(path);
+  if (!normalizedPath) return null;
+
+  return {
+    id: GIT_BASH_ID,
+    label: 'Git Bash',
+    path: normalizedPath,
+    args: ['--login'],
+  };
+}
+
+function applyLocalShellOverrides(shells: ShellInfo[], localSettings: ReturnType<typeof useSettingsStore.getState>['settings']['localTerminal']): ShellInfo[] {
+  const gitBashOverride = buildGitBashOverride(localSettings?.gitBashPath);
+  if (!gitBashOverride) return shells;
+
+  const nextShells = shells.filter((shell) => shell.id !== GIT_BASH_ID);
+  nextShells.push(gitBashOverride);
+  return nextShells;
+}
+
 interface LocalTerminalStore {
   // State
   terminals: Map<string, LocalTerminalInfo>;
@@ -65,7 +93,16 @@ export const useLocalTerminalStore = create<LocalTerminalStore>((set, get) => ({
         api.localListShells(),
         api.localGetDefaultShell(),
       ]);
-      set({ shells, defaultShell, shellsLoaded: true });
+      const localSettings = useSettingsStore.getState().settings.localTerminal;
+      const resolvedShells = applyLocalShellOverrides(shells, localSettings);
+      const configuredDefaultShell = localSettings?.defaultShellId
+        ? resolvedShells.find((shell) => shell.id === localSettings.defaultShellId)
+        : null;
+      const resolvedDefaultShell = configuredDefaultShell
+        ?? applyLocalShellOverrides([defaultShell], localSettings)[0]
+        ?? defaultShell;
+
+      set({ shells: resolvedShells, defaultShell: resolvedDefaultShell, shellsLoaded: true });
     } catch (error) {
       const errorMessage = String(error);
       console.error('Failed to load shells:', error);
@@ -100,10 +137,14 @@ export const useLocalTerminalStore = create<LocalTerminalStore>((set, get) => ({
       // Resolve shell path from settings if not explicitly provided in request
       let shellPath = request?.shellPath;
       if (!shellPath && localSettings?.defaultShellId) {
+        if (localSettings.defaultShellId === GIT_BASH_ID) {
+          shellPath = normalizeCustomPath(localSettings.gitBashPath) ?? undefined;
+        }
+
         // Find the shell by ID and get its path
         const defaultShell = shells.find(s => s.id === localSettings.defaultShellId);
         if (defaultShell) {
-          shellPath = defaultShell.path;
+          shellPath ??= defaultShell.path;
           console.debug(`[LocalTerminal] Using configured default shell: ${defaultShell.label} (${shellPath})`);
         } else {
           console.warn(`[LocalTerminal] Configured defaultShellId "${localSettings.defaultShellId}" not found in available shells`);

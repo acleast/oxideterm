@@ -45,6 +45,7 @@ const settingsState = vi.hoisted(() => ({
       defaultShellId: null,
       recentShellIds: [],
       defaultCwd: null,
+      gitBashPath: null,
       loadShellProfile: true,
       ohMyPoshEnabled: false,
       ohMyPoshTheme: null,
