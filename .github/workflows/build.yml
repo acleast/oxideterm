@@ -123,36 +123,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         id: release_notes
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-
-          # Try manual changelog first (exit 2 = no changelog found)
-          NOTES=$(pnpm --silent release:notes "$VERSION" --stdout 2>/dev/null) && HAS_CHANGELOG=true || HAS_CHANGELOG=false
-
-          if [ "$HAS_CHANGELOG" = "false" ]; then
-            # Fall back to GitHub auto-generated release notes (based on .github/release.yml + PR history)
-            PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p' || echo "")
-            if [ -n "$PREV_TAG" ]; then
-              AUTO_NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
-                -f tag_name="${GITHUB_REF_NAME}" \
-                -f previous_tag_name="$PREV_TAG" \
-                --jq '.body' 2>/dev/null || echo "")
-            else
-              AUTO_NOTES=$(gh api repos/${{ github.repository }}/releases/generate-notes \
-                -f tag_name="${GITHUB_REF_NAME}" \
-                --jq '.body' 2>/dev/null || echo "")
-            fi
-
-            # Combine: auto-generated notes + install tips from script
-            INSTALL_TIPS=$(echo "$NOTES")
-            if [ -n "$AUTO_NOTES" ]; then
-              NOTES="${AUTO_NOTES}
-
-          ${INSTALL_TIPS}"
-            fi
-          fi
+          NOTES=$(pnpm --silent release:notes "$VERSION" --stdout)
 
           echo "body<<EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT

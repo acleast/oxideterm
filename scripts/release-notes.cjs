@@ -7,7 +7,7 @@
  *   pnpm release:notes 1.4.4
  *
  * This script:
- *   1. Extracts release notes from docs/changelog/YYYY-MM.md
+ *   1. Extracts release notes from docs/changelog/YYYY-MM.md when available
  *   2. Adds concise installation tips
  *   3. Outputs to RELEASE_NOTES.md or stdout (for GitHub release)
  *
@@ -155,7 +155,7 @@ Current version: ${getCurrentVersion()}
   } else {
     info(`⚠️  No changelog entry found for v${version}`);
     info(`   Expected: docs/changelog/YYYY-MM.md with header "## YYYY-MM-DD: Title (v${version})"`);
-    info(`   Will fall back to GitHub auto-generated release notes.`);
+    info(`   Release body will include installation tips only.`);
   }
 
   const releaseNotes = generateReleaseNotes(version, changelogEntry);
@@ -163,8 +163,6 @@ Current version: ${getCurrentVersion()}
   if (toStdout) {
     // Only the release body goes to stdout — clean for CI capture
     process.stdout.write(releaseNotes);
-    // Exit 2 = no changelog found → workflow should use auto-generated notes
-    if (!changelogEntry) process.exit(2);
   } else {
     fs.writeFileSync(OUTPUT_FILE, releaseNotes);
     info(`✨ Release notes written to RELEASE_NOTES.md`);
