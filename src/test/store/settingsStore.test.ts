@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
+import packageJson from '../../../package.json';
 
 const toastMock = vi.hoisted(() => ({
   addToast: vi.fn(),
@@ -335,10 +336,21 @@ describe('settingsStore', () => {
     expect(localStorage.getItem('oxide-ui-state')).toBeNull();
   });
 
-  it('defaults prerelease builds to the beta update channel', async () => {
+  it('defaults update channel from the package version', async () => {
     const useSettingsStore = await loadSettingsStore();
+    const expectedChannel = /-(?:alpha|beta|rc|pre|preview)(?:[.-]|$)/i.test(packageJson.version)
+      ? 'beta'
+      : 'stable';
 
-    expect(useSettingsStore.getState().settings.general.updateChannel).toBe('beta');
+    expect(useSettingsStore.getState().settings.general.updateChannel).toBe(expectedChannel);
+  });
+
+  it('detects prerelease package versions for beta defaults', async () => {
+    const { isPrereleaseVersion } = await import('@/store/settingsStore');
+
+    expect(isPrereleaseVersion('1.4.2-beta.0')).toBe(true);
+    expect(isPrereleaseVersion('1.4.2-rc.1')).toBe(true);
+    expect(isPrereleaseVersion('1.4.2')).toBe(false);
   });
 
   it('preserves an explicitly selected stable update channel', async () => {

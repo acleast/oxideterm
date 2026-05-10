@@ -67,7 +67,7 @@ export const DEFAULT_AI_TOOL_MAX_ROUNDS = 10;
 export const MIN_AI_TOOL_MAX_ROUNDS = 1;
 export const MAX_AI_TOOL_MAX_ROUNDS = 30;
 
-function isPrereleaseVersion(version: string | undefined): boolean {
+export function isPrereleaseVersion(version: string | undefined): boolean {
   return /-(?:alpha|beta|rc|pre|preview)(?:[.-]|$)/i.test(version ?? '');
 }
 
