@@ -80,6 +80,14 @@ pub struct ResourceMetrics {
     pub memory_total: Option<u64>,
     /// Memory usage percentage (0-100)
     pub memory_percent: Option<f64>,
+    /// Root filesystem used bytes
+    pub disk_used: Option<u64>,
+    /// Root filesystem total bytes
+    pub disk_total: Option<u64>,
+    /// Root filesystem usage percentage (0-100)
+    pub disk_percent: Option<f64>,
+    /// Filesystem mount point reported for disk usage
+    pub disk_mount: Option<String>,
     /// 1-minute load average
     pub load_avg_1: Option<f64>,
     /// 5-minute load average

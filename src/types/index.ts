@@ -905,6 +905,10 @@ export type ResourceMetrics = {
   memoryUsed: number | null;
   memoryTotal: number | null;
   memoryPercent: number | null;
+  diskUsed: number | null;
+  diskTotal: number | null;
+  diskPercent: number | null;
+  diskMount: string | null;
   loadAvg1: number | null;
   loadAvg5: number | null;
   loadAvg15: number | null;

@@ -13,7 +13,7 @@
 //! # Design
 //! - One `ResourceProfiler` per connection, bound to SSH lifecycle via `subscribe_disconnect()`
 //! - Opens ONE shell channel at startup, reuses it for all sampling cycles
-//! - Collects `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev` via stdin commands
+//! - Collects `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/net/dev`, and root disk usage via stdin commands
 //! - CPU% and network rates require delta between two samples (first sample returns None)
 //! - Non-Linux hosts gracefully degrade to `MetricsSource::RttOnly`
 //! - Port detection commands are platform-dispatched based on `os_type`
@@ -60,10 +60,10 @@ const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// Timeout for opening the initial shell channel
 const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Slimmed sampling command (Linux only) — reads /proc pseudo-files for metrics.
+/// Slimmed sampling command (Linux only) — reads /proc pseudo-files and root disk usage for metrics.
 /// The full command is now built dynamically by `build_sample_command()` based on `os_type`,
 /// appending a platform-specific port scan after the metrics section.
-const METRICS_COMMAND_LINUX: &str = "echo '===STAT==='; head -1 /proc/stat 2>/dev/null; echo '===MEMINFO==='; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo 2>/dev/null; echo '===LOADAVG==='; cat /proc/loadavg 2>/dev/null; echo '===NETDEV==='; cat /proc/net/dev 2>/dev/null; echo '===NPROC==='; nproc 2>/dev/null";
+const METRICS_COMMAND_LINUX: &str = "echo '===STAT==='; head -1 /proc/stat 2>/dev/null; echo '===MEMINFO==='; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo 2>/dev/null; echo '===LOADAVG==='; cat /proc/loadavg 2>/dev/null; echo '===NETDEV==='; cat /proc/net/dev 2>/dev/null; echo '===NPROC==='; nproc 2>/dev/null; echo '===DISK==='; df -P -k / 2>/dev/null | tail -n +2 | head -1";
 
 // ─── Port Detection: Platform-Dispatched Commands ─────────────────────────
 
@@ -166,6 +166,14 @@ impl CpuSnapshot {
 struct NetSnapshot {
     rx_bytes: u64,
     tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DiskUsage {
+    used_bytes: u64,
+    total_bytes: u64,
+    percent: f64,
+    mount: String,
 }
 
 /// Previous sample state for delta calculations
@@ -614,6 +622,10 @@ fn make_empty_metrics(source: MetricsSource) -> ResourceMetrics {
         memory_used: None,
         memory_total: None,
         memory_percent: None,
+        disk_used: None,
+        disk_total: None,
+        disk_percent: None,
+        disk_mount: None,
         load_avg_1: None,
         load_avg_5: None,
         load_avg_15: None,
@@ -633,6 +645,7 @@ fn parse_metrics(output: &str, prev: &Option<PreviousSample>) -> ResourceMetrics
     let mem = parse_meminfo(output);
     let load = parse_loadavg(output);
     let nproc = parse_nproc(output);
+    let disk = parse_disk_usage(output);
 
     // CPU% via delta
     let cpu_percent = match (&cpu_snap, prev) {
@@ -679,6 +692,16 @@ fn parse_metrics(output: &str, prev: &Option<PreviousSample>) -> ResourceMetrics
         None => (None, None, None),
     };
 
+    let (disk_used, disk_total, disk_percent, disk_mount) = match disk {
+        Some(disk) => (
+            Some(disk.used_bytes),
+            Some(disk.total_bytes),
+            Some(disk.percent),
+            Some(disk.mount),
+        ),
+        None => (None, None, None, None),
+    };
+
     // Determine source quality
     let has_cpu = cpu_snap.is_some();
     let has_mem = mem.is_some();
@@ -697,6 +720,10 @@ fn parse_metrics(output: &str, prev: &Option<PreviousSample>) -> ResourceMetrics
         memory_used: mem_used,
         memory_total: mem_total,
         memory_percent: mem_percent,
+        disk_used,
+        disk_total,
+        disk_percent,
+        disk_mount,
         load_avg_1: load.map(|(a, _, _)| a),
         load_avg_5: load.map(|(_, b, _)| b),
         load_avg_15: load.map(|(_, _, c)| c),
@@ -766,6 +793,28 @@ fn parse_meminfo(output: &str) -> Option<(u64, u64)> {
     let available = available_kb? * 1024;
     let used = total.saturating_sub(available);
     Some((used, total))
+}
+
+/// Parse `df -P -k /` output → root filesystem usage.
+fn parse_disk_usage(output: &str) -> Option<DiskUsage> {
+    let section = extract_section(output, "DISK")?;
+    let line = section.lines().find(|line| !line.trim().is_empty())?;
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 6 {
+        return None;
+    }
+
+    let total_bytes = parts[1].parse::<u64>().ok()?.saturating_mul(1024);
+    let used_bytes = parts[2].parse::<u64>().ok()?.saturating_mul(1024);
+    let percent = parts[4].trim_end_matches('%').parse::<f64>().ok()?;
+    let mount = parts[5..].join(" ");
+
+    Some(DiskUsage {
+        used_bytes,
+        total_bytes,
+        percent,
+        mount,
+    })
 }
 
 /// Extract "MemTotal:    1234 kB" → 1234
@@ -1270,6 +1319,8 @@ Inter-|   Receive                                                |  Transmit
   eth0: 987654321  12345    0    0    0     0          0         0 123456789   6789    0    0    0     0       0          0
 ===NPROC===
 4
+===DISK===
+/dev/sda1 104857600 52428800 52428800 50% /
 ===END==="#;
 
     #[test]
@@ -1286,6 +1337,15 @@ Inter-|   Receive                                                |  Transmit
         let (used, total) = parse_meminfo(SAMPLE_OUTPUT).unwrap();
         assert_eq!(total, 16384000 * 1024);
         assert_eq!(used, (16384000 - 8192000) * 1024);
+    }
+
+    #[test]
+    fn test_parse_disk_usage() {
+        let disk = parse_disk_usage(SAMPLE_OUTPUT).unwrap();
+        assert_eq!(disk.total_bytes, 104857600 * 1024);
+        assert_eq!(disk.used_bytes, 52428800 * 1024);
+        assert_eq!(disk.percent, 50.0);
+        assert_eq!(disk.mount, "/");
     }
 
     #[test]
@@ -1319,6 +1379,7 @@ Inter-|   Receive                                                |  Transmit
         assert!(metrics.net_tx_bytes_per_sec.is_none());
         // But memory and load should be present
         assert!(metrics.memory_used.is_some());
+        assert_eq!(metrics.disk_percent, Some(50.0));
         assert!(metrics.load_avg_1.is_some());
         assert_eq!(metrics.cpu_cores, Some(4));
         assert_eq!(metrics.source, MetricsSource::Full);

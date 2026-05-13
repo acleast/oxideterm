@@ -17,6 +17,7 @@ import { Progress } from '../ui/progress';
 import {
   Cpu,
   MemoryStick,
+  HardDrive,
   ArrowDown,
   ArrowUp,
   Activity,
@@ -212,6 +213,7 @@ export const SystemHealthPanel: React.FC = () => {
 
   const cpuHistory = useMemo(() => history.map((h) => h.cpuPercent), [history]);
   const memHistory = useMemo(() => history.map((h) => h.memoryPercent), [history]);
+  const diskHistory = useMemo(() => history.map((h) => h.diskPercent), [history]);
 
   const source = metrics?.source ?? 'failed';
   const isRttOnly = source === 'rtt_only' || source === 'failed';
@@ -327,6 +329,22 @@ export const SystemHealthPanel: React.FC = () => {
           <Progress value={metrics.memoryPercent ?? 0} className="h-1.5" />
           {memHistory.length >= 2 && (
             <Sparkline data={memHistory} className={thresholdColor(metrics.memoryPercent)} />
+          )}
+        </MetricCard>
+      )}
+
+      {/* Disk Card */}
+      {!isRttOnly && metrics.diskUsed !== null && metrics.diskTotal !== null && (
+        <MetricCard
+          label={`${t('profiler.panel.disk')}${metrics.diskMount ? ` (${metrics.diskMount})` : ''}`}
+          value={`${formatBytes(metrics.diskUsed)} / ${formatBytes(metrics.diskTotal)}`}
+          icon={HardDrive}
+          colorClass={thresholdColor(metrics.diskPercent)}
+          dotClass={thresholdDot(metrics.diskPercent)}
+        >
+          <Progress value={metrics.diskPercent ?? 0} className="h-1.5" />
+          {diskHistory.length >= 2 && (
+            <Sparkline data={diskHistory} className={thresholdColor(metrics.diskPercent)} />
           )}
         </MetricCard>
       )}
