@@ -62,4 +62,42 @@ describe('FolderTree', () => {
       expect(onRequestCreateGroup).toHaveBeenCalled();
     });
   });
+
+  it('renders nested groups when a parent folder is expanded', () => {
+    const onSelectGroup = vi.fn();
+    const onToggleExpand = vi.fn();
+
+    render(
+      <div className="h-[400px] w-[240px]">
+        <FolderTree
+          folderTree={[{
+            name: 'Production',
+            fullPath: 'Production',
+            connectionCount: 2,
+            children: [{
+              name: 'Core',
+              fullPath: 'Production/Core',
+              connectionCount: 1,
+              children: [],
+            }],
+          }]}
+          selectedGroup={null}
+          expandedGroups={new Set(['Production'])}
+          totalCount={2}
+          ungroupedCount={0}
+          onSelectGroup={onSelectGroup}
+          onToggleExpand={onToggleExpand}
+          onRequestCreateGroup={vi.fn()}
+        />
+      </div>,
+    );
+
+    expect(screen.getByText('Production')).toBeInTheDocument();
+    expect(screen.getByText('Core')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Core'));
+
+    expect(onSelectGroup).toHaveBeenCalledWith('Production/Core');
+    expect(onToggleExpand).not.toHaveBeenCalled();
+  });
 });
