@@ -2669,6 +2669,50 @@ pub async fn delete_connection(
     Ok(())
 }
 
+/// Delete multiple saved connections in one config transaction.
+#[tauri::command]
+pub async fn delete_connections(
+    app_handle: tauri::AppHandle,
+    state: State<'_, Arc<ConfigState>>,
+    forwarding_registry: State<'_, Arc<ForwardingRegistry>>,
+    ids: Vec<String>,
+) -> Result<usize, String> {
+    let removed = {
+        let mut config = state.config.write();
+        let mut removed = Vec::new();
+        let mut seen = HashSet::new();
+
+        for id in ids {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+
+            if let Some(connection) = config.remove_connection(&id) {
+                for keychain_id in collect_connection_keychain_ids(&connection) {
+                    let _ = state.keychain.delete(&keychain_id);
+                }
+                removed.push(connection.id);
+            }
+        }
+
+        removed
+    };
+
+    for id in &removed {
+        forwarding_registry.delete_owned_forwards(id).await?;
+    }
+
+    if !removed.is_empty() {
+        state.save().await?;
+
+        app_handle
+            .emit("connection:update", "deleted")
+            .map_err(|e| format!("Failed to emit connection:update: {}", e))?;
+    }
+
+    Ok(removed.len())
+}
+
 /// Apply a structured snapshot of saved connections produced by a sync plugin.
 #[tauri::command]
 pub async fn apply_saved_connections_snapshot(

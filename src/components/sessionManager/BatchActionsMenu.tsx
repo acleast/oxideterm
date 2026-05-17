@@ -51,7 +51,8 @@ export const BatchActionsMenu = ({
       return;
     }
     try {
-      await Promise.all(Array.from(selectedIds).map(id => api.deleteConnection(id)));
+      const ids = Array.from(selectedIds);
+      await api.deleteConnections(ids);
       toast({
         title: t('sessionManager.toast.connections_deleted', { count: selectedIds.size }),
         description: '',

@@ -1,7 +1,9 @@
 // Copyright (C) 2026 AnalyseDeCircuit
 // SPDX-License-Identifier: GPL-3.0-only
 
+import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ArrowUpDown, ArrowUp, ArrowDown, Server, Plus } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Checkbox } from '../ui/checkbox';
@@ -10,6 +12,8 @@ import { ConnectionTableRow } from './ConnectionTableRow';
 import { useAppStore } from '../../store/appStore';
 import type { ConnectionInfo } from '../../types';
 import type { SortField, SortDirection } from './useSessionManager';
+
+const CONNECTION_ROW_HEIGHT = 37;
 
 type ConnectionTableProps = {
   connections: ConnectionInfo[];
@@ -49,8 +53,15 @@ export const ConnectionTable = ({
 }: ConnectionTableProps) => {
   const { t } = useTranslation();
   const toggleModal = useAppStore(s => s.toggleModal);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const isAllSelected = connections.length > 0 && selectedIds.size === connections.length;
+  const rowVirtualizer = useVirtualizer({
+    count: connections.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => CONNECTION_ROW_HEIGHT,
+    overscan: 16,
+  });
 
   const columns: { key: SortField | 'actions' | 'checkbox'; label: string; sortable: boolean; className: string }[] = [
     { key: 'checkbox', label: '', sortable: false, className: 'w-8 shrink-0' },
@@ -81,7 +92,7 @@ export const ConnectionTable = ({
   }
 
   return (
-    <div className="h-full overflow-auto">
+    <div ref={scrollRef} className="h-full overflow-auto">
       <div className="min-w-fit flex flex-col">
         {/* Table header */}
         <div className="flex items-center border-b border-theme-border bg-theme-bg-secondary px-2 py-1.5 text-xs font-medium text-theme-text-muted sticky top-0 z-10">
@@ -119,19 +130,34 @@ export const ConnectionTable = ({
         </div>
 
         {/* Table body */}
-        {connections.map(conn => (
-          <ConnectionTableRow
-            key={conn.id}
-            connection={conn}
-            isSelected={selectedIds.has(conn.id)}
-            onToggleSelect={onToggleSelect}
-            onConnect={onConnect}
-            onEdit={onEdit}
-            onDuplicate={onDuplicate}
-            onDelete={onDelete}
-            onTestConnection={onTestConnection}
-          />
-        ))}
+        <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative' }}>
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const conn = connections[virtualRow.index];
+            return (
+              <div
+                key={conn.id}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <ConnectionTableRow
+                  connection={conn}
+                  isSelected={selectedIds.has(conn.id)}
+                  onToggleSelect={onToggleSelect}
+                  onConnect={onConnect}
+                  onEdit={onEdit}
+                  onDuplicate={onDuplicate}
+                  onDelete={onDelete}
+                  onTestConnection={onTestConnection}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

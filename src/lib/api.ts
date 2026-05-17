@@ -629,6 +629,11 @@ export const api = {
     return invoke('delete_connection', { id });
   },
 
+  deleteConnections: async (ids: string[]): Promise<number> => {
+    if (USE_MOCK) return ids.length;
+    return invoke('delete_connections', { ids });
+  },
+
   markConnectionUsed: async (id: string): Promise<void> => {
     if (USE_MOCK) return;
     return invoke('mark_connection_used', { id });

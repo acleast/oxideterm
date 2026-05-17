@@ -1,8 +1,9 @@
 // Copyright (C) 2026 AnalyseDeCircuit
 // SPDX-License-Identifier: GPL-3.0-only
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Terminal,
   Folder,
@@ -55,6 +56,8 @@ import { PluginSidebarRenderer } from '../plugin/PluginSidebarRenderer';
 import { PluginTargetContextMenu } from '../plugin/PluginTargetContextMenu';
 import { BackgroundSessionsPopover } from '../terminal/BackgroundSessionsPopover';
 
+const SAVED_CONNECTION_ROW_HEIGHT = 43;
+
 export const Sidebar = () => {
   const { t } = useTranslation();
 
@@ -104,6 +107,24 @@ export const Sidebar = () => {
   const enterNode = useSessionTreeStore((s) => s.enterNode);
 
   const [savedSearchQuery, setSavedSearchQuery] = useState('');
+  const savedListRef = useRef<HTMLDivElement>(null);
+  const filteredSavedConnections = useMemo(() => {
+    const query = savedSearchQuery.trim().toLowerCase();
+    if (!query) return savedConnections;
+
+    return savedConnections.filter(c => (
+      c.name.toLowerCase().includes(query)
+      || c.host.toLowerCase().includes(query)
+      || c.username.toLowerCase().includes(query)
+      || (c.group || '').toLowerCase().includes(query)
+    ));
+  }, [savedConnections, savedSearchQuery]);
+  const savedListVirtualizer = useVirtualizer({
+    count: filteredSavedConnections.length,
+    getScrollElement: () => savedListRef.current,
+    estimateSize: () => SAVED_CONNECTION_ROW_HEIGHT,
+    overscan: 12,
+  });
 
   // 视图模式：'tree' = 传统树形视图, 'focus' = 面包屑+聚焦模式
   const [viewMode, setViewMode] = useState<'tree' | 'focus'>('tree');
@@ -1000,49 +1021,50 @@ export const Sidebar = () => {
               </div>
 
               {/* Connections List (simple click-to-connect) */}
-              <div className="flex-1 overflow-y-auto space-y-0.5 px-1">
-                {(() => {
-                  const filtered = savedSearchQuery.trim()
-                    ? savedConnections.filter(c => {
-                        const q = savedSearchQuery.toLowerCase();
-                        return c.name.toLowerCase().includes(q)
-                          || c.host.toLowerCase().includes(q)
-                          || c.username.toLowerCase().includes(q)
-                          || (c.group || '').toLowerCase().includes(q);
-                      })
-                    : savedConnections;
-
-                  if (filtered.length === 0) {
-                    return (
-                      <div className="text-xs text-theme-text-muted px-2 py-4 text-center">
-                        {savedSearchQuery ? t('sessionManager.table.no_search_results') : t('sidebar.panels.no_saved_connections')}
-                      </div>
-                    );
-                  }
-
-                  return filtered.map(conn => (
-                    <div
-                      key={conn.id}
-                      onClick={() => handleConnectSaved(conn.id)}
-                      className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer group text-theme-text hover:bg-theme-bg-hover transition-colors"
-                    >
-                      {conn.color && (
+              <div ref={savedListRef} className="flex-1 overflow-y-auto px-1">
+                {filteredSavedConnections.length === 0 ? (
+                  <div className="text-xs text-theme-text-muted px-2 py-4 text-center">
+                    {savedSearchQuery ? t('sessionManager.table.no_search_results') : t('sidebar.panels.no_saved_connections')}
+                  </div>
+                ) : (
+                  <div style={{ height: savedListVirtualizer.getTotalSize(), position: 'relative' }}>
+                    {savedListVirtualizer.getVirtualItems().map((virtualRow) => {
+                      const conn = filteredSavedConnections[virtualRow.index];
+                      return (
                         <div
-                          className="w-0.5 h-6 rounded-full shrink-0"
-                          style={{ backgroundColor: conn.color }}
-                        />
-                      )}
-                      <Server className="h-3 w-3 text-theme-text-muted shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="truncate font-medium text-xs">{conn.name}</div>
-                        <div className="text-[10px] text-theme-text-muted truncate">
-                          {conn.username}@{conn.host}:{conn.port}
+                          key={conn.id}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            transform: `translateY(${virtualRow.start}px)`,
+                          }}
+                        >
+                          <div
+                            onClick={() => handleConnectSaved(conn.id)}
+                            className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-md cursor-pointer group text-theme-text hover:bg-theme-bg-hover transition-colors"
+                          >
+                            {conn.color && (
+                              <div
+                                className="w-0.5 h-6 rounded-full shrink-0"
+                                style={{ backgroundColor: conn.color }}
+                              />
+                            )}
+                            <Server className="h-3 w-3 text-theme-text-muted shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="truncate font-medium text-xs">{conn.name}</div>
+                              <div className="text-[10px] text-theme-text-muted truncate">
+                                {conn.username}@{conn.host}:{conn.port}
+                              </div>
+                            </div>
+                            <ChevronRight className="h-3 w-3 text-theme-text-muted opacity-0 group-hover:opacity-100 shrink-0" />
+                          </div>
                         </div>
-                      </div>
-                      <ChevronRight className="h-3 w-3 text-theme-text-muted opacity-0 group-hover:opacity-100 shrink-0" />
-                    </div>
-                  ));
-                })()}
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
 
