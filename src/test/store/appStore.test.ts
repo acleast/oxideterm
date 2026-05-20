@@ -134,7 +134,7 @@ vi.mock('@/i18n', () => ({
 import { useAppStore } from '@/store/appStore';
 import { useIdeStore } from '@/store/ideStore';
 import { topologyResolver } from '@/lib/topologyResolver';
-import type { RemoteEnvInfo, SessionInfo, SshConnectionInfo } from '@/types';
+import type { PaneNode, RemoteEnvInfo, SessionInfo, SshConnectionInfo } from '@/types';
 
 function makeConnection(overrides: Partial<SshConnectionInfo> = {}): SshConnectionInfo {
   return {
@@ -401,6 +401,55 @@ describe('appStore', () => {
         state: 'idle',
       }),
     );
+  });
+
+  it('closePane removes a nested pane when more than two panes are open', () => {
+    const rootPane: PaneNode = {
+      type: 'group',
+      id: 'root',
+      direction: 'horizontal',
+      children: [
+        { type: 'leaf', id: 'pane-1', sessionId: 'local-1', terminalType: 'local_terminal' },
+        {
+          type: 'group',
+          id: 'nested',
+          direction: 'vertical',
+          children: [
+            { type: 'leaf', id: 'pane-2', sessionId: 'local-2', terminalType: 'local_terminal' },
+            { type: 'leaf', id: 'pane-3', sessionId: 'local-3', terminalType: 'local_terminal' },
+          ],
+          sizes: [50, 50],
+        },
+      ],
+      sizes: [50, 50],
+    };
+
+    useAppStore.setState({
+      tabs: [{
+        id: 'tab-1',
+        type: 'local_terminal',
+        title: 'Local',
+        rootPane,
+        activePaneId: 'pane-2',
+      }],
+      activeTabId: 'tab-1',
+    });
+
+    useAppStore.getState().closePane('tab-1', 'pane-2');
+
+    const [tab] = useAppStore.getState().tabs;
+    expect(tab.rootPane).toEqual({
+      type: 'group',
+      id: 'root',
+      direction: 'horizontal',
+      children: [
+        { type: 'leaf', id: 'pane-1', sessionId: 'local-1', terminalType: 'local_terminal' },
+        { type: 'leaf', id: 'pane-3', sessionId: 'local-3', terminalType: 'local_terminal' },
+      ],
+      sizes: [50, 50],
+    });
+    expect(tab.activePaneId).toBe('pane-3');
+    expect(useAppStore.getState().getPaneCount('tab-1')).toBe(2);
   });
 
   it('closeTab clears ideStore when the last IDE tab closes', async () => {

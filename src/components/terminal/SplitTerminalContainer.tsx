@@ -10,6 +10,14 @@ import { cn } from '../../lib/utils';
 /** Debounce delay for resize events (ms) */
 const RESIZE_DEBOUNCE_MS = 150;
 
+export function getPaneLayoutKey(node: PaneNode): string {
+  if (node.type === 'leaf') {
+    return `leaf:${node.id}`;
+  }
+
+  return `group:${node.id}:${node.direction}(${node.children.map(getPaneLayoutKey).join('|')})`;
+}
+
 interface SplitTerminalContainerProps {
   tabId: string;
   rootPane: PaneNode;
@@ -125,6 +133,7 @@ const PaneRenderer: React.FC<PaneRendererProps> = ({
 
   return (
     <Group
+      key={getPaneLayoutKey(group)}
       orientation={orientation}
       defaultLayout={defaultLayout}
       onLayoutChanged={handleLayoutChanged}

@@ -1796,41 +1796,46 @@ function splitPaneInTree(
 function removePaneFromTree(
   node: PaneNode,
   paneId: string
-): { node: PaneNode | null; newActivePaneId?: string } {
+): { node: PaneNode | null; removed: boolean; newActivePaneId?: string } {
   // Leaf node: check if this is the target
   if (node.type === 'leaf') {
     if (node.id === paneId) {
-      return { node: null };
+      return { node: null, removed: true };
     }
-    return { node };
+    return { node, removed: false };
   }
   
   // Group node: recurse into children
   const newChildren: PaneNode[] = [];
   let removedIndex = -1;
   let newActivePaneId: string | undefined;
+  let removed = false;
   
   for (let i = 0; i < node.children.length; i++) {
     const result = removePaneFromTree(node.children[i], paneId);
     if (result.node === null) {
       removedIndex = i;
+      removed = true;
       newActivePaneId = result.newActivePaneId;
     } else {
       newChildren.push(result.node);
       if (result.newActivePaneId) {
         newActivePaneId = result.newActivePaneId;
       }
+      if (result.removed) {
+        removed = true;
+      }
     }
   }
   
   // If nothing was removed, return unchanged
-  if (removedIndex === -1) {
-    return { node };
+  if (!removed) {
+    return { node, removed: false };
   }
   
   // If no children left, return null
   if (newChildren.length === 0) {
-    return { node: null };
+    return { node: null, removed: true };
   }
   
   // If only one child left, unwrap it (remove the group)
@@ -1840,21 +1845,24 @@ function removePaneFromTree(
     if (!newActivePaneId) {
       newActivePaneId = findFirstLeaf(remaining)?.id;
     }
-    return { node: remaining, newActivePaneId };
+    return { node: remaining, removed: true, newActivePaneId };
   }
   
   // Multiple children remain - update sizes proportionally
   const oldSizes = node.sizes || node.children.map(() => 100 / node.children.length);
-  const removedSize = oldSizes[removedIndex] || 0;
-  const remainingTotal = 100 - removedSize;
-  
-  const newSizes = oldSizes
-    .filter((_, i) => i !== removedIndex)
-    .map(size => (size / remainingTotal) * 100);
+  const newSizes = removedIndex >= 0
+    ? (() => {
+      const removedSize = oldSizes[removedIndex] || 0;
+      const remainingTotal = 100 - removedSize;
+      return oldSizes
+        .filter((_, i) => i !== removedIndex)
+        .map(size => (size / remainingTotal) * 100);
+    })()
+    : oldSizes;
   
   // Suggest the next sibling as new active
   if (!newActivePaneId) {
-    const nextIndex = Math.min(removedIndex, newChildren.length - 1);
+    const nextIndex = removedIndex >= 0 ? Math.min(removedIndex, newChildren.length - 1) : 0;
     newActivePaneId = findFirstLeaf(newChildren[nextIndex])?.id;
   }
   
@@ -1864,6 +1872,7 @@ function removePaneFromTree(
       children: newChildren,
       sizes: newSizes,
     },
+    removed: true,
     newActivePaneId,
   };
 }
