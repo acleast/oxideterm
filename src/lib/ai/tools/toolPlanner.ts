@@ -201,6 +201,16 @@ const TERMINAL_PATTERNS = [
   /(?:当前终端|终端输出|终端缓冲区|屏幕|提示符|密码|输入|按键|控制信号|Ctrl-|sudo|vim|nvim|tmux|TUI)/i,
 ];
 
+const CONTROL_SEQUENCE_PATTERNS = [
+  /\b(?:ctrl|control)[-\s]*(?:c|d|z|l|\\)\b/i,
+  /\b(?:sigint|eof|interrupt|cancel|abort|stop|suspend|clear)\b.*\b(?:running|current|command|process|terminal|screen|shell)\b/i,
+  /\b(?:send|press|hit)\b.*\b(?:ctrl|control)[-\s]*(?:c|d|z|l|\\)\b/i,
+  /\b(?:kill|stop|cancel|abort|interrupt)\b.*\b(?:current|running)\b/i,
+  /(?:发送|按下|输入).*(?:Ctrl|Control|控制).*(?:C|D|Z|L|\\)/i,
+  /(?:中断|取消|停止|终止|挂起).*(?:当前|正在运行|运行中|命令|进程|终端)/i,
+  /(?:清屏|清空屏幕|发送\s*EOF|发送\s*中断|控制序列)/i,
+];
+
 const LOCAL_SHELL_PATTERNS = [
   /\b(?:local|localhost|my machine|this machine|mac|windows|linux)\b.*\b(?:terminal|shell|command|file|process)\b/i,
   /(?:本地终端|本机|我的电脑|这台机器|本地执行|打开本地终端|本地命令|本地 shell)/i,
@@ -256,6 +266,10 @@ export function isConnectionDiscoveryRequest(text: string): boolean {
   return matchesAny(text.trim(), CONNECTION_DISCOVERY_PATTERNS);
 }
 
+export function isControlSequenceRequest(text: string): boolean {
+  return matchesAny(text.trim(), CONTROL_SEQUENCE_PATTERNS);
+}
+
 export function inferToolIntents(input: ToolIntentInferenceInput | string): ToolIntent[] {
   const text = typeof input === 'string' ? input : input.text;
   const activeTabType = typeof input === 'string' ? null : input.activeTabType;
@@ -274,7 +288,7 @@ export function inferToolIntents(input: ToolIntentInferenceInput | string): Tool
     intents.add('command');
   }
 
-  if (matchesAny(normalized, TERMINAL_PATTERNS)) {
+  if (matchesAny(normalized, TERMINAL_PATTERNS) || isControlSequenceRequest(normalized)) {
     intents.add('terminal_interaction');
   }
 
@@ -357,6 +371,7 @@ export function scoreToolsForRequest(input: ToolPlanInput): ToolScore[] {
   const text = (input.userMessage ?? '').toLowerCase();
   const rawText = input.userMessage ?? '';
   const connectionDiscovery = isConnectionDiscoveryRequest(rawText);
+  const controlSequenceRequest = isControlSequenceRequest(rawText);
   const intents = input.intents
     ? [...input.intents]
     : input.userMessage
@@ -368,6 +383,10 @@ export function scoreToolsForRequest(input: ToolPlanInput): ToolScore[] {
     .map((spec) => {
       let score = 0;
       const reasons: string[] = [];
+
+      if (spec.name === 'send_control_sequence' && !controlSequenceRequest) {
+        return { toolName: spec.name, score, reasons };
+      }
 
       for (const intent of intentSet) {
         if (spec.intentTags.includes(intent)) {
@@ -420,6 +439,16 @@ export function scoreToolsForRequest(input: ToolPlanInput): ToolScore[] {
         reasons.push('command-exec');
       }
 
+      if (intentSet.has('terminal_interaction') && spec.name === 'terminal_exec') {
+        score += 4;
+        reasons.push('terminal-command-default');
+      }
+
+      if (controlSequenceRequest && spec.name === 'send_control_sequence') {
+        score += 12;
+        reasons.push('explicit-control-sequence');
+      }
+
       if (intentSet.has('terminal_interaction') && ['read_screen', 'get_terminal_buffer'].includes(spec.name)) {
         score += 5;
         reasons.push('observe-first');
@@ -451,6 +480,7 @@ export function getToolsForPlan(input: ToolPlanInput): AiToolDefinition[] {
       ? inferToolIntents({ text: input.userMessage, activeTabType: input.activeTabType })
       : [];
   const intentSet = new Set(inferredIntents);
+  const controlSequenceRequest = isControlSequenceRequest(input.userMessage ?? '');
   const definitions: AiToolDefinition[] = [];
   const seen = new Set<string>();
 
@@ -472,6 +502,9 @@ export function getToolsForPlan(input: ToolPlanInput): AiToolDefinition[] {
 
   for (const intent of intentSet) {
     for (const toolName of INTENT_TOOL_NAMES[intent] ?? []) {
+      if (toolName === 'send_control_sequence' && !controlSequenceRequest) {
+        continue;
+      }
       addToolByName(definitions, seen, toolName, input.disabledTools);
     }
   }

@@ -72,6 +72,7 @@ export {
 } from './protocol';
 export {
   getToolsForPlan,
+  isControlSequenceRequest,
   inferToolIntents,
   scoreToolsForRequest,
 } from './toolPlanner';

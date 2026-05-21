@@ -24,6 +24,7 @@ import {
   getToolsForPlan,
   getToolsForContext,
   inferToolIntents,
+  isControlSequenceRequest,
   classifyToolObligation,
   pluginManifestToAiToolSpecs,
   scoreToolsForRequest,
@@ -202,6 +203,41 @@ describe('tool disclosure planner v3 phase 2', () => {
     expect(names[0]).toBe('list_saved_connections');
     expect(names.indexOf('list_saved_connections')).toBeLessThan(names.indexOf('resolve_target'));
     expect(names.indexOf('search_saved_connections')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('does not expose terminal control sequences for normal command requests', () => {
+    const names = getToolsForPlan({
+      activeTabType: 'terminal',
+      hasAnySSHSession: true,
+      userMessage: '在当前终端执行 ls -la',
+    }).map((tool) => tool.name);
+
+    expect(names).toContain('terminal_exec');
+    expect(names).not.toContain('send_control_sequence');
+  });
+
+  it('only exposes control sequences for explicit interrupt requests', () => {
+    expect(isControlSequenceRequest('执行 ls -la')).toBe(false);
+    expect(isControlSequenceRequest('中断当前正在运行的命令')).toBe(true);
+
+    const names = getToolsForPlan({
+      activeTabType: 'terminal',
+      hasAnySSHSession: true,
+      userMessage: '中断当前正在运行的命令',
+    }).map((tool) => tool.name);
+
+    expect(names).toContain('send_control_sequence');
+  });
+
+  it('scores terminal_exec ahead of control sequences for generic terminal work', () => {
+    const names = scoreToolsForRequest({
+      activeTabType: 'terminal',
+      hasAnySSHSession: true,
+      userMessage: '在终端里运行 pnpm test',
+    }).map((score) => score.toolName);
+
+    expect(names).toContain('terminal_exec');
+    expect(names).not.toContain('send_control_sequence');
   });
 });
 

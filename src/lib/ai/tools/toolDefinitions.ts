@@ -513,7 +513,7 @@ export const BUILTIN_TOOLS: AiToolDefinition[] = [
   {
     name: 'send_control_sequence',
     description:
-      'Send a control sequence (signal) to an open terminal session. Use ctrl-c to cancel a running command, ctrl-d to send EOF, ctrl-z to suspend, ctrl-l to clear screen.',
+      'Send a control sequence (signal) to an open terminal session. Only use this when the user explicitly asks to interrupt/cancel/suspend/clear a terminal or send Ctrl-C/Ctrl-D/Ctrl-Z/Ctrl-L. Never use this to run a command; use terminal_exec for commands.',
     parameters: {
       type: 'object',
       properties: {
