@@ -149,6 +149,14 @@ async function executeAction(name: OrchestratorToolName, args: Record<string, un
       return observeTerminalTarget(target!, numberArg(args, 'max_chars') ?? 4000);
     }
     case 'send_terminal_input': {
+      if (stringArg(args, 'control')) {
+        return failAction(
+          'Terminal control input is not available through this tool.',
+          'terminal_control_disabled',
+          'Use run_command to execute shell commands. send_terminal_input only sends literal interactive text or Enter after observing a prompt.',
+          'interactive',
+        );
+      }
       const { target, error } = await requireTarget(stringArg(args, 'target_id'), 'interactive', {
         requireLive: true,
         actionName: 'send_terminal_input',
@@ -158,7 +166,6 @@ async function executeAction(name: OrchestratorToolName, args: Record<string, un
         target: target!,
         text: stringArg(args, 'text'),
         appendEnter: boolArg(args, 'append_enter'),
-        control: stringArg(args, 'control'),
       });
     }
     case 'read_resource': {

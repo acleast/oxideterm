@@ -263,7 +263,6 @@ export async function sendTerminalInput(options: {
   target: AiTarget;
   text?: string;
   appendEnter?: boolean;
-  control?: string;
 }): Promise<AiActionResult> {
   const sessionId = options.target.refs.sessionId;
   if (!sessionId) {
@@ -273,16 +272,9 @@ export async function sendTerminalInput(options: {
   if (!paneId) {
     return failAction('Terminal pane is not registered.', 'terminal_pane_missing', 'No visible pane is registered for this terminal session.', 'interactive', { target: options.target });
   }
-  const controlMap: Record<string, string> = {
-    'ctrl-c': '\x03',
-    'ctrl-d': '\x04',
-    'ctrl-z': '\x1a',
-  };
-  const payload = options.control
-    ? controlMap[options.control] ?? ''
-    : `${options.text ?? ''}${options.appendEnter ? '\r' : ''}`;
+  const payload = `${options.text ?? ''}${options.appendEnter ? '\r' : ''}`;
   if (!payload) {
-    return failAction('No terminal input specified.', 'missing_terminal_input', 'Provide text or a supported control sequence.', 'interactive', { target: options.target });
+    return failAction('No terminal input specified.', 'missing_terminal_input', 'Provide text or request Enter with append_enter.', 'interactive', { target: options.target });
   }
   const sent = writeToTerminal(paneId, payload);
   return {

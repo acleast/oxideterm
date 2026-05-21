@@ -4,6 +4,7 @@ import type { AiTarget } from '@/lib/ai/orchestrator';
 const getAiTargetMock = vi.hoisted(() => vi.fn());
 const listAiTargetsMock = vi.hoisted(() => vi.fn());
 const runCommandOnTargetMock = vi.hoisted(() => vi.fn());
+const sendTerminalInputMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/ai/capabilities/targets', () => ({
   getAiTarget: getAiTargetMock,
@@ -17,7 +18,7 @@ vi.mock('@/lib/ai/capabilities/connections', () => ({
 vi.mock('@/lib/ai/capabilities/terminal', () => ({
   observeTerminalTarget: vi.fn(),
   runCommandOnTarget: runCommandOnTargetMock,
-  sendTerminalInput: vi.fn(),
+  sendTerminalInput: sendTerminalInputMock,
 }));
 
 vi.mock('@/lib/ai/capabilities/resources', () => ({
@@ -104,6 +105,7 @@ describe('orchestrator executor target consistency', () => {
     const selectTarget = defs.find((def) => def.name === 'select_target')!;
     const readResource = defs.find((def) => def.name === 'read_resource')!;
     const writeResource = defs.find((def) => def.name === 'write_resource')!;
+    const sendTerminalInput = defs.find((def) => def.name === 'send_terminal_input')!;
 
     expect(selectTarget.parameters).toMatchObject({
       required: ['query', 'intent'],
@@ -116,6 +118,35 @@ describe('orchestrator executor target consistency', () => {
     });
     expect((writeResource.parameters.properties as Record<string, unknown>).resource).toMatchObject({
       enum: ['settings', 'file', 'directory', 'sftp', 'ide', 'rag'],
+    });
+    expect(sendTerminalInput.description).toContain('use run_command instead');
+    expect(sendTerminalInput.description).toContain('Control sequences');
+    expect(sendTerminalInput.parameters.properties).not.toHaveProperty('control');
+  });
+
+  it('blocks legacy terminal control input before reaching the terminal writer', async () => {
+    const target: AiTarget = {
+      id: 'terminal-session:term-1',
+      kind: 'terminal-session',
+      label: 'prod shell',
+      state: 'connected',
+      capabilities: ['terminal.input'],
+      refs: { sessionId: 'term-1' },
+    };
+    getAiTargetMock.mockResolvedValue(target);
+
+    const result = await executeOrchestratorTool(
+      'send_terminal_input',
+      { target_id: 'terminal-session:term-1', control: 'ctrl-c' },
+      {},
+      'tool-control',
+    );
+
+    expect(result.success).toBe(false);
+    expect(sendTerminalInputMock).not.toHaveBeenCalled();
+    expect(result.envelope?.error).toMatchObject({
+      code: 'terminal_control_disabled',
+      recoverable: true,
     });
   });
 
