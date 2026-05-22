@@ -20,6 +20,7 @@ type TerminalSmartCopyOptions = {
 };
 
 const COPY_ON_SELECT_DEBOUNCE_MS = 120;
+const NBSP_RE = /\u00a0/g;
 
 function isSmartCopyShortcut(event: KeyboardEvent): boolean {
   if (event.type !== 'keydown') return false;
@@ -45,10 +46,37 @@ function fallbackCopySelection(): void {
   }
 }
 
-function copySelection(selection: string): void {
-  if (!selection) return;
+export function getTerminalSelectionForClipboard(term: Terminal): string {
+  const fallbackSelection = term.getSelection();
+  const range = term.getSelectionPosition?.();
+  if (!range) return fallbackSelection;
 
-  void writeSystemClipboardText(selection).then((written) => {
+  const buffer = term.buffer?.active;
+  if (!buffer || range.start.y > range.end.y) return fallbackSelection;
+
+  const parts: string[] = [];
+  for (let row = range.start.y; row <= range.end.y; row += 1) {
+    const line = buffer.getLine(row);
+    if (!line) return fallbackSelection;
+
+    const startColumn = row === range.start.y ? range.start.x : 0;
+    const endColumn = row === range.end.y ? range.end.x : undefined;
+    const text = line.translateToString(true, startColumn, endColumn).replace(NBSP_RE, ' ');
+
+    if (row !== range.start.y && line.isWrapped && parts.length > 0) {
+      parts[parts.length - 1] += text;
+    } else {
+      parts.push(text);
+    }
+  }
+
+  return parts.join(platform.isWindows ? '\r\n' : '\n');
+}
+
+function copyText(text: string): void {
+  if (!text) return;
+
+  void writeSystemClipboardText(text).then((written) => {
     if (!written) {
       fallbackCopySelection();
     }
@@ -96,11 +124,11 @@ function installCopyOnSelect(
     clearCopyTimer();
     copyTimer = window.setTimeout(() => {
       copyTimer = null;
-      const currentSelection = term.getSelection();
+      const currentSelection = getTerminalSelectionForClipboard(term);
       if (!currentSelection || !options.isActive() || !options.isCopyOnSelectEnabled?.()) {
         return;
       }
-      copySelection(currentSelection);
+      copyText(currentSelection);
     }, COPY_ON_SELECT_DEBOUNCE_MS);
   });
 
@@ -144,6 +172,38 @@ function installMiddleClickPaste(
   };
 }
 
+function installCopyEventNormalization(
+  term: Terminal,
+  options: TerminalSmartCopyOptions,
+): Disposable {
+  const container = options.container;
+  if (!container) {
+    return { dispose: () => undefined };
+  }
+
+  const handleCopy = (event: ClipboardEvent) => {
+    if (!options.isActive() || !term.hasSelection()) {
+      return;
+    }
+
+    const selection = getTerminalSelectionForClipboard(term);
+    if (!selection || !event.clipboardData) {
+      return;
+    }
+
+    event.clipboardData.setData('text/plain', selection);
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  container.addEventListener('copy', handleCopy);
+  return {
+    dispose: () => {
+      container.removeEventListener('copy', handleCopy);
+    },
+  };
+}
+
 export function attachTerminalSmartCopy(
   term: Terminal,
   options: TerminalSmartCopyOptions,
@@ -166,13 +226,13 @@ export function attachTerminalSmartCopy(
         return true;
       }
 
-      const selection = term.getSelection();
+      const selection = getTerminalSelectionForClipboard(term);
       if (!selection) {
         return true;
       }
 
       consumeKeyboardEvent(event);
-      copySelection(selection);
+      copyText(selection);
       return false;
     }
 
@@ -191,11 +251,13 @@ export function attachTerminalSmartCopy(
 
   const copyOnSelectDisposable = installCopyOnSelect(term, options);
   const middleClickPasteDisposable = installMiddleClickPaste(term, options);
+  const copyEventDisposable = installCopyEventNormalization(term, options);
 
   return {
     dispose: () => {
       copyOnSelectDisposable.dispose();
       middleClickPasteDisposable.dispose();
+      copyEventDisposable.dispose();
       term.attachCustomKeyEventHandler(() => true);
     },
   };

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Terminal } from '@xterm/xterm';
-import { attachTerminalSmartCopy } from '@/hooks/useTerminalSmartCopy';
+import { attachTerminalSmartCopy, getTerminalSelectionForClipboard } from '@/hooks/useTerminalSmartCopy';
 import { setOverrides } from '@/lib/keybindingRegistry';
 import { writeSystemClipboardText } from '@/lib/clipboardSupport';
 
@@ -21,6 +21,7 @@ type Handler = (event: KeyboardEvent) => boolean;
 function createTerminalMock() {
   let handler: Handler | null = null;
   let selectionHandler: (() => void) | null = null;
+  const lines = new Map<number, { isWrapped: boolean; translateToString: ReturnType<typeof vi.fn> }>();
 
   return {
     term: {
@@ -33,10 +34,22 @@ function createTerminalMock() {
       }),
       hasSelection: vi.fn(() => false),
       getSelection: vi.fn(() => ''),
+      getSelectionPosition: vi.fn(() => undefined),
+      buffer: {
+        active: {
+          getLine: vi.fn((row: number) => lines.get(row)),
+        },
+      },
       modes: { mouseTrackingMode: 'none' },
     } as unknown as Terminal,
     getHandler: () => handler,
     triggerSelectionChange: () => selectionHandler?.(),
+    setLine: (row: number, line: { isWrapped: boolean; text: string }) => {
+      lines.set(row, {
+        isWrapped: line.isWrapped,
+        translateToString: vi.fn(() => line.text),
+      });
+    },
   };
 }
 
@@ -76,6 +89,36 @@ describe('attachTerminalSmartCopy', () => {
     expect(copyText).toHaveBeenCalledWith('selected output');
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(event.stopPropagation).toHaveBeenCalledOnce();
+  });
+
+  it('normalizes wrapped terminal selections before writing to the clipboard', () => {
+    const { term, setLine } = createTerminalMock();
+    const getSelection = vi.mocked(term.getSelection);
+    const getSelectionPosition = vi.mocked(term.getSelectionPosition);
+
+    getSelection.mockReturnValue('aaaaaaaa          bbbbbbbb');
+    getSelectionPosition.mockReturnValue({
+      start: { x: 0, y: 0 },
+      end: { x: 8, y: 1 },
+    });
+    setLine(0, { isWrapped: false, text: 'aaaaaaaa' });
+    setLine(1, { isWrapped: true, text: 'bbbbbbbb' });
+
+    expect(getTerminalSelectionForClipboard(term)).toBe('aaaaaaaabbbbbbbb');
+  });
+
+  it('keeps hard line breaks when selected rows are not wrapped', () => {
+    const { term, setLine } = createTerminalMock();
+    const getSelectionPosition = vi.mocked(term.getSelectionPosition);
+
+    getSelectionPosition.mockReturnValue({
+      start: { x: 0, y: 0 },
+      end: { x: 6, y: 1 },
+    });
+    setLine(0, { isWrapped: false, text: 'first' });
+    setLine(1, { isWrapped: false, text: 'second' });
+
+    expect(getTerminalSelectionForClipboard(term)).toBe('first\r\nsecond');
   });
 
   it('lets Ctrl+C pass through when nothing is selected', () => {
@@ -261,6 +304,39 @@ describe('attachTerminalSmartCopy', () => {
     await Promise.resolve();
 
     expect(copyText).toHaveBeenCalledWith('copied by mouse');
+  });
+
+  it('normalizes browser copy events from the terminal container', () => {
+    const { term, setLine } = createTerminalMock();
+    const container = document.createElement('div');
+    const hasSelection = vi.mocked(term.hasSelection);
+    const getSelectionPosition = vi.mocked(term.getSelectionPosition);
+    const clipboardData = { setData: vi.fn() };
+
+    hasSelection.mockReturnValue(true);
+    getSelectionPosition.mockReturnValue({
+      start: { x: 0, y: 0 },
+      end: { x: 3, y: 1 },
+    });
+    setLine(0, { isWrapped: false, text: 'abc' });
+    setLine(1, { isWrapped: true, text: 'def' });
+
+    attachTerminalSmartCopy(term, {
+      isActive: () => true,
+      isEnabled: () => true,
+      container,
+    });
+
+    const event = new Event('copy', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', { value: clipboardData });
+    const preventDefault = vi.spyOn(event, 'preventDefault');
+    const stopPropagation = vi.spyOn(event, 'stopPropagation');
+
+    container.dispatchEvent(event);
+
+    expect(clipboardData.setData).toHaveBeenCalledWith('text/plain', 'abcdef');
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(stopPropagation).toHaveBeenCalledOnce();
   });
 
   it('pastes on middle click when the feature is enabled', () => {
