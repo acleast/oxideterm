@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "接続を編集",
       "description": "接続のプロパティを変更します。",
+      "duplicate_title": "接続を複製",
+      "duplicate_description": "この接続をテンプレートとして使い、新しいホストとして保存します。",
       "name": "名前",
       "host": "ホスト",
       "port": "ポート",
@@ -109,7 +111,9 @@
       "clear_color": "クリア",
       "cancel": "キャンセル",
       "save": "保存",
-      "saving": "保存中..."
+      "saving": "保存中...",
+      "create": "作成",
+      "creating": "作成中..."
     }
   }
 }

@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "編輯連線",
       "description": "修改連線屬性。",
+      "duplicate_title": "複製連線",
+      "duplicate_description": "以目前連線作為範本，修改後儲存為新主機。",
       "name": "名稱",
       "host": "主機",
       "port": "連接埠",
@@ -109,7 +111,9 @@
       "clear_color": "清除",
       "cancel": "取消",
       "save": "儲存",
-      "saving": "儲存中..."
+      "saving": "儲存中...",
+      "create": "建立",
+      "creating": "建立中..."
     }
   }
 }

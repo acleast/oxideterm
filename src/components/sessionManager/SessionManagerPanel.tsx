@@ -10,7 +10,10 @@ import { ManagerToolbar } from './ManagerToolbar';
 import { OxideExportModal } from '../modals/OxideExportModal';
 import { OxideImportModal } from '../modals/OxideImportModal';
 import { EditConnectionModal } from '../modals/EditConnectionModal';
-import { EditConnectionPropertiesModal } from '../modals/EditConnectionPropertiesModal';
+import {
+  EditConnectionPropertiesModal,
+  type DuplicateConnectionDraft,
+} from '../modals/EditConnectionPropertiesModal';
 import { HostKeyConfirmDialog } from '../modals/HostKeyConfirmDialog';
 import { buildSaveConnectionRequestFromSaved } from '../../lib/buildSaveConnectionRequestFromSaved';
 import {
@@ -44,6 +47,9 @@ import {
 import type { ConnectionInfo, HostKeyStatus } from '../../types';
 import type { EditConnectionSubmitPayload } from '../modals/EditConnectionModal';
 
+const DUPLICATE_NAME_MARKER = 'Copy';
+const DUPLICATE_DRAFT_ID_PREFIX = 'duplicate-template';
+
 const isValidGroupPath = (name: string) => {
   const trimmedName = name.trim();
   if (!trimmedName) {
@@ -51,6 +57,25 @@ const isValidGroupPath = (name: string) => {
   }
 
   return trimmedName.split('/').every(part => part.trim().length > 0);
+};
+
+const buildDuplicateConnectionName = (sourceName: string, existingNames: string[]) => {
+  const normalizedExistingNames = new Set(
+    existingNames.map(existingName => existingName.trim().toLocaleLowerCase()),
+  );
+  const baseName = `${sourceName} (${DUPLICATE_NAME_MARKER})`;
+
+  if (!normalizedExistingNames.has(baseName.toLocaleLowerCase())) {
+    return baseName;
+  }
+
+  // Connection names are unique in storage, so generate a draft name before opening the editor.
+  for (let index = 2; ; index += 1) {
+    const candidateName = `${sourceName} (${DUPLICATE_NAME_MARKER} ${index})`;
+    if (!normalizedExistingNames.has(candidateName.toLocaleLowerCase())) {
+      return candidateName;
+    }
+  }
 };
 
 export const SessionManagerPanel = () => {
@@ -87,6 +112,7 @@ export const SessionManagerPanel = () => {
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
+  const [duplicateDraft, setDuplicateDraft] = useState<DuplicateConnectionDraft | null>(null);
   const [connectPromptConnectionId, setConnectPromptConnectionId] = useState<string | null>(null);
   const [connectPromptAction, setConnectPromptAction] = useState<'connect' | 'test'>('connect');
   const [testHostKeyStatus, setTestHostKeyStatus] = useState<HostKeyStatus | null>(null);
@@ -211,22 +237,48 @@ export const SessionManagerPanel = () => {
   const handleDuplicate = useCallback(async (conn: ConnectionInfo) => {
     try {
       const saved = await api.getSavedConnectionForConnect(conn.id);
-      await api.saveConnection(
-        buildSaveConnectionRequestFromSaved(conn, saved, {
-          id: undefined,
-          name: `${conn.name} (Copy)`,
-        }),
+      const duplicateName = buildDuplicateConnectionName(
+        conn.name,
+        allConnections.map(existingConnection => existingConnection.name),
       );
-      toast({
-        title: t('sessionManager.toast.connection_duplicated'),
-        description: '',
-        variant: 'success',
+      const saveRequest = buildSaveConnectionRequestFromSaved(conn, saved, {
+        id: undefined,
+        name: duplicateName,
       });
-      await refresh();
-      notifySavedConnectionsChanged();
+
+      setDuplicateDraft({
+        connection: {
+          ...conn,
+          id: `${DUPLICATE_DRAFT_ID_PREFIX}:${conn.id}`,
+          name: duplicateName,
+          group: saveRequest.group,
+          host: saveRequest.host,
+          port: saveRequest.port,
+          username: saveRequest.username,
+          auth_type: saveRequest.auth_type === 'default_key' ? 'key' : saveRequest.auth_type,
+          key_path: saveRequest.key_path ?? null,
+          cert_path: saveRequest.cert_path ?? null,
+          color: saveRequest.color ?? null,
+          tags: saveRequest.tags ?? conn.tags,
+          agent_forwarding: saveRequest.agent_forwarding,
+          post_connect_command: saveRequest.post_connect_command ?? null,
+        },
+        saveRequest,
+      });
     } catch (err) {
       console.error('Failed to duplicate connection:', err);
     }
+  }, [allConnections]);
+
+  const handleDuplicateSaved = useCallback(async () => {
+    setDuplicateDraft(null);
+    toast({
+      title: t('sessionManager.toast.connection_duplicated'),
+      description: '',
+      variant: 'success',
+    });
+    await refresh();
+    notifySavedConnectionsChanged();
   }, [notifySavedConnectionsChanged, refresh, toast, t]);
 
   // Delete action
@@ -519,14 +571,16 @@ export const SessionManagerPanel = () => {
 
       {/* Modals */}
       <EditConnectionPropertiesModal
-        open={!!editingConnectionId}
+        open={!!editingConnectionId || !!duplicateDraft}
         onOpenChange={(open) => {
           if (!open) {
             setEditingConnectionId(null);
+            setDuplicateDraft(null);
           }
         }}
-        connection={editingConnectionId ? allConnections.find(c => c.id === editingConnectionId) ?? null : null}
-        onSaved={refresh}
+        connection={duplicateDraft?.connection ?? (editingConnectionId ? allConnections.find(c => c.id === editingConnectionId) ?? null : null)}
+        duplicateDraft={duplicateDraft}
+        onSaved={duplicateDraft ? handleDuplicateSaved : refresh}
       />
 
       <EditConnectionModal

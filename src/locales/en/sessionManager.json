@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "Edit Connection",
       "description": "Modify the connection properties.",
+      "duplicate_title": "Duplicate Connection",
+      "duplicate_description": "Use this connection as a template, then save it as a new host.",
       "name": "Name",
       "host": "Host",
       "port": "Port",
@@ -109,7 +111,9 @@
       "clear_color": "Clear",
       "cancel": "Cancel",
       "save": "Save",
-      "saving": "Saving..."
+      "saving": "Saving...",
+      "create": "Create",
+      "creating": "Creating..."
     }
   }
 }

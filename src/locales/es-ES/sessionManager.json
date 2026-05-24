@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "Editar conexión",
       "description": "Modificar las propiedades de la conexión.",
+      "duplicate_title": "Duplicar conexión",
+      "duplicate_description": "Usa esta conexión como plantilla y guárdala como un host nuevo.",
       "name": "Nombre",
       "host": "Host",
       "port": "Puerto",
@@ -109,7 +111,9 @@
       "clear_color": "Borrar",
       "cancel": "Cancelar",
       "save": "Guardar",
-      "saving": "Guardando..."
+      "saving": "Guardando...",
+      "create": "Crear",
+      "creating": "Creando..."
     }
   }
 }

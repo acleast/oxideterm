@@ -30,22 +30,31 @@ import {
 } from '../ui/tabs';
 import { open } from '@tauri-apps/plugin-dialog';
 import { api } from '../../lib/api';
-import type { ConnectionInfo } from '../../types';
+import type { ConnectionInfo, SaveConnectionRequest } from '../../types';
+
+export type DuplicateConnectionDraft = {
+  connection: ConnectionInfo;
+  saveRequest: SaveConnectionRequest;
+};
 
 type EditConnectionPropertiesModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   connection: ConnectionInfo | null;
-  onSaved?: () => void;
+  duplicateDraft?: DuplicateConnectionDraft | null;
+  onSaved?: () => void | Promise<void>;
 };
 
 export const EditConnectionPropertiesModal = ({
   open: isOpen,
   onOpenChange,
   connection,
+  duplicateDraft = null,
   onSaved,
 }: EditConnectionPropertiesModalProps) => {
   const { t } = useTranslation();
+  const activeConnection = duplicateDraft?.connection ?? connection;
+  const isDuplicateMode = Boolean(duplicateDraft);
 
   const [name, setName] = useState('');
   const [host, setHost] = useState('');
@@ -68,30 +77,33 @@ export const EditConnectionPropertiesModal = ({
   const [error, setError] = useState('');
   // Capture connection snapshot at open time so handleSave never reads a stale prop
   const connectionRef = useRef<ConnectionInfo | null>(null);
+  // Duplicate drafts carry secrets/proxy hops that are not present in ConnectionInfo.
+  const duplicateDraftRef = useRef<DuplicateConnectionDraft | null>(null);
 
   useEffect(() => {
-    if (isOpen && connection) {
-      connectionRef.current = connection;
+    if (isOpen && activeConnection) {
+      connectionRef.current = activeConnection;
+      duplicateDraftRef.current = duplicateDraft;
       setError('');
-      setName(connection.name || '');
-      setHost(connection.host || '');
-      setPort(String(connection.port || 22));
-      setUsername(connection.username || '');
-      setAuthType(connection.auth_type || 'password');
-      setKeyPath(connection.key_path || '');
-      setCertPath(connection.cert_path || '');
+      setName(activeConnection.name || '');
+      setHost(activeConnection.host || '');
+      setPort(String(activeConnection.port || 22));
+      setUsername(activeConnection.username || '');
+      setAuthType(activeConnection.auth_type || 'password');
+      setKeyPath(activeConnection.key_path || '');
+      setCertPath(activeConnection.cert_path || '');
       setPassphrase('');
       setPassword('');
       setPasswordLoaded(false);
       setPasswordVisible(false);
       setPasswordLoading(false);
       setPasswordError('');
-      setGroup(connection.group || 'Ungrouped');
-      setColor(connection.color || '');
-      setPostConnectCommand(connection.post_connect_command || '');
+      setGroup(activeConnection.group || 'Ungrouped');
+      setColor(activeConnection.color || '');
+      setPostConnectCommand(activeConnection.post_connect_command || '');
       api.getGroups().then(setGroups).catch(() => setGroups([]));
     }
-  }, [isOpen, connection]);
+  }, [activeConnection, duplicateDraft, isOpen]);
 
   const handlePasswordVisibilityToggle = async () => {
     const conn = connectionRef.current;
@@ -105,7 +117,10 @@ export const EditConnectionPropertiesModal = ({
     setPasswordLoading(true);
     setPasswordError('');
     try {
-      const storedPassword = await api.getConnectionPassword(conn.id);
+      const draftPassword = duplicateDraftRef.current?.saveRequest.password;
+      const storedPassword = duplicateDraftRef.current
+        ? draftPassword ?? ''
+        : await api.getConnectionPassword(conn.id);
       setPassword(storedPassword);
       setPasswordLoaded(true);
       setPasswordVisible(true);
@@ -159,27 +174,34 @@ export const EditConnectionPropertiesModal = ({
   const handleSave = async () => {
     const conn = connectionRef.current;
     if (!conn || !host || !username) return;
+    const draftRequest = duplicateDraftRef.current?.saveRequest;
+    const usesKeyMaterial = authType === 'key' || authType === 'certificate';
     setSaving(true);
     setError('');
     try {
       await api.saveConnection({
-        id: conn.id,
+        ...(draftRequest ?? {}),
+        id: duplicateDraftRef.current ? undefined : conn.id,
         name: name || `${username}@${host}`,
         group: group === 'Ungrouped' ? null : group,
         host,
         port: parseInt(port) || 22,
         username,
         auth_type: authType,
-        password: authType === 'password' && passwordLoaded ? password : undefined,
-        key_path: (authType === 'key' || authType === 'certificate') ? keyPath : undefined,
+        password: authType === 'password'
+          ? (passwordLoaded ? password : draftRequest?.password)
+          : undefined,
+        key_path: usesKeyMaterial ? keyPath : undefined,
         cert_path: authType === 'certificate' ? certPath : undefined,
-        passphrase: (authType === 'key' || authType === 'certificate') && passphrase ? passphrase : undefined,
+        passphrase: usesKeyMaterial ? (passphrase || draftRequest?.passphrase) : undefined,
         color: color || undefined,
         tags: conn.tags,
+        agent_forwarding: conn.agent_forwarding ?? draftRequest?.agent_forwarding,
         post_connect_command: postConnectCommand.trim(),
+        proxy_chain: draftRequest?.proxy_chain,
       });
       onOpenChange(false);
-      onSaved?.();
+      await onSaved?.();
     } catch (e) {
       console.error('Failed to save connection:', e);
       setError(e instanceof Error ? e.message : String(e));
@@ -188,17 +210,21 @@ export const EditConnectionPropertiesModal = ({
     }
   };
 
-  if (!connection) return null;
+  if (!activeConnection) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto bg-theme-bg-elevated border-theme-border text-theme-text">
         <DialogHeader>
           <DialogTitle className="text-theme-text">
-            {t('sessionManager.edit_properties.title')}
+            {isDuplicateMode
+              ? t('sessionManager.edit_properties.duplicate_title')
+              : t('sessionManager.edit_properties.title')}
           </DialogTitle>
           <DialogDescription className="text-theme-text-muted">
-            {t('sessionManager.edit_properties.description')}
+            {isDuplicateMode
+              ? t('sessionManager.edit_properties.duplicate_description')
+              : t('sessionManager.edit_properties.description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -430,7 +456,9 @@ export const EditConnectionPropertiesModal = ({
             {t('sessionManager.edit_properties.cancel')}
           </Button>
           <Button onClick={handleSave} disabled={saving || !host || !username}>
-            {saving ? t('sessionManager.edit_properties.saving') : t('sessionManager.edit_properties.save')}
+            {saving
+              ? t(isDuplicateMode ? 'sessionManager.edit_properties.creating' : 'sessionManager.edit_properties.saving')
+              : t(isDuplicateMode ? 'sessionManager.edit_properties.create' : 'sessionManager.edit_properties.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

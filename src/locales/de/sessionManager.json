@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "Verbindung bearbeiten",
       "description": "Verbindungseigenschaften ändern.",
+      "duplicate_title": "Verbindung duplizieren",
+      "duplicate_description": "Diese Verbindung als Vorlage verwenden und als neuen Host speichern.",
       "name": "Name",
       "host": "Host",
       "port": "Port",
@@ -109,7 +111,9 @@
       "clear_color": "Löschen",
       "cancel": "Abbrechen",
       "save": "Speichern",
-      "saving": "Speichern..."
+      "saving": "Speichern...",
+      "create": "Erstellen",
+      "creating": "Erstellen..."
     }
   }
 }

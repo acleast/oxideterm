@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "Modifier la connexion",
       "description": "Modifier les propriétés de la connexion.",
+      "duplicate_title": "Dupliquer la connexion",
+      "duplicate_description": "Utilisez cette connexion comme modèle, puis enregistrez-la comme nouvel hôte.",
       "name": "Nom",
       "host": "Hôte",
       "port": "Port",
@@ -109,7 +111,9 @@
       "clear_color": "Effacer",
       "cancel": "Annuler",
       "save": "Enregistrer",
-      "saving": "Enregistrement..."
+      "saving": "Enregistrement...",
+      "create": "Créer",
+      "creating": "Création..."
     }
   }
 }

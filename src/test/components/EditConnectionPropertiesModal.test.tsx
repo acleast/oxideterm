@@ -149,6 +149,79 @@ describe('EditConnectionPropertiesModal', () => {
     });
   });
 
+  it('saves duplicate drafts as new connections while preserving template secrets', async () => {
+    const duplicateConnection = {
+      id: 'duplicate-template:conn-1',
+      name: 'Template Host (Copy)',
+      group: null,
+      host: 'example.com',
+      port: 22,
+      username: 'tester',
+      auth_type: 'password',
+      key_path: null,
+      cert_path: null,
+      created_at: '2026-01-01T00:00:00Z',
+      last_used_at: null,
+      color: null,
+      tags: ['prod'],
+      agent_forwarding: true,
+      post_connect_command: 'uptime',
+    };
+
+    render(
+      <EditConnectionPropertiesModal
+        open={true}
+        onOpenChange={vi.fn()}
+        connection={duplicateConnection as never}
+        duplicateDraft={{
+          connection: duplicateConnection as never,
+          saveRequest: {
+            id: undefined,
+            name: 'Template Host (Copy)',
+            group: null,
+            host: 'example.com',
+            port: 22,
+            username: 'tester',
+            auth_type: 'password',
+            password: 'copied-secret',
+            agent_forwarding: true,
+            post_connect_command: 'uptime',
+            proxy_chain: [{
+              host: 'jump.example.com',
+              port: 22,
+              username: 'jump',
+              auth_type: 'password',
+              password: 'jump-secret',
+              agent_forwarding: false,
+            }],
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'sessionManager.edit_properties.create' }));
+
+    await waitFor(() => {
+      expect(api.saveConnection).toHaveBeenCalledWith(expect.objectContaining({
+        id: undefined,
+        name: 'Template Host (Copy)',
+        auth_type: 'password',
+        password: 'copied-secret',
+        tags: ['prod'],
+        agent_forwarding: true,
+        proxy_chain: [{
+          host: 'jump.example.com',
+          port: 22,
+          username: 'jump',
+          auth_type: 'password',
+          password: 'jump-secret',
+          agent_forwarding: false,
+        }],
+      }));
+    });
+    expect(api.getConnectionPassword).not.toHaveBeenCalled();
+  });
+
   it('shows an inline error when loading the saved password fails', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     api.getConnectionPassword.mockRejectedValueOnce(new Error('Keychain unavailable'));

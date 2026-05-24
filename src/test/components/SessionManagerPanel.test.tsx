@@ -103,10 +103,11 @@ vi.mock('@/components/sessionManager/ManagerToolbar', () => ({
 }));
 
 vi.mock('@/components/sessionManager/ConnectionTable', () => ({
-  ConnectionTable: ({ onConnect, onDelete, onTestConnection, connections }: { onConnect: (id: string) => void; onDelete: (conn: { id: string; name: string }) => void; onTestConnection?: (conn: { id: string; name: string }) => void; connections: Array<{ id: string; name: string }> }) => (
+  ConnectionTable: ({ onConnect, onDuplicate, onDelete, onTestConnection, connections }: { onConnect: (id: string) => void; onDuplicate?: (conn: { id: string; name: string }) => void; onDelete: (conn: { id: string; name: string }) => void; onTestConnection?: (conn: { id: string; name: string }) => void; connections: Array<{ id: string; name: string }> }) => (
     <>
       <button onClick={() => onConnect('conn-1')}>connect-row</button>
       <button onClick={() => onTestConnection?.(connections[0])}>test-row</button>
+      <button onClick={() => onDuplicate?.(connections[0])}>duplicate-row</button>
       <button onClick={() => onDelete(connections[0])}>delete-row</button>
     </>
   ),
@@ -158,8 +159,10 @@ vi.mock('@/components/modals/HostKeyConfirmDialog', () => ({
 }));
 
 vi.mock('@/components/modals/EditConnectionPropertiesModal', () => ({
-  EditConnectionPropertiesModal: ({ open, connection }: { open: boolean; connection: { id: string } | null }) => (
-    open ? <div data-testid="properties-modal">{connection?.id}</div> : null
+  EditConnectionPropertiesModal: ({ open, connection, duplicateDraft }: { open: boolean; connection: { id: string; name?: string } | null; duplicateDraft?: { connection: { name: string } } | null }) => (
+    open ? <div data-testid="properties-modal" data-mode={duplicateDraft ? 'duplicate' : 'edit'}>
+      {connection?.id}:{duplicateDraft?.connection.name ?? connection?.name}
+    </div> : null
   ),
 }));
 
@@ -588,6 +591,30 @@ describe('SessionManagerPanel', () => {
       expect(sessionManagerState.refresh).toHaveBeenCalled();
       expect(dispatchEventSpy).toHaveBeenCalled();
     });
+  });
+
+  it('opens a duplicate draft instead of saving a copied connection immediately', async () => {
+    vi.mocked(api.getSavedConnectionForConnect).mockResolvedValue({
+      name: 'Test Conn',
+      host: 'example.com',
+      port: 22,
+      username: 'tester',
+      auth_type: 'password',
+      password: 'copied-secret',
+      agent_forwarding: false,
+      proxy_chain: [],
+    });
+
+    render(<SessionManagerPanel />);
+    fireEvent.click(screen.getByText('duplicate-row'));
+
+    await waitFor(() => {
+      expect(api.getSavedConnectionForConnect).toHaveBeenCalledWith('conn-1');
+      expect(screen.getByTestId('properties-modal')).toHaveAttribute('data-mode', 'duplicate');
+    });
+
+    expect(screen.getByTestId('properties-modal')).toHaveTextContent('duplicate-template:conn-1:Test Conn (Copy)');
+    expect(api.saveConnection).not.toHaveBeenCalled();
   });
 
   it('creates a group from the folder tree shortcut and selects it', async () => {

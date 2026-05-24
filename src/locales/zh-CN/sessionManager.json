@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "编辑连接",
       "description": "修改连接属性。",
+      "duplicate_title": "复制连接",
+      "duplicate_description": "以当前连接作为模板，修改后保存为新主机。",
       "name": "名称",
       "host": "主机",
       "port": "端口",
@@ -109,7 +111,9 @@
       "clear_color": "清除",
       "cancel": "取消",
       "save": "保存",
-      "saving": "保存中..."
+      "saving": "保存中...",
+      "create": "创建",
+      "creating": "创建中..."
     }
   }
 }

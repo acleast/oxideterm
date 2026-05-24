@@ -87,6 +87,8 @@
     "edit_properties": {
       "title": "Editar conexão",
       "description": "Modificar as propriedades da conexão.",
+      "duplicate_title": "Duplicar conexão",
+      "duplicate_description": "Use esta conexão como modelo e salve como um novo host.",
       "name": "Nome",
       "host": "Host",
       "port": "Porta",
@@ -109,7 +111,9 @@
       "clear_color": "Limpar",
       "cancel": "Cancelar",
       "save": "Salvar",
-      "saving": "Salvando..."
+      "saving": "Salvando...",
+      "create": "Criar",
+      "creating": "Criando..."
     }
   }
 }
