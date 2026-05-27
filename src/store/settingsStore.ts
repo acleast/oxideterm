@@ -71,8 +71,21 @@ export function isPrereleaseVersion(version: string | undefined): boolean {
   return /-(?:alpha|beta|rc|pre|preview)(?:[.-]|$)/i.test(version ?? '');
 }
 
+export function isGpuiPreviewVersion(version: string | undefined): boolean {
+  return /-(?:gpui-preview|native-preview|rustnative-preview)(?:[.-]|$)/i.test(version ?? '');
+}
+
 function getDefaultUpdateChannel(): UpdateChannel {
+  if (isGpuiPreviewVersion(packageJson.version)) {
+    return 'gpui-preview';
+  }
   return isPrereleaseVersion(packageJson.version) ? 'beta' : 'stable';
+}
+
+function normalizeUpdateChannel(channel: unknown): UpdateChannel | undefined {
+  return channel === 'stable' || channel === 'beta' || channel === 'gpui-preview'
+    ? channel
+    : undefined;
 }
 
 function clampTerminalScrollback(scrollback: number): number {
@@ -191,7 +204,7 @@ export type SidebarSection = 'sessions' | 'saved' | 'sftp' | 'forwards' | 'conne
 export type Language = 'zh-CN' | 'en' | 'fr-FR' | 'ja' | 'es-ES' | 'pt-BR' | 'vi' | 'ko' | 'de' | 'it' | 'zh-TW';
 
 /** General settings */
-export type UpdateChannel = 'stable' | 'beta';
+export type UpdateChannel = 'stable' | 'beta' | 'gpui-preview';
 
 export interface GeneralSettings {
   language: Language;
@@ -841,7 +854,8 @@ export function mergeWithDefaults(saved: OxidePartialSettingsSnapshot | Partial<
     general: {
       ...defaults.general,
       ...saved.general,
-      updateChannel: saved.general?.updateChannel ?? defaults.general.updateChannel,
+      updateChannel: normalizeUpdateChannel(saved.general?.updateChannel)
+        ?? defaults.general.updateChannel,
     },
     terminal: {
       ...defaults.terminal,

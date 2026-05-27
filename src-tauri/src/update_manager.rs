@@ -204,10 +204,12 @@ async fn lock_update_runtime<'a>(
 
 const BETA_ENDPOINT: &str =
     "https://github.com/AnalyseDeCircuit/oxideterm/releases/download/updater-beta/latest.json";
+const GPUI_PREVIEW_ENDPOINT: &str = "https://github.com/AnalyseDeCircuit/oxideterm/releases/download/updater-gpui-preview/latest.json";
 
 /// Build an `Updater` for the given channel.
-/// `"stable"` uses the config-default endpoint; `"beta"` overrides to the
-/// `updater-beta` release asset.
+/// `"stable"` uses the config-default endpoint; `"beta"` and `"gpui-preview"`
+/// override to channel-specific release assets. Keep GPUI preview separate so
+/// Tauri beta users never receive native preview packages.
 fn build_updater_for_channel(
     app: &AppHandle,
     channel: Option<&str>,
@@ -219,12 +221,22 @@ fn build_updater_for_channel(
     }
 
     let mut builder = app.updater_builder();
-    if channel == Some("beta") {
+    let endpoint = match channel {
+        Some("beta") => Some(BETA_ENDPOINT),
+        Some("gpui-preview") => Some(GPUI_PREVIEW_ENDPOINT),
+        Some("stable") | None => None,
+        Some(other) => {
+            return Err(UpdateError::General(format!(
+                "unsupported update channel: {other}"
+            )));
+        }
+    };
+    if let Some(endpoint) = endpoint {
         builder = builder
             .endpoints(vec![
-                BETA_ENDPOINT.parse().expect("BETA_ENDPOINT is a valid URL"),
+                endpoint.parse().expect("update endpoint is a valid URL"),
             ])
-            .map_err(|e| UpdateError::General(format!("set beta endpoint failed: {e}")))?;
+            .map_err(|e| UpdateError::General(format!("set update endpoint failed: {e}")))?;
     }
     builder
         .build()

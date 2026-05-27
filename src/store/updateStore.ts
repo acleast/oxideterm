@@ -232,14 +232,14 @@ export const useUpdateStore = create<UpdateState>()(
         const channel = useSettingsStore.getState().settings.general.updateChannel;
 
         try {
-          // For beta channel, use Rust-side channel-aware check.
-          // For stable, use the plugin's check() (keeps _updateRef for legacy fallback).
-          if (channel === 'beta') {
+          // Non-stable channels use Rust-side endpoint selection so Tauri beta
+          // and GPUI preview manifests remain separate release lanes.
+          if (channel !== 'stable') {
             const result = await retryWithExponentialBackoff(
-              () => api.updateCheckWithChannel('beta'),
+              () => api.updateCheckWithChannel(channel),
               { maxRetries: 2, baseDelayMs: 2000 },
             );
-            _updateRef = null; // No plugin Update object for beta
+            _updateRef = null; // No plugin Update object for channel override.
             if (result) {
               const { skippedVersion } = get();
               if (silent && skippedVersion === result.version) {

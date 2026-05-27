@@ -346,10 +346,13 @@ describe('settingsStore', () => {
   });
 
   it('detects prerelease package versions for beta defaults', async () => {
-    const { isPrereleaseVersion } = await import('@/store/settingsStore');
+    const { isPrereleaseVersion, isGpuiPreviewVersion } = await import('@/store/settingsStore');
 
     expect(isPrereleaseVersion('1.4.2-beta.0')).toBe(true);
     expect(isPrereleaseVersion('1.4.2-rc.1')).toBe(true);
+    expect(isGpuiPreviewVersion('1.4.2-gpui-preview.0')).toBe(true);
+    expect(isGpuiPreviewVersion('1.4.2-native-preview.0')).toBe(true);
+    expect(isGpuiPreviewVersion('1.4.2-beta.0')).toBe(false);
     expect(isPrereleaseVersion('1.4.2')).toBe(false);
   });
 

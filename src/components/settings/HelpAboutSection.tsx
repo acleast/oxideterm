@@ -110,6 +110,7 @@ export const HelpAboutSection = ({ isPortableMode = null }: HelpAboutSectionProp
                                     <SelectContent>
                                         <SelectItem value="stable">{t('settings_view.help.channel_stable')}</SelectItem>
                                         <SelectItem value="beta">{t('settings_view.help.channel_beta')}</SelectItem>
+                                        <SelectItem value="gpui-preview">{t('settings_view.help.channel_gpui_preview')}</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </>
