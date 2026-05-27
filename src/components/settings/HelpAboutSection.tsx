@@ -120,6 +120,17 @@ export const HelpAboutSection = ({ isPortableMode = null }: HelpAboutSectionProp
                             </div>
                         )}
                     </div>
+                    {isPortableMode === false && updateChannel === 'gpui-preview' && (
+                        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                            <div className="flex items-center gap-2 text-sm font-medium text-amber-400">
+                                <Shield className="h-4 w-4 shrink-0" />
+                                {t('settings_view.help.gpui_preview_title')}
+                            </div>
+                            <p className="mt-2 text-sm leading-6 text-theme-text-muted">
+                                {t('settings_view.help.gpui_preview_hint')}
+                            </p>
+                        </div>
+                    )}
                 </div>
 
                 <div className="mt-4 pt-4 border-t border-theme-border/50 space-y-3">
