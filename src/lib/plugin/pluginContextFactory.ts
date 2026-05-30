@@ -1318,11 +1318,12 @@ export function buildPluginContext(manifest: PluginManifest): PluginContext {
         pluginSettingsRevisions: buildPluginSettingsRevisionMap(),
       });
     },
-    async preflightExport(connectionIds?: string[], options?: { embedKeys?: boolean }): Promise<Readonly<ExportPreflightResult>> {
+    async preflightExport(connectionIds?: string[], options?: { embedKeys?: boolean; includeManagedKeys?: boolean }): Promise<Readonly<ExportPreflightResult>> {
       const effectiveIds = await resolveExportConnectionIds(connectionIds);
       const result = await invoke<ExportPreflightResult>('preflight_export', {
         connectionIds: effectiveIds,
         embedKeys: options?.embedKeys ?? null,
+        includeManagedKeys: options?.includeManagedKeys ?? false,
       });
       return toFrozenExportPreflight(result);
     },
@@ -1333,6 +1334,8 @@ export function buildPluginContext(manifest: PluginManifest): PluginContext {
         password: request.password,
         description: request.description ?? null,
         embedKeys: request.embedKeys ?? null,
+        includeManagedKeys: request.includeManagedKeys ?? false,
+        includeManagedKeyPassphrases: request.includeManagedKeyPassphrases ?? false,
         includeAppSettings: request.includeAppSettings ?? false,
         selectedAppSettingsSections: request.selectedAppSettingsSections,
         includeLocalTerminalEnvVars: request.includeLocalTerminalEnvVars,

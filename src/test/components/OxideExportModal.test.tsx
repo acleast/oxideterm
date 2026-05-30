@@ -31,10 +31,35 @@ const translationMap: Record<string, string> = {
   'modals.export.no_plugin_settings': 'No plugin preferences to export',
   'modals.export.summary_title': 'Export Summary',
   'modals.export.summary_portable_secrets': 'Portable secrets summary',
+  'modals.export.summary_passwords': 'Password summary',
+  'modals.export.summary_keys': 'Key summary',
+  'modals.export.summary_agent': 'Agent summary',
+  'modals.export.summary_key_passphrases': 'Key passphrase summary',
+  'modals.export.summary_managed_keys': 'Managed key summary',
+  'modals.export.summary_managed_key_passphrases': 'Managed key passphrase summary',
+  'modals.export.warning_managed_keys_required': 'Managed keys are required',
   'modals.export.description': 'Description',
   'modals.export.description_placeholder': 'Description placeholder',
+  'modals.export.credential_material_title': 'Credential material',
+  'modals.export.include_passwords': 'Include saved server passwords',
+  'modals.export.include_passwords_description': 'Include passwords description',
   'modals.export.embed_keys': 'Embed Private Keys',
   'modals.export.embed_keys_description': 'Embed keys description',
+  'modals.export.include_key_passphrases': 'Include external key passphrases',
+  'modals.export.include_key_passphrases_description': 'Include key passphrases description',
+  'modals.export.include_managed_keys': 'Include managed keys',
+  'modals.export.include_managed_keys_description': 'Include managed keys description',
+  'modals.export.include_managed_key_passphrases': 'Include managed-key passphrases',
+  'modals.export.include_managed_key_passphrases_description': 'Include managed-key passphrases description',
+  'modals.export.content_summary_title': 'Selected Content',
+  'modals.export.content_summary_connections': 'Connection content',
+  'modals.export.content_summary_app_settings': 'Application settings content',
+  'modals.export.content_summary_plugin_settings': 'Plugin settings content',
+  'modals.export.content_summary_embed_keys': 'Embedded keys content',
+  'modals.export.content_summary_passwords': 'Passwords content',
+  'modals.export.content_summary_key_passphrases': 'Key passphrases content',
+  'modals.export.content_summary_managed_keys': 'Managed keys content',
+  'modals.export.content_summary_managed_key_passphrases': 'Managed key passphrases content',
   'modals.export.password': 'Password',
   'modals.export.password_placeholder': 'At least 6 characters; 12+ recommended with uppercase, lowercase, numbers, and symbols',
   'modals.export.confirm_password': 'Confirm Password',
@@ -42,6 +67,7 @@ const translationMap: Record<string, string> = {
   'modals.export.error_password_too_short': 'Password must be at least 6 characters long',
   'modals.export.error_password_mismatch': 'Passwords do not match',
   'modals.export.error_export_failed': 'Export failed',
+  'modals.export.error_managed_keys_required': 'Managed-key export is disabled',
   'modals.export.password_strength_weak': 'Weak password, we recommend using 12+ characters with a mix of uppercase, lowercase, numbers, and symbols',
   'modals.export.password_strength_fair': 'Fair',
   'modals.export.password_strength_strong': 'Strong',
@@ -52,6 +78,7 @@ const translationMap: Record<string, string> = {
   'modals.export.security_settings': 'Settings',
   'modals.export.security_portable_secrets': 'Portable secrets setting',
   'modals.export.security_passwords_excluded': 'Passwords excluded',
+  'modals.export.security_passwords_included': 'Passwords included',
   'modals.export.security_no_session': 'No session data',
   'modals.export.security_keep_safe': 'Keep safe',
   'modals.export.cancel': 'Cancel',
@@ -365,6 +392,56 @@ describe('OxideExportModal', () => {
 
     expect(invokeMock).toHaveBeenCalledTimes(settledPreflightCalls);
   });
+
+  it('blocks export when selected connections require managed keys and managed-key export is disabled', async () => {
+    appStoreState.savedConnections = [{
+      id: 'saved-1',
+      name: 'Prod',
+      host: 'prod.example.com',
+      port: 22,
+      username: 'root',
+      group: null,
+      created_at: '2026-04-10T00:00:00Z',
+    }];
+    invokeMock.mockImplementation(async (_command, args) => ({
+      totalConnections: 1,
+      missingKeys: [],
+      connectionsWithKeys: 1,
+      connectionsWithPasswords: 0,
+      connectionsWithAgent: 0,
+      keyPassphraseCount: 0,
+      managedKeyCount: 1,
+      managedKeyPassphraseCount: 0,
+      blockedManagedKeyConnections: args?.includeManagedKeys === false ? ['Prod'] : [],
+      totalKeyBytes: 0,
+      canExport: args?.includeManagedKeys !== false,
+      portableSecretCount: 0,
+    }));
+
+    render(<OxideExportModal isOpen onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText('Prod'));
+    fireEvent.click(screen.getByLabelText('Include managed keys'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Managed keys are required')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('At least 6 characters; 12+ recommended with uppercase, lowercase, numbers, and symbols'), {
+      target: { value: '123456' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Re-enter password'), {
+      target: { value: '123456' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Managed-key export is disabled')).toBeInTheDocument();
+    });
+    expect(exportOxideWithClientStateMock).not.toHaveBeenCalled();
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
   it('blocks passwords shorter than 6 characters and shows strength hints', async () => {
     render(<OxideExportModal isOpen onClose={vi.fn()} />);
 

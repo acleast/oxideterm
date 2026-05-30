@@ -593,6 +593,7 @@ describe('pluginContextFactory', () => {
     expect(invokeMock).toHaveBeenNthCalledWith(5, 'preflight_export', {
       connectionIds: ['saved-1'],
       embedKeys: null,
+      includeManagedKeys: false,
     });
 
     const exported = await context.sync.exportOxide({ password: 'StrongPass!123' });
@@ -656,6 +657,7 @@ describe('pluginContextFactory', () => {
       password: 'StrongPass!123',
       description: null,
       embedKeys: null,
+      includeManagedKeys: false,
       includePortableSecrets: null,
       selectedForwardIds: null,
       appSettingsJson: expect.any(String),

@@ -13,7 +13,7 @@ use tracing::info;
 
 use crate::commands::config::ConfigState;
 use crate::commands::forwarding::ForwardingRegistry;
-use crate::config::types::SavedAuth;
+use crate::config::types::{ConfigFile, SavedAuth};
 use crate::oxide_file::{
     EncryptedAuth, EncryptedConnection, EncryptedForward, EncryptedManagedKeyMetadata,
     EncryptedPayload, EncryptedPluginSetting, EncryptedPortableSecret, EncryptedProxyHop,
@@ -250,7 +250,26 @@ pub async fn preflight_export(
         include_managed_keys,
         include_managed_key_passphrases,
     );
+    let portable_secret_count = if credential_options.include_portable_secrets {
+        config_state.count_exportable_ai_provider_keys(&app_handle)?
+    } else {
+        0
+    };
 
+    Ok(preflight_export_from_config(
+        &config,
+        &connection_ids,
+        &credential_options,
+        portable_secret_count,
+    ))
+}
+
+fn preflight_export_from_config(
+    config: &ConfigFile,
+    connection_ids: &[String],
+    credential_options: &OxideCredentialExportOptions,
+    portable_secret_count: usize,
+) -> ExportPreflightResult {
     let mut missing_keys: Vec<(String, String)> = Vec::new();
     let mut connections_with_keys = 0;
     let mut connections_with_passwords = 0;
@@ -260,13 +279,7 @@ pub async fn preflight_export(
     let mut managed_key_passphrase_count = 0;
     let mut blocked_managed_key_connections = Vec::new();
     let mut total_key_bytes: u64 = 0;
-    let portable_secret_count = if credential_options.include_portable_secrets {
-        config_state.count_exportable_ai_provider_keys(&app_handle)?
-    } else {
-        0
-    };
-
-    for id in &connection_ids {
+    for id in connection_ids {
         let saved_conn = match config.get_connection(id) {
             Some(c) => c,
             None => continue,
@@ -390,7 +403,7 @@ pub async fn preflight_export(
         }
     }
 
-    Ok(ExportPreflightResult {
+    ExportPreflightResult {
         total_connections: connection_ids.len(),
         missing_keys,
         connections_with_keys,
@@ -403,7 +416,7 @@ pub async fn preflight_export(
         total_key_bytes,
         can_export: credential_options.include_managed_keys || managed_key_ids.is_empty(),
         portable_secret_count,
-    })
+    }
 }
 
 /// Export connections to encrypted .oxide file
@@ -864,6 +877,7 @@ async fn export_to_oxide_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{CONFIG_VERSION, ConnectionOptions, ProxyHopConfig, SavedConnection};
 
     #[test]
     fn test_password_validation() {
@@ -877,5 +891,81 @@ mod tests {
         // Longer passwords — valid
         assert!(validate_password("mysyncpass").is_ok());
         assert!(validate_password("ValidPass123!").is_ok());
+    }
+
+    fn managed_key_connection() -> SavedConnection {
+        SavedConnection {
+            id: "conn-1".to_string(),
+            version: CONFIG_VERSION,
+            name: "Prod".to_string(),
+            group: None,
+            host: "prod.example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth: SavedAuth::ManagedKey {
+                key_id: "managed-key-1".to_string(),
+                passphrase_keychain_id: Some("managed-passphrase-1".to_string()),
+            },
+            options: ConnectionOptions::default(),
+            created_at: Utc::now(),
+            last_used_at: None,
+            updated_at: None,
+            color: None,
+            tags: Vec::new(),
+            proxy_chain: vec![ProxyHopConfig {
+                host: "jump.example.com".to_string(),
+                port: 22,
+                username: "jump".to_string(),
+                auth: SavedAuth::ManagedKey {
+                    key_id: "managed-key-2".to_string(),
+                    passphrase_keychain_id: Some("managed-passphrase-2".to_string()),
+                },
+                agent_forwarding: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn preflight_blocks_managed_key_connections_when_managed_keys_are_excluded() {
+        let mut config = ConfigFile::default();
+        config.add_connection(managed_key_connection());
+        let options = OxideCredentialExportOptions::from_legacy_args(
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(false),
+        );
+
+        let result = preflight_export_from_config(&config, &["conn-1".to_string()], &options, 0);
+
+        assert!(!result.can_export);
+        assert_eq!(result.managed_key_count, 2);
+        assert_eq!(result.managed_key_passphrase_count, 2);
+        assert_eq!(
+            result.blocked_managed_key_connections,
+            vec!["Prod".to_string(), "Prod (proxy)".to_string()]
+        );
+    }
+
+    #[test]
+    fn preflight_allows_managed_key_connections_when_managed_keys_are_included() {
+        let mut config = ConfigFile::default();
+        config.add_connection(managed_key_connection());
+        let options = OxideCredentialExportOptions::from_legacy_args(
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+        );
+
+        let result = preflight_export_from_config(&config, &["conn-1".to_string()], &options, 0);
+
+        assert!(result.can_export);
+        assert_eq!(result.managed_key_count, 2);
+        assert!(result.blocked_managed_key_connections.is_empty());
     }
 }

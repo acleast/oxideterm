@@ -535,13 +535,15 @@ export type PluginSyncAPI = {
   /** Get lightweight local sync metadata for revision comparison */
   getLocalSyncMetadata(): Promise<LocalSyncMetadata>;
   /** Pre-flight export analysis for selected connections (or all if omitted) */
-  preflightExport(connectionIds?: string[], options?: { embedKeys?: boolean }): Promise<Readonly<ExportPreflightResult>>;
+  preflightExport(connectionIds?: string[], options?: { embedKeys?: boolean; includeManagedKeys?: boolean }): Promise<Readonly<ExportPreflightResult>>;
   /** Export selected connections (or all if omitted) to encrypted .oxide bytes */
   exportOxide(request: {
     connectionIds?: string[];
     password: string;
     description?: string;
     embedKeys?: boolean;
+    includeManagedKeys?: boolean;
+    includeManagedKeyPassphrases?: boolean;
     includeAppSettings?: boolean;
     selectedAppSettingsSections?: OxideAppSettingsSectionId[];
     includeLocalTerminalEnvVars?: boolean;
