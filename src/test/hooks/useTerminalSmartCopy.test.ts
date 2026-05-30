@@ -22,9 +22,14 @@ function createTerminalMock() {
   let handler: Handler | null = null;
   let selectionHandler: (() => void) | null = null;
   const lines = new Map<number, { isWrapped: boolean; translateToString: ReturnType<typeof vi.fn> }>();
+  let bufferType: 'normal' | 'alternate' = 'normal';
+  let columns = 80;
 
   return {
     term: {
+      get cols() {
+        return columns;
+      },
       attachCustomKeyEventHandler: vi.fn((nextHandler: Handler) => {
         handler = nextHandler;
       }),
@@ -37,6 +42,9 @@ function createTerminalMock() {
       getSelectionPosition: vi.fn(() => undefined),
       buffer: {
         active: {
+          get type() {
+            return bufferType;
+          },
           getLine: vi.fn((row: number) => lines.get(row)),
         },
       },
@@ -47,8 +55,17 @@ function createTerminalMock() {
     setLine: (row: number, line: { isWrapped: boolean; text: string }) => {
       lines.set(row, {
         isWrapped: line.isWrapped,
-        translateToString: vi.fn(() => line.text),
+        translateToString: vi.fn((trimRight = false, start = 0, end?: number) => {
+          const selectedText = line.text.slice(start, end);
+          return trimRight ? selectedText.replace(/[ \t\u00a0]+$/, '') : selectedText;
+        }),
       });
+    },
+    setBufferType: (type: 'normal' | 'alternate') => {
+      bufferType = type;
+    },
+    setColumns: (nextColumns: number) => {
+      columns = nextColumns;
     },
   };
 }
@@ -119,6 +136,38 @@ describe('attachTerminalSmartCopy', () => {
     setLine(1, { isWrapped: false, text: 'second' });
 
     expect(getTerminalSelectionForClipboard(term)).toBe('first\r\nsecond');
+  });
+
+  it('joins full-width unmarked wraps from alternate-screen editors like vim', () => {
+    const { term, setBufferType, setColumns, setLine } = createTerminalMock();
+    const getSelectionPosition = vi.mocked(term.getSelectionPosition);
+
+    setBufferType('alternate');
+    setColumns(8);
+    getSelectionPosition.mockReturnValue({
+      start: { x: 0, y: 0 },
+      end: { x: 4, y: 1 },
+    });
+    setLine(0, { isWrapped: false, text: 'aaaaaaaa' });
+    setLine(1, { isWrapped: false, text: 'bbbb' });
+
+    expect(getTerminalSelectionForClipboard(term)).toBe('aaaaaaaabbbb');
+  });
+
+  it('keeps alternate-screen hard line breaks when the previous row is not full-width', () => {
+    const { term, setBufferType, setColumns, setLine } = createTerminalMock();
+    const getSelectionPosition = vi.mocked(term.getSelectionPosition);
+
+    setBufferType('alternate');
+    setColumns(8);
+    getSelectionPosition.mockReturnValue({
+      start: { x: 0, y: 0 },
+      end: { x: 4, y: 1 },
+    });
+    setLine(0, { isWrapped: false, text: 'short' });
+    setLine(1, { isWrapped: false, text: 'next' });
+
+    expect(getTerminalSelectionForClipboard(term)).toBe('short\r\nnext');
   });
 
   it('lets Ctrl+C pass through when nothing is selected', () => {

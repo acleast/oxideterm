@@ -21,6 +21,7 @@ type TerminalSmartCopyOptions = {
 
 const COPY_ON_SELECT_DEBOUNCE_MS = 120;
 const NBSP_RE = /\u00a0/g;
+const TRAILING_WHITESPACE_RE = /[ \t\u00a0]+$/;
 
 function isSmartCopyShortcut(event: KeyboardEvent): boolean {
   if (event.type !== 'keydown') return false;
@@ -55,6 +56,7 @@ export function getTerminalSelectionForClipboard(term: Terminal): string {
   if (!buffer || range.start.y > range.end.y) return fallbackSelection;
 
   const parts: string[] = [];
+  let previousRowLooksLikeTuiSoftWrap = false;
   for (let row = range.start.y; row <= range.end.y; row += 1) {
     const line = buffer.getLine(row);
     if (!line) return fallbackSelection;
@@ -62,12 +64,29 @@ export function getTerminalSelectionForClipboard(term: Terminal): string {
     const startColumn = row === range.start.y ? range.start.x : 0;
     const endColumn = row === range.end.y ? range.end.x : undefined;
     const text = line.translateToString(true, startColumn, endColumn).replace(NBSP_RE, ' ');
+    const shouldJoinPreviousRow = row !== range.start.y
+      && parts.length > 0
+      && (line.isWrapped || previousRowLooksLikeTuiSoftWrap);
 
-    if (row !== range.start.y && line.isWrapped && parts.length > 0) {
+    if (shouldJoinPreviousRow) {
       parts[parts.length - 1] += text;
     } else {
       parts.push(text);
     }
+
+    // TUI apps such as vim often redraw wrapped file lines manually in the
+    // alternate buffer, so xterm cannot mark the continuation row as wrapped.
+    // Treat only full-width selected rows as candidates to avoid joining normal
+    // short lines copied from vim or less.
+    const selectedEndColumn = endColumn ?? term.cols;
+    const selectedColumnCount = Math.max(0, selectedEndColumn - startColumn);
+    const selectedToRightEdge = selectedEndColumn >= term.cols;
+    previousRowLooksLikeTuiSoftWrap = buffer.type === 'alternate'
+      && row < range.end.y
+      && term.cols > 0
+      && selectedToRightEdge
+      && selectedColumnCount > 0
+      && text.replace(TRAILING_WHITESPACE_RE, '').length >= selectedColumnCount;
   }
 
   return parts.join(platform.isWindows ? '\r\n' : '\n');
