@@ -138,6 +138,38 @@ struct SerialSessionHandle {
     task: JoinHandle<()>,
 }
 
+// The loop is tested without Tauri by swapping this sink, while production
+// still emits the same serial:* events through AppHandle.
+trait SerialEventSink {
+    fn emit_data(&self, event: SerialDataEvent);
+    fn emit_error(&self, error: SerialError);
+    fn emit_closed(&self, event: SerialClosedEvent);
+}
+
+struct TauriSerialEventSink {
+    app: AppHandle,
+}
+
+impl SerialEventSink for TauriSerialEventSink {
+    fn emit_data(&self, event: SerialDataEvent) {
+        if let Err(error) = self.app.emit("serial:data", event) {
+            tracing::warn!("Failed to emit serial:data: {}", error);
+        }
+    }
+
+    fn emit_error(&self, error: SerialError) {
+        if let Err(emit_error) = self.app.emit("serial:error", error) {
+            tracing::warn!("Failed to emit serial:error: {}", emit_error);
+        }
+    }
+
+    fn emit_closed(&self, event: SerialClosedEvent) {
+        if let Err(error) = self.app.emit("serial:closed", event) {
+            tracing::warn!("Failed to emit serial:closed: {}", error);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct SerialSessionRegistry {
     sessions: RwLock<HashMap<String, SerialSessionHandle>>,
@@ -445,67 +477,14 @@ fn spawn_serial_session(
     let task_port_path = port_path.clone();
 
     let task = std::thread::spawn(move || {
-        let mut read_buf = [0u8; 8192];
-
-        loop {
-            if close_rx.try_recv().is_ok() {
-                break;
-            }
-
-            while let Ok(data) = input_rx.try_recv() {
-                if let Err(error) = port.write_all(&data).and_then(|_| port.flush()) {
-                    emit_serial_error(
-                        &app,
-                        map_io_error(
-                            error,
-                            SerialErrorCode::WriteFailed,
-                            &task_port_path,
-                            Some(&task_session_id),
-                        ),
-                    );
-                    break;
-                }
-            }
-
-            match port.read(&mut read_buf) {
-                Ok(0) => {}
-                Ok(read_len) => {
-                    let event = SerialDataEvent {
-                        session_id: task_session_id.clone(),
-                        port_path: task_port_path.clone(),
-                        data_base64: BASE64_STANDARD.encode(&read_buf[..read_len]),
-                    };
-                    if let Err(error) = app.emit("serial:data", event) {
-                        tracing::warn!("Failed to emit serial:data: {}", error);
-                    }
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                    ) => {}
-                Err(error) => {
-                    emit_serial_error(
-                        &app,
-                        map_io_error(
-                            error,
-                            SerialErrorCode::ReadFailed,
-                            &task_port_path,
-                            Some(&task_session_id),
-                        ),
-                    );
-                    break;
-                }
-            }
-        }
-
-        let event = SerialClosedEvent {
-            session_id: task_session_id,
-            port_path: task_port_path,
-        };
-        if let Err(error) = app.emit("serial:closed", event) {
-            tracing::warn!("Failed to emit serial:closed: {}", error);
-        }
+        run_serial_io_loop(
+            &mut *port,
+            &mut input_rx,
+            close_rx,
+            TauriSerialEventSink { app },
+            task_session_id,
+            task_port_path,
+        );
     });
 
     Ok(SerialSessionHandle {
@@ -516,10 +495,66 @@ fn spawn_serial_session(
     })
 }
 
-fn emit_serial_error(app: &AppHandle, error: SerialError) {
-    if let Err(emit_error) = app.emit("serial:error", error) {
-        tracing::warn!("Failed to emit serial:error: {}", emit_error);
+fn run_serial_io_loop<P, S>(
+    port: &mut P,
+    input_rx: &mut mpsc::Receiver<Vec<u8>>,
+    close_rx: std::sync::mpsc::Receiver<()>,
+    sink: S,
+    session_id: String,
+    port_path: String,
+) where
+    P: Read + Write + ?Sized,
+    S: SerialEventSink,
+{
+    let mut read_buf = [0u8; 8192];
+
+    loop {
+        if close_rx.try_recv().is_ok() {
+            break;
+        }
+
+        while let Ok(data) = input_rx.try_recv() {
+            if let Err(error) = port.write_all(&data).and_then(|_| port.flush()) {
+                sink.emit_error(map_io_error(
+                    error,
+                    SerialErrorCode::WriteFailed,
+                    &port_path,
+                    Some(&session_id),
+                ));
+                break;
+            }
+        }
+
+        match port.read(&mut read_buf) {
+            Ok(0) => {}
+            Ok(read_len) => {
+                sink.emit_data(SerialDataEvent {
+                    session_id: session_id.clone(),
+                    port_path: port_path.clone(),
+                    data_base64: BASE64_STANDARD.encode(&read_buf[..read_len]),
+                });
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) => {}
+            Err(error) => {
+                sink.emit_error(map_io_error(
+                    error,
+                    SerialErrorCode::ReadFailed,
+                    &port_path,
+                    Some(&session_id),
+                ));
+                break;
+            }
+        }
     }
+
+    sink.emit_closed(SerialClosedEvent {
+        session_id,
+        port_path,
+    });
 }
 
 fn map_data_bits(data_bits: u8) -> Result<serialport::DataBits, SerialError> {
@@ -663,6 +698,9 @@ impl Default for SerialFlowControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::io;
+    use std::sync::{Arc, Mutex};
 
     fn valid_request() -> OpenSerialSessionRequest {
         OpenSerialSessionRequest {
@@ -672,6 +710,85 @@ mod tests {
             stop_bits: 1,
             parity: SerialParity::None,
             flow_control: SerialFlowControl::None,
+        }
+    }
+
+    #[derive(Debug)]
+    enum CapturedSerialEvent {
+        Data(SerialDataEvent),
+        Error(SerialError),
+        Closed(SerialClosedEvent),
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturingSerialSink {
+        events: Arc<Mutex<Vec<CapturedSerialEvent>>>,
+    }
+
+    impl SerialEventSink for CapturingSerialSink {
+        fn emit_data(&self, event: SerialDataEvent) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(CapturedSerialEvent::Data(event));
+        }
+
+        fn emit_error(&self, error: SerialError) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(CapturedSerialEvent::Error(error));
+        }
+
+        fn emit_closed(&self, event: SerialClosedEvent) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(CapturedSerialEvent::Closed(event));
+        }
+    }
+
+    enum FakeRead {
+        Bytes(Vec<u8>),
+        Error(io::ErrorKind),
+    }
+
+    struct FakeSerialPort {
+        reads: VecDeque<FakeRead>,
+        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl FakeSerialPort {
+        fn new(reads: impl Into<VecDeque<FakeRead>>) -> Self {
+            Self {
+                reads: reads.into(),
+                writes: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl Read for FakeSerialPort {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.reads.pop_front() {
+                Some(FakeRead::Bytes(bytes)) => {
+                    let len = bytes.len().min(buf.len());
+                    buf[..len].copy_from_slice(&bytes[..len]);
+                    Ok(len)
+                }
+                Some(FakeRead::Error(kind)) => Err(io::Error::new(kind, "fake serial error")),
+                None => Err(io::Error::new(io::ErrorKind::TimedOut, "fake timeout")),
+            }
+        }
+    }
+
+    impl Write for FakeSerialPort {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes.lock().unwrap().push(buf.to_vec());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
@@ -731,5 +848,140 @@ mod tests {
 
         assert_eq!(error.code, SerialErrorCode::PermissionDenied);
         assert!(error.recoverable);
+    }
+
+    #[tokio::test]
+    async fn fake_serial_lifecycle_writes_reads_and_reports_disconnect() {
+        let mut port = FakeSerialPort::new(VecDeque::from([
+            FakeRead::Bytes(vec![0x00, b'o', b'k']),
+            FakeRead::Error(io::ErrorKind::UnexpectedEof),
+        ]));
+        let writes = port.writes.clone();
+        let (input_tx, mut input_rx) = mpsc::channel(4);
+        let (_close_tx, close_rx) = std::sync::mpsc::channel();
+        let sink = CapturingSerialSink::default();
+        let events = sink.events.clone();
+
+        input_tx.send(vec![b'a', b't', b'\r']).await.unwrap();
+        run_serial_io_loop(
+            &mut port,
+            &mut input_rx,
+            close_rx,
+            sink,
+            "session-1".to_string(),
+            "/dev/cu.fake".to_string(),
+        );
+
+        assert_eq!(writes.lock().unwrap().as_slice(), &[b"at\r".to_vec()]);
+
+        let events = events.lock().unwrap();
+        assert!(matches!(
+            &events[0],
+            CapturedSerialEvent::Data(event)
+                if event.session_id == "session-1"
+                    && event.port_path == "/dev/cu.fake"
+                    && decode_serial_bytes(&event.data_base64).unwrap() == [0x00, b'o', b'k']
+        ));
+        assert!(matches!(
+            &events[1],
+            CapturedSerialEvent::Error(error)
+                if error.code == SerialErrorCode::DeviceDisconnected
+                    && error.session_id.as_deref() == Some("session-1")
+        ));
+        assert!(matches!(
+            &events[2],
+            CapturedSerialEvent::Closed(event)
+                if event.session_id == "session-1" && event.port_path == "/dev/cu.fake"
+        ));
+    }
+
+    #[tokio::test]
+    async fn fake_serial_lifecycle_closes_without_reading_after_close_signal() {
+        let mut port =
+            FakeSerialPort::new(VecDeque::from([FakeRead::Bytes(b"unexpected".to_vec())]));
+        let (_input_tx, mut input_rx) = mpsc::channel(4);
+        let (close_tx, close_rx) = std::sync::mpsc::channel();
+        let sink = CapturingSerialSink::default();
+        let events = sink.events.clone();
+
+        close_tx.send(()).unwrap();
+        run_serial_io_loop(
+            &mut port,
+            &mut input_rx,
+            close_rx,
+            sink,
+            "session-2".to_string(),
+            "/dev/cu.fake".to_string(),
+        );
+
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            CapturedSerialEvent::Closed(event) if event.session_id == "session-2"
+        ));
+    }
+
+    #[test]
+    #[ignore = "requires OXIDETERM_SERIAL_MANUAL_PORT to point at a real or pseudo serial device"]
+    fn manual_serial_pseudo_device_round_trip_and_reopen() {
+        let port_path = std::env::var("OXIDETERM_SERIAL_MANUAL_PORT")
+            .expect("OXIDETERM_SERIAL_MANUAL_PORT must point at a serial device");
+        let request = valid_request();
+        let first_ping = b"oxideterm-serial-ping-1\r";
+        let first_pong = b"oxideterm-serial-pong-1\r";
+        let second_ping = b"oxideterm-serial-ping-2\r";
+        let second_pong = b"oxideterm-serial-pong-2\r";
+        let first_expected = manual_serial_expected(first_ping, first_pong);
+        let second_expected = manual_serial_expected(second_ping, second_pong);
+
+        assert!(
+            validate_open_request(&OpenSerialSessionRequest {
+                port_path: port_path.clone(),
+                baud_rate: request.baud_rate,
+                data_bits: request.data_bits,
+                stop_bits: request.stop_bits,
+                parity: request.parity.clone(),
+                flow_control: request.flow_control.clone(),
+            })
+            .is_ok()
+        );
+
+        manual_serial_round_trip(&port_path, first_ping, &first_expected);
+        manual_serial_round_trip(&port_path, second_ping, &second_expected);
+    }
+
+    fn manual_serial_expected(loopback_payload: &[u8], responder_payload: &[u8]) -> Vec<u8> {
+        match std::env::var("OXIDETERM_SERIAL_MANUAL_MODE")
+            .unwrap_or_else(|_| "loopback".to_string())
+            .as_str()
+        {
+            "loopback" => loopback_payload.to_vec(),
+            "responder" => responder_payload.to_vec(),
+            mode => {
+                panic!("unsupported OXIDETERM_SERIAL_MANUAL_MODE={mode}; use loopback or responder")
+            }
+        }
+    }
+
+    fn manual_serial_round_trip(port_path: &str, ping: &[u8], expected: &[u8]) {
+        let mut port = serialport::new(port_path, 115_200)
+            .data_bits(serialport::DataBits::Eight)
+            .stop_bits(serialport::StopBits::One)
+            .parity(serialport::Parity::None)
+            .flow_control(serialport::FlowControl::None)
+            .timeout(Duration::from_secs(2))
+            .open()
+            .expect("manual serial port should open at 115200 8N1");
+
+        port.write_all(ping).expect("manual serial write failed");
+        port.flush().expect("manual serial flush failed");
+
+        let mut read_buf = vec![0_u8; expected.len()];
+        port.read_exact(&mut read_buf)
+            .expect("manual serial read failed");
+        assert_eq!(read_buf, expected);
+
+        drop(port);
     }
 }
