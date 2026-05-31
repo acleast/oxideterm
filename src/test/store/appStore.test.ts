@@ -5,6 +5,7 @@ const apiMocks = vi.hoisted(() => ({
   sshListConnections: vi.fn(),
   sshSetKeepAlive: vi.fn(),
   closeTerminal: vi.fn(),
+  localCloseTerminal: vi.fn(),
   networkStatusChanged: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -226,6 +227,10 @@ describe('appStore', () => {
     resetAppStore();
     resetIdeStore();
     vi.mocked(topologyResolver.getNodeId).mockReturnValue(undefined);
+    localTerminalStoreMock.state.getTerminal.mockReturnValue(undefined);
+    localTerminalStoreMock.state.closeTerminal.mockResolvedValue(undefined);
+    localTerminalStoreMock.state.refreshTerminals.mockResolvedValue(undefined);
+    localTerminalStoreMock.state.backgroundSessions = new Set<string>();
     sessionTreeStoreMock.state.getNode.mockReturnValue({
       id: 'node-1',
       displayName: 'Prod',
@@ -401,6 +406,26 @@ describe('appStore', () => {
         state: 'idle',
       }),
     );
+  });
+
+  it('closeTab closes serial local terminals through the local terminal store', async () => {
+    useAppStore.setState({
+      tabs: [
+        { id: 'tab-serial', type: 'local_terminal', title: 'Serial', sessionId: 'serial-1' },
+      ],
+      activeTabId: 'tab-serial',
+    });
+    localTerminalStoreMock.state.getTerminal.mockReturnValue({
+      id: 'serial-1',
+      running: true,
+      transport: { type: 'serial', portPath: '/dev/cu.usbserial-1', baudRate: 115200 },
+    });
+
+    await useAppStore.getState().closeTab('tab-serial');
+
+    expect(localTerminalStoreMock.state.closeTerminal).toHaveBeenCalledWith('serial-1');
+    expect(apiMocks.localCloseTerminal).not.toHaveBeenCalled();
+    expect(apiMocks.closeTerminal).not.toHaveBeenCalled();
   });
 
   it('closePane removes a nested pane when more than two panes are open', () => {

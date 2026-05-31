@@ -636,6 +636,36 @@ describe('toolExecutor get_settings sanitization', () => {
     ]));
   });
 
+  it('does not fall back to the active SSH node when an explicit serial target is used with node tools', async () => {
+    sessionTreeState.nodes = [
+      {
+        id: 'node-1',
+        host: 'example.com',
+        username: 'root',
+        port: 22,
+        runtime: { status: 'connected' },
+      },
+    ];
+    localTerminalState.terminals = new Map([
+      ['serial-1', {
+        running: true,
+        shell: { label: 'Serial /dev/ttyUSB0' },
+        transport: { type: 'serial', portPath: '/dev/ttyUSB0', baudRate: 115200 },
+      }],
+    ]);
+
+    const result = await executeTool(
+      'sftp_list_dir',
+      { target_id: 'terminal-session:serial-1', path: '/' },
+      { activeNodeId: 'node-1', activeAgentAvailable: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.envelope?.error?.code).toBe('unsupported_serial_resource_target');
+    expect(result.error).toContain('Serial targets cannot be used');
+    expect(nodeGetStateMock).not.toHaveBeenCalled();
+  });
+
   it('resolves saved connection targets before opening a manual shell', async () => {
     searchConnectionsMock.mockResolvedValue([
       { id: 'saved-1', host: '192.168.31.192', port: 22, username: 'lipsc', name: '家里的主机本地', group: 'Home' },

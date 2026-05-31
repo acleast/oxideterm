@@ -982,8 +982,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
     // ========== Phase 5: 关闭所有本地终端 PTY ==========
     // v1.4.0: 递归关闭分屏中的所有本地终端
     if (localTerminalIds.length > 0) {
-      const { useLocalTerminalStore } = await import('./localTerminalStore');
-      
       // 并行关闭所有本地终端（跳过已后台挂起的会话）
       const bgSessions = useLocalTerminalStore.getState().backgroundSessions;
       await Promise.all(
@@ -994,7 +992,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
             return;
           }
           try {
-            await api.localCloseTerminal(sid);
+            await useLocalTerminalStore.getState().closeTerminal(sid);
             console.log(`[closeTab] Local terminal ${sid} closed`);
           } catch (e) {
             // 终端可能已经不存在，忽略错误

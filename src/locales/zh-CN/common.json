@@ -50,8 +50,8 @@
     "confirm_close_all_desc": "关闭全部 {{count}} 个标签页？活动连接将被断开。",
     "confirm_close_other_title": "关闭其他标签页",
     "confirm_close_other_desc": "关闭其他 {{count}} 个标签页？活动连接将被断开。",
-      "confirm_close_tabs_to_right_title": "关闭右侧标签页",
-      "confirm_close_tabs_to_right_desc": "关闭右侧的 {{count}} 个标签页？活动 SSH 会话将被断开。",
+    "confirm_close_tabs_to_right_title": "关闭右侧标签页",
+    "confirm_close_tabs_to_right_desc": "关闭右侧的 {{count}} 个标签页？活动 SSH 会话将被断开。",
     "send_to_background": "移至后台",
     "child_process_warning": "此终端有正在运行的子进程。确定要关闭吗？"
   },
@@ -206,7 +206,8 @@
     "cmd_reload_window": "重新加载窗口",
     "quick_connect_alias_not_found": "未找到名为 {{alias}} 的 SSH config alias",
     "quick_connect_resolve_failed": "解析 SSH config alias {{alias}} 失败",
-    "footer_hint": "按 Esc 关闭"
+    "footer_hint": "按 Esc 关闭",
+    "cmd_open_serial_terminal": "打开串口终端"
   },
   "zen_mode": {
     "hint": "Zen 模式 — 按 ⌘⇧Z 退出",

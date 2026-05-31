@@ -151,7 +151,8 @@
       "focus_next": "다음 창으로 포커스",
       "focus_previous": "이전 창으로 포커스",
       "cannot_close_last": "마지막 창은 닫을 수 없음",
-      "ssh_split_coming_soon": "SSH 터미널 분할이 곧 지원됩니다"
+      "ssh_split_coming_soon": "SSH 터미널 분할이 곧 지원됩니다",
+      "serial_split_disabled": "Serial terminal split is disabled"
     },
     "typeLocal": "로컬",
     "typeSsh": "SSH",

@@ -14,7 +14,7 @@
 import { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/appStore';
 import { useLocalTerminalStore } from '../store/localTerminalStore';
-import { SplitDirection, MAX_PANES_PER_TAB, PaneNode } from '../types';
+import { MAX_PANES_PER_TAB, type PaneNode, type SplitDirection } from '../types';
 
 /**
  * Get all leaf pane IDs in order (left-to-right, top-to-bottom)
@@ -24,6 +24,25 @@ function getAllLeafPaneIds(node: PaneNode): string[] {
     return [node.id];
   }
   return node.children.flatMap(child => getAllLeafPaneIds(child));
+}
+
+function activePaneSessionId(tab: { sessionId?: string; activePaneId?: string; rootPane?: PaneNode | null }): string | null {
+  if (!tab.rootPane) return tab.sessionId ?? null;
+  const activePaneId = tab.activePaneId;
+  if (!activePaneId) return null;
+
+  const find = (node: PaneNode): string | null => {
+    if (node.type === 'leaf') {
+      return node.id === activePaneId ? node.sessionId : null;
+    }
+    for (const child of node.children) {
+      const sessionId = find(child);
+      if (sessionId) return sessionId;
+    }
+    return null;
+  };
+
+  return find(tab.rootPane);
 }
 
 /**
@@ -39,6 +58,7 @@ export function useSplitPaneActions() {
   const getPaneCount = useAppStore((s) => s.getPaneCount);
 
   const createTerminal = useLocalTerminalStore((s) => s.createTerminal);
+  const getTerminal = useLocalTerminalStore((s) => s.getTerminal);
 
   // Use ref to avoid stale closures
   const stateRef = useRef({ tabs, activeTabId });
@@ -53,6 +73,12 @@ export function useSplitPaneActions() {
     
     // Only allow split for terminal tabs
     if (currentTab.type !== 'terminal' && currentTab.type !== 'local_terminal') return;
+    if (
+      currentTab.type === 'local_terminal'
+      && getTerminal(activePaneSessionId(currentTab) ?? '')?.transport?.type === 'serial'
+    ) {
+      return;
+    }
     
     // Check pane limit
     const paneCount = getPaneCount(activeTabId);
@@ -73,7 +99,7 @@ export function useSplitPaneActions() {
     } catch (err) {
       console.error('[SplitPane] Failed to split pane:', err);
     }
-  }, [splitPane, createTerminal, getPaneCount]);
+  }, [splitPane, createTerminal, getPaneCount, getTerminal]);
 
   const handleClosePane = useCallback(() => {
     const { tabs, activeTabId } = stateRef.current;

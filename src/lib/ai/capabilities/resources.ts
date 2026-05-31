@@ -34,6 +34,21 @@ function nodeIdFromTarget(target: AiTarget): string | null {
   return target.refs.nodeId ?? null;
 }
 
+function isSerialTarget(target: AiTarget): boolean {
+  return target.metadata?.terminalTransport === 'serial'
+    || target.metadata?.terminalType === 'serial';
+}
+
+function failSerialResourceTarget(target: AiTarget, risk: 'read' | 'write'): AiActionResult {
+  return failAction(
+    'Serial terminals do not expose SSH resources.',
+    'unsupported_serial_resource_target',
+    'Serial targets only support terminal observe/send/wait. They do not provide SFTP, remote files, or port forwarding.',
+    risk,
+    { target, verified: false },
+  );
+}
+
 function jsonOutput(value: unknown): string {
   return truncate(JSON.stringify(value, null, 2));
 }
@@ -194,6 +209,9 @@ export async function readResource(options: {
 
   const nodeId = nodeIdFromTarget(target);
   if (!nodeId && target.kind !== 'sftp-session') {
+    if (isSerialTarget(target)) {
+      return failSerialResourceTarget(target, 'read');
+    }
     return failAction('Target cannot read resources.', 'unsupported_read_target', `${target.kind} does not expose readable resources.`, 'read', { target, verified: false });
   }
 
@@ -262,6 +280,9 @@ export async function writeResource(options: {
 
   const nodeId = nodeIdFromTarget(target);
   if (!nodeId) {
+    if (isSerialTarget(target)) {
+      return failSerialResourceTarget(target, 'write');
+    }
     return failAction('Target cannot write resources.', 'unsupported_write_target', `${target.kind} does not expose writable resources.`, 'write', { target, verified: false });
   }
 
@@ -292,6 +313,9 @@ export async function transferResource(options: {
 }): Promise<AiActionResult> {
   const nodeId = nodeIdFromTarget(options.target);
   if (!nodeId) {
+    if (isSerialTarget(options.target)) {
+      return failSerialResourceTarget(options.target, 'write');
+    }
     return failAction('SFTP transfer requires an SSH/SFTP target.', 'missing_node_id', 'transfer_resource requires a target with nodeId.', 'write', { target: options.target, verified: false });
   }
 

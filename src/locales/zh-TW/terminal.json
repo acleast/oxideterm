@@ -151,7 +151,8 @@
       "focus_next": "聚焦下一個窗格",
       "focus_previous": "聚焦上一個窗格",
       "cannot_close_last": "無法關閉最後一個窗格",
-      "ssh_split_coming_soon": "SSH 終端分割即將推出"
+      "ssh_split_coming_soon": "SSH 終端分割即將推出",
+      "serial_split_disabled": "序列埠終端機不支援分割窗格"
     },
     "typeLocal": "本機",
     "typeSsh": "SSH",

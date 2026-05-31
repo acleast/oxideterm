@@ -44,8 +44,8 @@
     "close_tabs_to_right": "Cerrar pestañas a la derecha",
     "close_all_tabs": "Cerrar todas las pestañas",
     "copy_title": "Copiar título",
-      "confirm_close_terminal_title": "Cerrar sesión SSH",
-      "confirm_close_terminal_desc": "¿Cerrar esta pestaña de terminal SSH? El trabajo no guardado en la sesión remota puede perderse.",
+    "confirm_close_terminal_title": "Cerrar sesión SSH",
+    "confirm_close_terminal_desc": "¿Cerrar esta pestaña de terminal SSH? El trabajo no guardado en la sesión remota puede perderse.",
     "confirm_close_all_title": "Cerrar todas las pestañas",
     "confirm_close_all_desc": "¿Cerrar las {{count}} pestañas? Las conexiones activas se desconectarán.",
     "confirm_close_other_title": "Cerrar otras pestañas",
@@ -206,7 +206,8 @@
     "cmd_reload_window": "Recargar ventana",
     "quick_connect_alias_not_found": "Alias de config SSH '{{alias}}' no encontrado",
     "quick_connect_resolve_failed": "Error al resolver el alias '{{alias}}'",
-    "footer_hint": "Pulsa Esc para cerrar"
+    "footer_hint": "Pulsa Esc para cerrar",
+    "cmd_open_serial_terminal": "Open Serial Terminal"
   },
   "zen_mode": {
     "hint": "Modo Zen — Pulsa ⌘⇧Z para salir",

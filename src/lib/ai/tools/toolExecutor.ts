@@ -251,6 +251,36 @@ function targetNotFoundResult(toolCallId: string, toolName: string, targetId: st
   });
 }
 
+function isSerialToolTarget(target: ToolTarget): boolean {
+  return target.metadata?.terminalTransport === 'serial'
+    || target.metadata?.terminalType === 'serial';
+}
+
+function unsupportedSerialToolTargetResult(
+  toolCallId: string,
+  toolName: string,
+  target: ToolTarget,
+  startTime: number,
+): AiToolResult {
+  return envelopeResult(toolCallId, {
+    ok: false,
+    toolName,
+    summary: 'Serial terminals do not expose SSH resources.',
+    output: 'Serial targets only support terminal observe/send/wait. They do not provide SFTP, remote files, or port forwarding.',
+    error: {
+      code: 'unsupported_serial_resource_target',
+      message: 'Serial targets cannot be used for SSH/SFTP resource tools.',
+      recoverable: true,
+    },
+    recoverable: true,
+    durationMs: Date.now() - startTime,
+    targets: [{ id: target.id, kind: target.kind, label: target.label, metadata: target.metadata }],
+    nextActions: [
+      { tool: 'observe_terminal', args: { target_id: target.id }, reason: 'Inspect the serial terminal output instead.', priority: 'recommended' },
+    ],
+  });
+}
+
 function missingExplicitTargetResult(toolCallId: string, toolName: string, startTime: number): AiToolResult {
   return envelopeResult(toolCallId, {
     ok: false,
@@ -537,6 +567,10 @@ export async function executeTool(
       if (context.requireExplicitTarget) {
         return missingExplicitTargetResult(toolCallId, toolName, startTime);
       }
+    }
+
+    if (explicitTarget && explicitNodeId.length === 0 && isSerialToolTarget(explicitTarget.target)) {
+      return unsupportedSerialToolTargetResult(toolCallId, toolName, explicitTarget.target, startTime);
     }
 
     // Node-ID tools — resolve target node

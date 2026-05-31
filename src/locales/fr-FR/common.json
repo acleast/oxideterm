@@ -44,14 +44,14 @@
     "close_tabs_to_right": "Fermer les onglets à droite",
     "close_all_tabs": "Fermer tous les onglets",
     "copy_title": "Copier le titre",
-      "confirm_close_terminal_title": "Fermer la session SSH",
-      "confirm_close_terminal_desc": "Fermer cet onglet de terminal SSH ? Le travail non enregistré dans la session distante risque d’être perdu.",
+    "confirm_close_terminal_title": "Fermer la session SSH",
+    "confirm_close_terminal_desc": "Fermer cet onglet de terminal SSH ? Le travail non enregistré dans la session distante risque d’être perdu.",
     "confirm_close_all_title": "Fermer tous les onglets",
     "confirm_close_all_desc": "Fermer les {{count}} onglets ? Les connexions actives seront déconnectées.",
     "confirm_close_other_title": "Fermer les autres onglets",
     "confirm_close_other_desc": "Fermer les {{count}} autres onglets ? Les connexions actives seront déconnectées.",
-      "confirm_close_tabs_to_right_title": "Fermer les onglets à droite",
-      "confirm_close_tabs_to_right_desc": "Fermer les {{count}} onglets à droite ? Les sessions SSH actives seront déconnectées.",
+    "confirm_close_tabs_to_right_title": "Fermer les onglets à droite",
+    "confirm_close_tabs_to_right_desc": "Fermer les {{count}} onglets à droite ? Les sessions SSH actives seront déconnectées.",
     "send_to_background": "Envoyer en arrière-plan",
     "child_process_warning": "Ce terminal a des processus enfants en cours d’exécution. Fermer quand même ?"
   },
@@ -206,7 +206,8 @@
     "cmd_reload_window": "Recharger la fenêtre",
     "quick_connect_alias_not_found": "Alias de config SSH '{{alias}}' introuvable",
     "quick_connect_resolve_failed": "Échec de la résolution de l'alias '{{alias}}'",
-    "footer_hint": "Appuyez sur Échap pour fermer"
+    "footer_hint": "Appuyez sur Échap pour fermer",
+    "cmd_open_serial_terminal": "Open Serial Terminal"
   },
   "zen_mode": {
     "hint": "Mode Zen — Appuyez sur ⌘⇧Z pour quitter",

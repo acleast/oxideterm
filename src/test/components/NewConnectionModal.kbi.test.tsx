@@ -205,6 +205,19 @@ describe('NewConnectionModal terminal creation flow', () => {
     });
   });
 
+  it('opens the serial branch from external palette requests', async () => {
+    await act(async () => {
+      render(<NewConnectionModal />);
+    });
+
+    window.dispatchEvent(new CustomEvent('oxideterm:new-connection-transport', {
+      detail: { transport: 'serial' },
+    }));
+
+    expect(await screen.findByText('modals.new_connection.serial_section_title')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'modals.new_connection.serial_open' })).toBeDisabled();
+  });
+
   it('keeps SSH and Serial draft state when switching transport branches', async () => {
     await act(async () => {
       render(<NewConnectionModal />);

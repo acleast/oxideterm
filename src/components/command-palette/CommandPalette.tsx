@@ -264,6 +264,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChan
         action: () => useAppStore.getState().toggleModal('newConnection', true),
       },
       {
+        id: 'cmd:open_serial_terminal',
+        label: t('command_palette.cmd_open_serial_terminal'),
+        section: 'commands',
+        icon: <Radio className="h-4 w-4" />,
+        action: () => {
+          window.dispatchEvent(new CustomEvent('oxideterm:new-connection-transport', {
+            detail: { transport: 'serial' },
+          }));
+        },
+      },
+      {
         id: 'cmd:settings',
         label: t('command_palette.cmd_settings'),
         section: 'commands',

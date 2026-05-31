@@ -155,14 +155,24 @@ export async function listAiTargets(options: { query?: string; kind?: AiTargetKi
   }
 
   for (const terminal of useLocalTerminalStore.getState().terminals.values()) {
+    const serialTransport = terminal.transport?.type === 'serial' ? terminal.transport : null;
     targets.push({
       id: `terminal-session:${terminal.id}`,
       kind: 'terminal-session',
-      label: `Local terminal ${terminal.shell?.label ?? terminal.id.slice(0, 8)}`,
+      label: serialTransport
+        ? `Serial ${serialTransport.portPath} · ${serialTransport.baudRate}`
+        : `Local terminal ${terminal.shell?.label ?? terminal.id.slice(0, 8)}`,
       state: terminal.running === false ? 'stale' : 'connected',
       capabilities: ['terminal.observe', 'terminal.send', 'terminal.wait', 'state.list'],
       refs: { sessionId: terminal.id, tabId: tabsBySession.get(terminal.id) },
-      metadata: { terminalType: 'local_terminal', shell: terminal.shell },
+      metadata: serialTransport
+        ? {
+            terminalType: 'serial',
+            terminalTransport: 'serial',
+            portPath: serialTransport.portPath,
+            baudRate: serialTransport.baudRate,
+          }
+        : { terminalType: 'local_terminal', terminalTransport: 'pty', shell: terminal.shell },
     });
   }
 

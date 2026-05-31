@@ -904,6 +904,7 @@ const TerminalCommandBarActions: React.FC<ActionsProps> = ({ paneId, sessionId, 
   const disableBroadcast = useBroadcastStore((s) => s.disable);
   const { sessions, tabs, splitPane, getPaneCount } = useAppStore();
   const createTerminal = useLocalTerminalStore((s) => s.createTerminal);
+  const getTerminal = useLocalTerminalStore((s) => s.getTerminal);
   const [refreshKey, setRefreshKey] = useState(0);
   const activeTab = useMemo(() => tabs.find((tab) => tab.id === tabId), [tabId, tabs]);
   const terminalEntries = useMemo(() => {
@@ -912,13 +913,14 @@ const TerminalCommandBarActions: React.FC<ActionsProps> = ({ paneId, sessionId, 
     return getAllEntries();
   }, [broadcastTargets, refreshKey]);
   const paneCount = activeTab ? getPaneCount(activeTab.id) : 1;
-  const canSplit = terminalType === 'local_terminal' && !!activeTab && paneCount < MAX_PANES_PER_TAB;
+  const isSerialTerminal = getTerminal(sessionId)?.transport?.type === 'serial';
+  const canSplit = terminalType === 'local_terminal' && !isSerialTerminal && !!activeTab && paneCount < MAX_PANES_PER_TAB;
 
   const handleSplit = useCallback(async (direction: SplitDirection) => {
-    if (!activeTab || !canSplit) return;
+    if (!activeTab || !canSplit || isSerialTerminal) return;
     const newSession = await createTerminal();
     splitPane(activeTab.id, direction, newSession.id, 'local_terminal');
-  }, [activeTab, canSplit, createTerminal, splitPane]);
+  }, [activeTab, canSplit, createTerminal, isSerialTerminal, splitPane]);
 
   const handleStartRecording = useCallback(() => {
     window.dispatchEvent(new CustomEvent('oxide:start-recording', { detail: { sessionId } }));
@@ -953,7 +955,7 @@ const TerminalCommandBarActions: React.FC<ActionsProps> = ({ paneId, sessionId, 
             onClick={() => handleSplit('horizontal')}
             disabled={!canSplit}
             className={actionButtonClass(canSplit)}
-            title={t('terminal.pane.split_horizontal')}
+            title={isSerialTerminal ? t('terminal.pane.serial_split_disabled') : t('terminal.pane.split_horizontal')}
           >
             <SplitSquareHorizontal className="h-3.5 w-3.5" />
           </button>
@@ -962,7 +964,7 @@ const TerminalCommandBarActions: React.FC<ActionsProps> = ({ paneId, sessionId, 
             onClick={() => handleSplit('vertical')}
             disabled={!canSplit}
             className={actionButtonClass(canSplit)}
-            title={t('terminal.pane.split_vertical')}
+            title={isSerialTerminal ? t('terminal.pane.serial_split_disabled') : t('terminal.pane.split_vertical')}
           >
             <SplitSquareVertical className="h-3.5 w-3.5" />
           </button>

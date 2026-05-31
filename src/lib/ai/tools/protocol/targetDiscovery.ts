@@ -26,6 +26,11 @@ export interface TargetDiscoveryState {
       label?: string;
       path?: string;
     };
+    transport?: {
+      type?: 'pty' | 'telnet' | 'serial';
+      portPath?: string;
+      baudRate?: number;
+    };
   }>;
 }
 
@@ -129,7 +134,10 @@ export function buildToolTargets(state: TargetDiscoveryState): ToolTarget[] {
   ];
 
   for (const [sessionId, info] of state.localTerminals) {
-    const label = info.shell?.label || info.shell?.path || 'Local terminal';
+    const serialTransport = info.transport?.type === 'serial' ? info.transport : null;
+    const label = serialTransport?.portPath
+      ? `Serial ${serialTransport.portPath}`
+      : info.shell?.label || info.shell?.path || 'Local terminal';
     targets.push(createToolTarget({
       id: `terminal-session:${sessionId}`,
       kind: 'terminal-session',
@@ -137,10 +145,19 @@ export function buildToolTargets(state: TargetDiscoveryState): ToolTarget[] {
       active: activeTab?.type === 'local_terminal' && terminalSessionIdsForTab(activeTab).includes(sessionId),
       sessionId,
       capabilities: terminalSessionCapabilities(),
-      metadata: {
-        terminalType: 'local_terminal',
-        running: Boolean(info.running),
-      },
+      metadata: serialTransport
+        ? {
+            terminalType: 'serial',
+            terminalTransport: 'serial',
+            portPath: serialTransport.portPath,
+            baudRate: serialTransport.baudRate,
+            running: Boolean(info.running),
+          }
+        : {
+            terminalType: 'local_terminal',
+            terminalTransport: info.transport?.type ?? 'pty',
+            running: Boolean(info.running),
+          },
     }));
   }
 

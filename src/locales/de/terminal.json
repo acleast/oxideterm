@@ -151,7 +151,8 @@
       "focus_next": "Nächster Bereich",
       "focus_previous": "Vorheriger Bereich",
       "cannot_close_last": "Letzter Bereich kann nicht geschlossen werden",
-      "ssh_split_coming_soon": "SSH-Terminal-Split kommt bald"
+      "ssh_split_coming_soon": "SSH-Terminal-Split kommt bald",
+      "serial_split_disabled": "Serial terminal split is disabled"
     },
     "typeLocal": "LOKAL",
     "typeSsh": "SSH",

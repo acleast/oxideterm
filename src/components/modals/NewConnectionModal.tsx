@@ -329,6 +329,21 @@ export const NewConnectionModal = () => {
   }, [modals.newConnection, quickConnectData]);
 
   useEffect(() => {
+    const handleTransportRequest = (event: Event) => {
+      const transportRequest = event as CustomEvent<{ transport?: ConnectionTransport }>;
+      const requestedTransport = transportRequest.detail?.transport;
+      if (requestedTransport !== 'ssh' && requestedTransport !== 'serial') return;
+      setTransport(requestedTransport);
+      toggleModal('newConnection', true);
+    };
+
+    window.addEventListener('oxideterm:new-connection-transport', handleTransportRequest);
+    return () => {
+      window.removeEventListener('oxideterm:new-connection-transport', handleTransportRequest);
+    };
+  }, [toggleModal]);
+
+  useEffect(() => {
     if (modals.newConnection && transport === 'serial') {
       void loadSerialPorts();
     }

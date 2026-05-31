@@ -44,8 +44,8 @@
     "close_tabs_to_right": "오른쪽 탭 닫기",
     "close_all_tabs": "모든 탭 닫기",
     "copy_title": "제목 복사",
-      "confirm_close_terminal_title": "SSH 세션 닫기",
-      "confirm_close_terminal_desc": "이 SSH 터미널 탭을 닫으시겠습니까? 원격 세션에서 저장하지 않은 작업이 손실될 수 있습니다.",
+    "confirm_close_terminal_title": "SSH 세션 닫기",
+    "confirm_close_terminal_desc": "이 SSH 터미널 탭을 닫으시겠습니까? 원격 세션에서 저장하지 않은 작업이 손실될 수 있습니다.",
     "confirm_close_all_title": "모든 탭 닫기",
     "confirm_close_all_desc": "{{count}}개의 탭을 모두 닫으시겠습니까? 활성 연결이 끊어집니다.",
     "confirm_close_other_title": "다른 탭 닫기",
@@ -206,7 +206,8 @@
     "cmd_reload_window": "창 새로고침",
     "quick_connect_alias_not_found": "SSH config alias '{{alias}}'을(를) 찾을 수 없음",
     "quick_connect_resolve_failed": "SSH config alias '{{alias}}' 해석 실패",
-    "footer_hint": "Esc를 눌러 닫기"
+    "footer_hint": "Esc를 눌러 닫기",
+    "cmd_open_serial_terminal": "Open Serial Terminal"
   },
   "zen_mode": {
     "hint": "Zen 모드 — ⌘⇧Z를 눌러 종료",
@@ -367,7 +368,6 @@
     "no_results": "일치하는 단축키가 없습니다",
     "footer_hint": "Esc를 눌러 닫기",
     "shortcut_count": "개의 단축키"
-
   },
   "portable_bootstrap": {
     "loading_title": "포터블 시작을 준비하는 중",

@@ -206,7 +206,8 @@
     "cmd_reload_window": "ウィンドウを再読み込み",
     "quick_connect_alias_not_found": "SSH config alias '{{alias}}' が見つかりません",
     "quick_connect_resolve_failed": "SSH config alias '{{alias}}' の解析に失敗しました",
-    "footer_hint": "Escで閉じる"
+    "footer_hint": "Escで閉じる",
+    "cmd_open_serial_terminal": "Open Serial Terminal"
   },
   "zen_mode": {
     "hint": "Zen モード — ⌘⇧Z で終了",
@@ -367,7 +368,6 @@
     "no_results": "一致するショートカットがありません",
     "footer_hint": "Escで閉じる",
     "shortcut_count": "件のショートカット"
-
   },
   "portable_bootstrap": {
     "loading_title": "ポータブル起動を準備しています",

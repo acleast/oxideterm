@@ -17,6 +17,7 @@ import {
   parseFileWriteRequest,
   toLegacyToolResult,
 } from '@/lib/ai/tools/protocol';
+import { readResource, transferResource, writeResource } from '@/lib/ai/capabilities/resources';
 import type { AiToolResult } from '@/types';
 
 describe('tool protocol v2 adapters', () => {
@@ -446,6 +447,11 @@ describe('tool target discovery helpers', () => {
       activeTabId: 'tab-ssh',
       localTerminals: new Map([
         ['local-1', { running: true, shell: { label: 'Zsh' } }],
+        ['serial-1', {
+          running: true,
+          shell: { label: 'Serial /dev/ttyUSB0' },
+          transport: { type: 'serial', portPath: '/dev/ttyUSB0', baudRate: 115200 },
+        }],
       ]),
       sshNodes: [
         {
@@ -496,6 +502,19 @@ describe('tool target discovery helpers', () => {
         kind: 'terminal-session',
         sessionId: 'term-1',
         capabilities: expect.arrayContaining(['terminal.send', 'terminal.observe']),
+      }),
+      expect.objectContaining({
+        id: 'terminal-session:serial-1',
+        kind: 'terminal-session',
+        sessionId: 'serial-1',
+        label: expect.stringContaining('Serial /dev/ttyUSB0'),
+        capabilities: expect.arrayContaining(['terminal.send', 'terminal.observe']),
+        metadata: expect.objectContaining({
+          terminalType: 'serial',
+          terminalTransport: 'serial',
+          portPath: '/dev/ttyUSB0',
+          baudRate: 115200,
+        }),
       }),
       expect.objectContaining({
         id: 'tab:tab-sftp',
@@ -582,6 +601,56 @@ describe('file safety protocol helpers', () => {
       beforeHash: 'hash-old',
       afterHash: 'hash-new',
       changed: true,
+    });
+  });
+});
+
+describe('serial target AI boundaries', () => {
+  const serialTarget = {
+    id: 'terminal-session:serial-1',
+    kind: 'terminal-session' as const,
+    label: 'Serial /dev/ttyUSB0',
+    state: 'connected' as const,
+    capabilities: ['terminal.send', 'terminal.observe', 'terminal.wait', 'state.list'],
+    refs: { sessionId: 'serial-1' },
+    metadata: {
+      terminalType: 'serial',
+      terminalTransport: 'serial',
+      portPath: '/dev/ttyUSB0',
+      baudRate: 115200,
+    },
+  };
+
+  it('rejects resource reads and writes against serial terminal targets', async () => {
+    await expect(readResource({
+      target: serialTarget,
+      resource: 'file',
+      path: '/etc/passwd',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unsupported_serial_resource_target' },
+    });
+
+    await expect(writeResource({
+      target: serialTarget,
+      resource: 'file',
+      path: '/tmp/out.txt',
+      content: 'data',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unsupported_serial_resource_target' },
+    });
+  });
+
+  it('rejects SFTP transfers against serial terminal targets', async () => {
+    await expect(transferResource({
+      target: serialTarget,
+      direction: 'download',
+      sourcePath: '/remote/file',
+      destinationPath: '/local/file',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'unsupported_serial_resource_target' },
     });
   });
 });

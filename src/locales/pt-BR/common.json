@@ -50,8 +50,8 @@
     "confirm_close_all_desc": "Fechar todas as {{count}} guias? As conexões ativas serão desconectadas.",
     "confirm_close_other_title": "Fechar outras guias",
     "confirm_close_other_desc": "Fechar as outras {{count}} guias? As conexões ativas serão desconectadas.",
-      "confirm_close_tabs_to_right_title": "Fechar abas à direita",
-      "confirm_close_tabs_to_right_desc": "Fechar as {{count}} abas à direita? As sessões SSH ativas serão desconectadas.",
+    "confirm_close_tabs_to_right_title": "Fechar abas à direita",
+    "confirm_close_tabs_to_right_desc": "Fechar as {{count}} abas à direita? As sessões SSH ativas serão desconectadas.",
     "send_to_background": "Enviar para segundo plano",
     "child_process_warning": "Este terminal tem processos filhos em execução. Fechar mesmo assim?"
   },
@@ -206,7 +206,8 @@
     "cmd_reload_window": "Recarregar janela",
     "quick_connect_alias_not_found": "Alias de config SSH '{{alias}}' não encontrado",
     "quick_connect_resolve_failed": "Erro ao resolver alias '{{alias}}'",
-    "footer_hint": "Pressione Esc para fechar"
+    "footer_hint": "Pressione Esc para fechar",
+    "cmd_open_serial_terminal": "Open Serial Terminal"
   },
   "zen_mode": {
     "hint": "Modo Zen — Pressione ⌘⇧Z para sair",
