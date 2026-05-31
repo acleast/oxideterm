@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | Problema | La risposta di OxideTerm |
 |---|---|
 | Workspace SSH, non solo shell | **Workspace per nodi remoti**: terminali, SFTP, port forwarding, trzsz, IDE leggero, monitoraggio e contesto AI restano sotto lo stesso nodo |
-| Vuoi anche una shell locale | **Shell locale integrata**: zsh/bash/fish/pwsh/WSL2 affiancati alle sessioni SSH, così attività locali e remote convivono nella stessa UI |
+| Vuoi anche shell locali e console seriali | **Shell locale integrata**: zsh/bash/fish/pwsh/WSL2 e terminali seriali locali affiancati alle sessioni SSH, così attività locali e remote convivono nella stessa UI |
 | Riconnessione = perdere tutto | **Riconnessione con periodo di grazia**: sonda la vecchia connessione per 30 s prima di chiuderla — i tuoi vim/htop/yazi sopravvivono |
 | Non vuoi installare un IDE remoto pesante | **Editing leggero integrato**: CodeMirror 6 su SFTP, più un agente Linux opzionale (~1 MB) quando servono operazioni file più veloci |
 | Nessun riutilizzo delle connessioni SSH | **Multiplexing**: terminale, SFTP, inoltri, IDE condividono una singola connessione SSH tramite pool con conteggio dei riferimenti |
@@ -103,7 +103,7 @@ Scarica l'ultima versione da [GitHub Releases](https://github.com/AnalyseDeCircu
 
 | Categoria | Funzionalità |
 |---|---|
-| **Terminale** | PTY locale (zsh/bash/fish/pwsh/WSL2), SSH remoto, pannelli divisi, broadcast input, registrazione/riproduzione sessioni (asciicast v2), rendering WebGL, 30+ temi + editor personalizzato, palette comandi (`⌘K`), modalità zen, trasferimento file **trzsz** integrato |
+| **Terminale** | PTY locale (zsh/bash/fish/pwsh/WSL2), SSH remoto, terminali seriali locali, pannelli divisi, broadcast input, registrazione/riproduzione sessioni (asciicast v2), rendering WebGL, 30+ temi + editor personalizzato, palette comandi (`⌘K`), modalità zen, trasferimento file **trzsz** integrato |
 | **SSH e autenticazione** | Pool di connessioni e multiplexing, ProxyJump (salti illimitati) con grafo topologico, riconnessione automatica con periodo di grazia, Inoltro agente. Auth: password, chiave SSH (RSA/Ed25519/ECDSA), SSH Agent, certificati, 2FA interattivo da tastiera, Known Hosts TOFU |
 | **SFTP** | Browser a doppio pannello, drag-and-drop, anteprima intelligente (immagini/video/audio/codice/PDF/hex/font), coda di trasferimento con progresso ed ETA, segnalibri, estrazione archivi |
 | **Modalità IDE** | CodeMirror 6 con 30+ linguaggi, albero file + stato Git, multi-tab, risoluzione conflitti, terminale integrato. Agente remoto opzionale per Linux (9 architetture aggiuntive) |

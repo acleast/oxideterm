@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | Vấn đề | Giải pháp của OxideTerm |
 |---|---|
 | Workspace SSH, không chỉ là shell | **Workspace node từ xa**: terminal, SFTP, chuyển tiếp cổng, trzsz, IDE nhẹ, giám sát và ngữ cảnh AI nằm dưới cùng một node |
-| Bạn vẫn cần shell cục bộ | **Shell cục bộ tích hợp**: zsh/bash/fish/pwsh/WSL2 chạy cạnh phiên SSH, để việc cục bộ và từ xa cùng nằm trong một UI |
+| Bạn vẫn cần shell cục bộ và console serial | **Shell cục bộ tích hợp**: zsh/bash/fish/pwsh/WSL2 và terminal serial cục bộ chạy cạnh phiên SSH, để việc cục bộ và từ xa cùng nằm trong một UI |
 | Kết nối lại = mất hết mọi thứ | **Kết nối lại với thời gian ân hạn**: thăm dò kết nối cũ trong 30 giây trước khi ngắt — vim/htop/yazi của bạn vẫn sống sót |
 | Không muốn cài IDE từ xa nặng | **Chỉnh sửa nhẹ tích hợp**: CodeMirror 6 qua SFTP, chỉ dùng agent Linux tùy chọn (~1 MB) khi cần thao tác tệp nhanh hơn |
 | Không tái sử dụng kết nối SSH | **Ghép kênh**: terminal, SFTP, chuyển tiếp, IDE chia sẻ một kết nối SSH duy nhất qua pool đếm tham chiếu |
@@ -103,7 +103,7 @@ Tải phiên bản mới nhất từ [GitHub Releases](https://github.com/Analys
 
 | Danh mục | Tính năng |
 |---|---|
-| **Terminal** | PTY cục bộ (zsh/bash/fish/pwsh/WSL2), SSH từ xa, chia bảng, phát sóng đầu vào, ghi/phát lại phiên (asciicast v2), kết xuất WebGL, 30+ giao diện + trình biên tập tùy chỉnh, bảng lệnh (`⌘K`), chế độ zen, truyền tệp **trzsz** tích hợp |
+| **Terminal** | PTY cục bộ (zsh/bash/fish/pwsh/WSL2), SSH từ xa, terminal serial cục bộ, chia bảng, phát sóng đầu vào, ghi/phát lại phiên (asciicast v2), kết xuất WebGL, 30+ giao diện + trình biên tập tùy chỉnh, bảng lệnh (`⌘K`), chế độ zen, truyền tệp **trzsz** tích hợp |
 | **SSH & Xác thực** | Pool kết nối & ghép kênh, ProxyJump (nhảy không giới hạn) với đồ thị topo, tự động kết nối lại với thời gian ân hạn, Chuyển tiếp Agent. Xác thực: mật khẩu, khóa SSH (RSA/Ed25519/ECDSA), SSH Agent, chứng chỉ, 2FA tương tác bàn phím, Known Hosts TOFU |
 | **SFTP** | Trình duyệt hai bảng, kéo thả, xem trước thông minh (ảnh/video/âm thanh/mã/PDF/hex/phông chữ), hàng đợi truyền tải với tiến trình & ETA, đánh dấu, giải nén lưu trữ |
 | **Chế độ IDE** | CodeMirror 6 với 30+ ngôn ngữ, cây tệp + trạng thái Git, đa tab, giải quyết xung đột, terminal tích hợp. Agent từ xa tùy chọn cho Linux (9 kiến trúc bổ sung) |

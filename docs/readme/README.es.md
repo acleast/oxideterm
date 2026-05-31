@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | Si te importa... | OxideTerm te da... |
 |---|---|
 | Un workspace SSH, no solo una shell | **Workspace por nodo remoto**: un nodo con terminal, SFTP, reenvío de puertos, trzsz, IDE ligero, monitorización y contexto de IA |
-| Shells locales en el mismo flujo | **Motor híbrido**: PTY local (zsh/bash/fish/pwsh/WSL2) y SSH remoto conviven para mantener el trabajo local y remoto en un solo workspace |
+| Shells locales y consolas serie en el mismo flujo | **Motor híbrido**: PTY local (zsh/bash/fish/pwsh/WSL2), terminales serie locales y SSH remoto conviven para mantener el trabajo local y remoto en un solo workspace |
 | Sin cuenta cloud para flujos SSH | **Núcleo local-first**: SSH, SFTP, reenvío de puertos, shell local y configuración funcionan sin registro |
 | BYOK AI en vez de créditos de plataforma | **OxideSens**: usa tu propio endpoint OpenAI/Ollama/DeepSeek/OpenAI-compatible con soporte MCP y RAG |
 | Sin runtime Electron | **Tauri 2.0**: backend Rust nativo, binario de 25–40 MB |
@@ -103,7 +103,7 @@ Descargue la última versión desde [GitHub Releases](https://github.com/Analyse
 
 | Categoría | Funcionalidades |
 |---|---|
-| **Terminal** | PTY local (zsh/bash/fish/pwsh/WSL2), SSH remoto, paneles divididos, difusión de entrada, grabación/reproducción de sesiones (asciicast v2), renderizado WebGL, 30+ temas + editor personalizado, paleta de comandos (`⌘K`), modo zen, transferencia de archivos **trzsz** integrada |
+| **Terminal** | PTY local (zsh/bash/fish/pwsh/WSL2), SSH remoto, terminales serie locales, paneles divididos, difusión de entrada, grabación/reproducción de sesiones (asciicast v2), renderizado WebGL, 30+ temas + editor personalizado, paleta de comandos (`⌘K`), modo zen, transferencia de archivos **trzsz** integrada |
 | **SSH y autenticación** | Pool de conexiones y multiplexación, ProxyJump (saltos ilimitados) con grafo topológico, reconexión automática con período de gracia, Reenvío de agente. Auth: contraseña, clave SSH (RSA/Ed25519/ECDSA), SSH Agent, certificados, 2FA interactivo por teclado, Known Hosts TOFU |
 | **SFTP** | Navegador de doble panel, arrastrar y soltar, vista previa inteligente (imágenes/vídeo/audio/código/PDF/hex/fuentes), cola de transferencias con progreso y ETA, marcadores, extracción de archivos |
 | **Modo IDE** | CodeMirror 6 con 30+ lenguajes, árbol de archivos + estado Git, multi-pestaña, resolución de conflictos, terminal integrado. Agente remoto opcional para Linux (9 arquitecturas adicionales) |

@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | 문제점 | OxideTerm의 대답 |
 |---|---|
 | SSH 워크스페이스, 단순한 shell 이상 | **원격 노드 워크스페이스**: 터미널, SFTP, 포트 포워딩, trzsz, 경량 IDE, 모니터링, AI 컨텍스트를 같은 노드 아래에 묶습니다 |
-| 로컬 shell도 필요함 | **통합 로컬 shell**: zsh/bash/fish/pwsh/WSL2를 SSH 세션과 나란히 사용하여 로컬 작업과 원격 작업을 같은 UI에서 처리합니다 |
+| 로컬 shell과 시리얼 콘솔도 필요함 | **통합 로컬 shell**: zsh/bash/fish/pwsh/WSL2와 로컬 시리얼 터미널을 SSH 세션과 나란히 사용하여 로컬 작업과 원격 작업을 같은 UI에서 처리합니다 |
 | 재연결하면 모든 것을 잃음 | **Grace Period 재연결**: 연결 종료 전 30초간 기존 연결 프로브 — vim/htop/yazi가 그대로 살아남음 |
 | 무거운 원격 IDE를 설치하고 싶지 않음 | **내장 경량 편집**: CodeMirror 6 over SFTP, 더 빠른 파일 작업이 필요할 때만 선택적 Linux 에이전트(~1 MB)를 사용합니다 |
 | SSH 연결 재사용 불가 | **다중화**: 터미널, SFTP, 포워드, IDE가 참조 카운팅 풀로 하나의 SSH 연결 공유 |
@@ -103,7 +103,7 @@ OxideTerm은 클라우드 AI 플랫폼, 호스팅 Agent 서비스, 모든 원격
 
 | 카테고리 | 기능 |
 |---|---|
-| **터미널** | 로컬 PTY(zsh/bash/fish/pwsh/WSL2), SSH 원격, 분할 창, 브로드캐스트 입력, 세션 녹화/재생(asciicast v2), WebGL 렌더링, 30개 이상 테마 + 커스텀 에디터, 커맨드 팔레트(`⌘K`), Zen 모드, **trzsz** 인밴드 파일 전송 |
+| **터미널** | 로컬 PTY(zsh/bash/fish/pwsh/WSL2), SSH 원격, 로컬 시리얼 터미널, 분할 창, 브로드캐스트 입력, 세션 녹화/재생(asciicast v2), WebGL 렌더링, 30개 이상 테마 + 커스텀 에디터, 커맨드 팔레트(`⌘K`), Zen 모드, **trzsz** 인밴드 파일 전송 |
 | **SSH 및 인증** | 연결 풀링 및 다중화, ProxyJump(무제한 홉) + 토폴로지 그래프, Grace Period 자동 재연결, Agent 포워딩. 인증: 비밀번호, SSH 키(RSA/Ed25519/ECDSA), SSH Agent, 인증서, keyboard-interactive 2FA, Known Hosts TOFU |
 | **SFTP** | 이중 패널 브라우저, 드래그 앤 드롭, 스마트 미리보기(이미지/동영상/오디오/코드/PDF/Hex/폰트), 진행률 및 ETA가 포함된 전송 큐, 북마크, 아카이브 추출 |
 | **IDE 모드** | CodeMirror 6, 30개 이상 언어, 파일 트리 + Git 상태, 멀티 탭, 충돌 해결, 통합 터미널. Linux용 선택적 원격 에이전트(9종 추가 아키텍처) |

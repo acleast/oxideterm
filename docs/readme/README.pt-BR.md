@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | Problema | A resposta do OxideTerm |
 |---|---|
 | Workspace SSH, não apenas shell | **Workspace de nó remoto**: terminais, SFTP, encaminhamento de portas, trzsz, IDE leve, monitoramento e contexto de IA ficam sob o mesmo nó |
-| Você também quer um shell local | **Shell local integrado**: zsh/bash/fish/pwsh/WSL2 lado a lado com sessões SSH, para tarefas locais e remotas na mesma UI |
+| Você também quer shell local e consoles seriais | **Shell local integrado**: zsh/bash/fish/pwsh/WSL2 e terminais seriais locais lado a lado com sessões SSH, para tarefas locais e remotas na mesma UI |
 | Reconexão = perder tudo | **Reconexão com período de carência**: sonda a conexão antiga por 30 s antes de encerrá-la — seus vim/htop/yazi sobrevivem |
 | Você não quer instalar uma IDE remota pesada | **Edição leve integrada**: CodeMirror 6 sobre SFTP, com agente Linux opcional (~1 MB) apenas quando operações de arquivo mais rápidas forem necessárias |
 | Sem reutilização de conexão SSH | **Multiplexação**: terminal, SFTP, encaminhamentos, IDE compartilham uma única conexão SSH via pool com contagem de referências |
@@ -103,7 +103,7 @@ Baixe a versão mais recente em [GitHub Releases](https://github.com/AnalyseDeCi
 
 | Categoria | Funcionalidades |
 |---|---|
-| **Terminal** | PTY local (zsh/bash/fish/pwsh/WSL2), SSH remoto, painéis divididos, broadcast de entrada, gravação/reprodução de sessões (asciicast v2), renderização WebGL, 30+ temas + editor personalizado, paleta de comandos (`⌘K`), modo zen, transferência de arquivos **trzsz** integrada |
+| **Terminal** | PTY local (zsh/bash/fish/pwsh/WSL2), SSH remoto, terminais seriais locais, painéis divididos, broadcast de entrada, gravação/reprodução de sessões (asciicast v2), renderização WebGL, 30+ temas + editor personalizado, paleta de comandos (`⌘K`), modo zen, transferência de arquivos **trzsz** integrada |
 | **SSH e autenticação** | Pool de conexões e multiplexação, ProxyJump (saltos ilimitados) com grafo topológico, reconexão automática com período de carência, Encaminhamento de agente. Auth: senha, chave SSH (RSA/Ed25519/ECDSA), SSH Agent, certificados, 2FA interativo por teclado, Known Hosts TOFU |
 | **SFTP** | Navegador de painel duplo, arrastar e soltar, pré-visualização inteligente (imagens/vídeo/áudio/código/PDF/hex/fontes), fila de transferência com progresso e ETA, favoritos, extração de arquivos |
 | **Modo IDE** | CodeMirror 6 com 30+ linguagens, árvore de arquivos + status Git, multi-abas, resolução de conflitos, terminal integrado. Agente remoto opcional para Linux (9 arquiteturas adicionais) |

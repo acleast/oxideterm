@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | If you care about... | OxideTerm gives you... |
 |---|---|
 | SSH workspace, not just a shell | **Remote-node workspace**: one node with terminal, SFTP, port forwarding, trzsz, mini IDE, monitoring, and AI context around it |
-| Local shells in the same workflow | **Hybrid engine**: local PTY (zsh/bash/fish/pwsh/WSL2) and remote SSH live side by side, so local and remote work stay in one workspace |
+| Local shells and serial consoles in the same workflow | **Hybrid engine**: local PTY (zsh/bash/fish/pwsh/WSL2), local serial terminals, and remote SSH live side by side, so local and remote work stay in one workspace |
 | No cloud account for SSH workflows | **Local-first core**: SSH, SFTP, forwarding, local shell, and config work without signup |
 | BYOK AI instead of platform credits | **OxideSens**: use your own OpenAI/Ollama/DeepSeek/OpenAI-compatible endpoint with MCP and RAG support |
 | No Electron runtime | **Tauri 2.0**: native Rust backend, 25–40 MB binary |
@@ -103,7 +103,7 @@ Download the latest release from [GitHub Releases](https://github.com/AnalyseDeC
 
 | Category | Features |
 |---|---|
-| **Terminal** | Local PTY (zsh/bash/fish/pwsh/WSL2), SSH remote, split panes, broadcast input, session recording/playback (asciicast v2), WebGL rendering, 30+ themes + custom editor, command palette (`⌘K`), zen mode, **trzsz** in-band file transfer |
+| **Terminal** | Local PTY (zsh/bash/fish/pwsh/WSL2), SSH remote, local serial terminals, split panes, broadcast input, session recording/playback (asciicast v2), WebGL rendering, 30+ themes + custom editor, command palette (`⌘K`), zen mode, **trzsz** in-band file transfer |
 | **SSH & Auth** | Connection pooling & multiplexing, ProxyJump (unlimited hops) with topology graph, auto-reconnect with Grace Period, Agent Forwarding. Auth: password, SSH key (RSA/Ed25519/ECDSA), SSH Agent, certificates, keyboard-interactive 2FA, Known Hosts TOFU |
 | **SFTP** | Dual-pane browser, drag-and-drop, smart preview (images/video/audio/code/PDF/hex/fonts), transfer queue with progress & ETA, bookmarks, archive extraction |
 | **IDE Mode** | CodeMirror 6 with 24 languages, file tree + Git status, multi-tab, conflict resolution, integrated terminal. Optional remote agent for Linux; unsupported architectures can self-build and upload |

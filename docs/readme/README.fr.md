@@ -60,7 +60,7 @@ https://github.com/user-attachments/assets/4ba033aa-94b5-4ed4-980c-5c3f9f21db7e
 | Si vous tenez à... | OxideTerm vous donne... |
 |---|---|
 | Un workspace SSH, pas seulement un shell | **Workspace par nœud distant** : un nœud avec terminal, SFTP, redirection de ports, trzsz, IDE léger, monitoring et contexte IA |
-| Des shells locaux dans le même flux | **Moteur hybride** : PTY local (zsh/bash/fish/pwsh/WSL2) et SSH distant côte à côte, pour garder le travail local et distant dans un seul workspace |
+| Des shells locaux et consoles série dans le même flux | **Moteur hybride** : PTY local (zsh/bash/fish/pwsh/WSL2), terminaux série locaux et SSH distant côte à côte, pour garder le travail local et distant dans un seul workspace |
 | Aucun compte cloud pour les workflows SSH | **Cœur local-first** : SSH, SFTP, redirection de ports, shell local et configuration fonctionnent sans inscription |
 | IA BYOK plutôt que crédits de plateforme | **OxideSens** : utilisez votre propre endpoint OpenAI/Ollama/DeepSeek/OpenAI-compatible avec support MCP et RAG |
 | Aucun runtime Electron | **Tauri 2.0** : backend Rust natif, binaire de 25–40 Mo |
@@ -103,7 +103,7 @@ Téléchargez la dernière version depuis [GitHub Releases](https://github.com/A
 
 | Catégorie | Fonctionnalités |
 |---|---|
-| **Terminal** | PTY local (zsh/bash/fish/pwsh/WSL2), SSH distant, panneaux divisés, diffusion d'entrée, enregistrement/lecture de sessions (asciicast v2), rendu WebGL, 30+ thèmes + éditeur personnalisé, palette de commandes (`⌘K`), mode zen, transfert de fichiers **trzsz** intégré |
+| **Terminal** | PTY local (zsh/bash/fish/pwsh/WSL2), SSH distant, terminaux série locaux, panneaux divisés, diffusion d'entrée, enregistrement/lecture de sessions (asciicast v2), rendu WebGL, 30+ thèmes + éditeur personnalisé, palette de commandes (`⌘K`), mode zen, transfert de fichiers **trzsz** intégré |
 | **SSH & Auth** | Pool de connexions & multiplexage, ProxyJump (sauts illimités) avec graphe topologique, reconnexion automatique avec période de grâce, Transfert d'agent. Auth : mot de passe, clé SSH (RSA/Ed25519/ECDSA), SSH Agent, certificats, 2FA interactif clavier, Known Hosts TOFU |
 | **SFTP** | Navigateur double volet, glisser-déposer, aperçu intelligent (images/vidéo/audio/code/PDF/hex/polices), file de transfert avec progression & ETA, signets, extraction d'archives |
 | **Mode IDE** | CodeMirror 6 avec 30+ langages, arborescence + statut Git, multi-onglets, résolution de conflits, terminal intégré. Agent distant Linux optionnel ; les autres architectures doivent le compiler et l'envoyer manuellement |
