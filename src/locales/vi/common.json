@@ -207,7 +207,7 @@
     "quick_connect_alias_not_found": "Không tìm thấy alias SSH config '{{alias}}'",
     "quick_connect_resolve_failed": "Lỗi khi phân giải alias '{{alias}}'",
     "footer_hint": "Nhấn Esc để đóng",
-    "cmd_open_serial_terminal": "Open Serial Terminal"
+    "cmd_open_serial_terminal": "Mở terminal serial"
   },
   "zen_mode": {
     "hint": "Chế độ Zen — Nhấn ⌘⇧Z để thoát",

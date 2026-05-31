@@ -152,7 +152,7 @@
       "focus_previous": "Focus Pannello Precedente",
       "cannot_close_last": "Impossibile chiudere l'ultimo pannello",
       "ssh_split_coming_soon": "Divisione terminale SSH in arrivo",
-      "serial_split_disabled": "Serial terminal split is disabled"
+      "serial_split_disabled": "La divisione del terminale seriale è disabilitata"
     },
     "typeLocal": "LOCALE",
     "typeSsh": "SSH",

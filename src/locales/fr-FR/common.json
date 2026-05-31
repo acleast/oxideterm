@@ -207,7 +207,7 @@
     "quick_connect_alias_not_found": "Alias de config SSH '{{alias}}' introuvable",
     "quick_connect_resolve_failed": "Échec de la résolution de l'alias '{{alias}}'",
     "footer_hint": "Appuyez sur Échap pour fermer",
-    "cmd_open_serial_terminal": "Open Serial Terminal"
+    "cmd_open_serial_terminal": "Ouvrir un terminal série"
   },
   "zen_mode": {
     "hint": "Mode Zen — Appuyez sur ⌘⇧Z pour quitter",

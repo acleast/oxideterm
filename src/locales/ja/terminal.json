@@ -152,7 +152,7 @@
       "focus_previous": "前のペインにフォーカス",
       "cannot_close_last": "最後のペインは閉じられません",
       "ssh_split_coming_soon": "SSH ターミナル分割は近日公開",
-      "serial_split_disabled": "Serial terminal split is disabled"
+      "serial_split_disabled": "シリアルターミナルの分割は無効です"
     },
     "typeLocal": "ローカル",
     "typeSsh": "SSH",

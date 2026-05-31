@@ -207,7 +207,7 @@
     "quick_connect_alias_not_found": "Alias de config SSH '{{alias}}' não encontrado",
     "quick_connect_resolve_failed": "Erro ao resolver alias '{{alias}}'",
     "footer_hint": "Pressione Esc para fechar",
-    "cmd_open_serial_terminal": "Open Serial Terminal"
+    "cmd_open_serial_terminal": "Abrir terminal serial"
   },
   "zen_mode": {
     "hint": "Modo Zen — Pressione ⌘⇧Z para sair",
