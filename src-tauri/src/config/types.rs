@@ -185,6 +185,90 @@ pub struct ManagedSshKey {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialParity {
+    None,
+    Odd,
+    Even,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerialFlowControl {
+    None,
+    Software,
+    Hardware,
+}
+
+/// Saved launch parameters for a local serial terminal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SerialProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    pub port_path: String,
+    pub baud_rate: u32,
+    pub data_bits: u8,
+    pub stop_bits: u8,
+    pub parity: SerialParity,
+    pub flow_control: SerialFlowControl,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub connect_on_open: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+impl SerialProfile {
+    pub fn new(name: impl Into<String>, port_path: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            group: None,
+            port_path: port_path.into(),
+            baud_rate: 115_200,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: SerialParity::None,
+            flow_control: SerialFlowControl::None,
+            connect_on_open: false,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.id.trim().is_empty() {
+            return Err("Serial profile id is required".to_string());
+        }
+        if self.name.trim().is_empty() {
+            return Err("Serial profile name is required".to_string());
+        }
+        if self.port_path.trim().is_empty() {
+            return Err("Serial port path is required".to_string());
+        }
+        if self.baud_rate == 0 {
+            return Err("Serial baud rate must be greater than zero".to_string());
+        }
+        if !(5..=8).contains(&self.data_bits) {
+            return Err("Serial data bits must be between 5 and 8".to_string());
+        }
+        if !matches!(self.stop_bits, 1 | 2) {
+            return Err("Serial stop bits must be 1 or 2".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn default_port() -> u16 {
     22
 }
@@ -291,6 +375,10 @@ pub struct ConfigFile {
     /// Metadata for OxideTerm-managed SSH keys. Private key material lives in keychain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_ssh_keys: Vec<ManagedSshKey>,
+
+    /// Saved serial terminal profiles. Kept separate from SSH saved connections.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub serial_profiles: Vec<SerialProfile>,
 }
 
 impl Default for ConfigFile {
@@ -302,6 +390,7 @@ impl Default for ConfigFile {
             recent: Vec::new(),
             connection_tombstones: Vec::new(),
             managed_ssh_keys: Vec::new(),
+            serial_profiles: Vec::new(),
         }
     }
 }
@@ -563,6 +652,78 @@ mod tests {
         let config: ConfigFile = serde_json::from_value(value).unwrap();
 
         assert!(config.managed_ssh_keys.is_empty());
+    }
+
+    #[test]
+    fn test_config_file_deserializes_missing_serial_profiles_as_empty() {
+        let value = json!({
+            "version": CONFIG_VERSION,
+            "connections": [],
+            "groups": [],
+            "recent": []
+        });
+
+        let config: ConfigFile = serde_json::from_value(value).unwrap();
+
+        assert!(config.serial_profiles.is_empty());
+        assert!(config.connections.is_empty());
+    }
+
+    #[test]
+    fn test_serial_profile_round_trips_without_ssh_fields() {
+        let now = Utc::now();
+        let profile = SerialProfile {
+            id: "serial-1".to_string(),
+            name: "Lab console".to_string(),
+            group: Some("Lab".to_string()),
+            port_path: "/dev/cu.usbserial-1".to_string(),
+            baud_rate: 115_200,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: SerialParity::None,
+            flow_control: SerialFlowControl::Hardware,
+            connect_on_open: true,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        };
+        let config = ConfigFile {
+            serial_profiles: vec![profile.clone()],
+            ..ConfigFile::default()
+        };
+
+        let value = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(value["serial_profiles"][0]["id"], "serial-1");
+        assert_eq!(value["serial_profiles"][0]["flow_control"], "hardware");
+        assert!(value["serial_profiles"][0].get("host").is_none());
+        assert!(value["serial_profiles"][0].get("username").is_none());
+        assert!(value["serial_profiles"][0].get("auth").is_none());
+
+        let round_trip: ConfigFile = serde_json::from_value(value).unwrap();
+        assert_eq!(round_trip.serial_profiles, vec![profile]);
+        assert!(round_trip.connections.is_empty());
+    }
+
+    #[test]
+    fn test_serial_profile_validation_rejects_invalid_parameters() {
+        let mut profile = SerialProfile::new("Lab console", "/dev/cu.usbserial-1");
+        assert!(profile.validate().is_ok());
+
+        profile.data_bits = 9;
+        assert!(profile.validate().is_err());
+
+        profile.data_bits = 8;
+        profile.stop_bits = 3;
+        assert!(profile.validate().is_err());
+
+        profile.stop_bits = 1;
+        profile.baud_rate = 0;
+        assert!(profile.validate().is_err());
+
+        profile.baud_rate = 115_200;
+        profile.port_path.clear();
+        assert!(profile.validate().is_err());
     }
 
     #[test]

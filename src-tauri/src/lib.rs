@@ -26,6 +26,7 @@ pub mod oxide_file;
 pub mod path_utils;
 pub mod rag;
 pub mod router;
+pub mod serial;
 pub mod session;
 pub mod sftp;
 pub mod ssh;
@@ -91,6 +92,7 @@ use commands::HealthRegistry;
 use commands::config::ConfigState;
 use commands::plugin_server::PluginFileServer;
 use commands::session_tree::SessionTreeState;
+use serial::SerialSessionRegistry;
 use session::{AutoReconnectService, SessionRegistry};
 use sftp::session::SftpRegistry;
 use sftp::{LazyProgressStore, ProgressStore, TransferManager};
@@ -412,6 +414,7 @@ pub fn run() {
         .manage(session_tree_state)
         .manage(node_router)
         .manage(node_event_emitter.clone())
+        .manage(Arc::new(SerialSessionRegistry::new()))
         .manage(Arc::new(PluginFileServer::new()))
         .manage(update_manager::UpdateManagerState::default())
         .manage(Arc::new(commands::McpProcessRegistry::new()))
@@ -543,6 +546,10 @@ pub fn run() {
         commands::revoke_asset_file,
         commands::get_audio_metadata,
         commands::local_exec_command,
+        commands::serial_list_ports,
+        commands::serial_open_session,
+        commands::serial_write_session,
+        commands::serial_close_session,
         // Session commands (v2 with registry)
         commands::disconnect_v2,
         commands::list_sessions_v2,
@@ -555,6 +562,10 @@ pub fn run() {
         commands::restore_sessions,
         commands::list_persisted_sessions,
         commands::delete_persisted_session,
+        commands::serial_list_ports,
+        commands::serial_open_session,
+        commands::serial_write_session,
+        commands::serial_close_session,
         // SSH connection pool commands (new architecture)
         commands::establish_connection,
         commands::test_connection,
@@ -1441,6 +1452,16 @@ pub fn run() {
                         tracing::info!("Disconnecting all pooled SSH connections...");
                         tauri::async_runtime::block_on(async {
                             conn_registry.disconnect_all().await;
+                        });
+                    }
+
+                    // Clean up serial sessions before the process exits so device handles are released.
+                    if let Some(serial_registry) =
+                        app_handle.try_state::<Arc<SerialSessionRegistry>>()
+                    {
+                        tracing::info!("Closing all serial sessions...");
+                        tauri::async_runtime::block_on(async {
+                            serial_registry.close_all().await;
                         });
                     }
 

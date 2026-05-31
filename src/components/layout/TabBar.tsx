@@ -364,7 +364,9 @@ const TabItem = React.memo<TabItemProps>(({
         {t('tabbar.copy_title')}
       </ContextMenuItem>
       {/* Send to Background — only for local terminal tabs */}
-      {tab.type === 'local_terminal' && tab.sessionId && (
+      {tab.type === 'local_terminal'
+        && tab.sessionId
+        && useLocalTerminalStore.getState().getTerminal(tab.sessionId)?.transport?.type !== 'serial' && (
         <>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => onDetachTab(tab.id, tab.sessionId!)}>
@@ -693,20 +695,23 @@ export const TabBar = () => {
 
     // Handle local terminal tabs
     if (tabType === 'local_terminal' && sessionId) {
+      const terminalInfo = useLocalTerminalStore.getState().getTerminal(sessionId);
       // Check for child processes — offer "Send to Background" if active
-      try {
-        const hasChildren = await useLocalTerminalStore.getState().checkChildProcesses(sessionId);
-        if (hasChildren) {
-          const userChoice = await confirm({
-            title: t('tabbar.child_process_warning'),
-            variant: 'danger',
-          });
-          if (!userChoice) {
-            return;
+      if (terminalInfo?.transport?.type !== 'serial') {
+        try {
+          const hasChildren = await useLocalTerminalStore.getState().checkChildProcesses(sessionId);
+          if (hasChildren) {
+            const userChoice = await confirm({
+              title: t('tabbar.child_process_warning'),
+              variant: 'danger',
+            });
+            if (!userChoice) {
+              return;
+            }
           }
+        } catch {
+          // If check fails, proceed with close anyway
         }
-      } catch {
-        // If check fails, proceed with close anyway
       }
 
       setClosing(sessionId);

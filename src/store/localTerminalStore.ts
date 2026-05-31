@@ -12,6 +12,7 @@ import {
   LocalTerminalInfo,
   BackgroundSessionInfo,
   CreateLocalTerminalRequest,
+  CreateSerialTerminalRequest,
   CreateTelnetTerminalRequest,
 } from '../types';
 
@@ -32,6 +33,14 @@ function buildGitBashOverride(path: string | null | undefined): ShellInfo | null
     path: normalizedPath,
     args: ['--login'],
   };
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 function applyLocalShellOverrides(shells: ShellInfo[], localSettings: ReturnType<typeof useSettingsStore.getState>['settings']['localTerminal']): ShellInfo[] {
@@ -57,6 +66,7 @@ interface LocalTerminalStore {
   loadShells: () => Promise<void>;
   createTerminal: (request?: CreateLocalTerminalRequest) => Promise<LocalTerminalInfo>;
   createTelnetTerminal: (request: CreateTelnetTerminalRequest) => Promise<LocalTerminalInfo>;
+  createSerialTerminal: (request: CreateSerialTerminalRequest) => Promise<LocalTerminalInfo>;
   closeTerminal: (sessionId: string) => Promise<void>;
   resizeTerminal: (sessionId: string, cols: number, rows: number) => Promise<void>;
   writeTerminal: (sessionId: string, data: Uint8Array) => Promise<void>;
@@ -239,9 +249,71 @@ export const useLocalTerminalStore = create<LocalTerminalStore>((set, get) => ({
     }
   },
 
+  createSerialTerminal: async (request: CreateSerialTerminalRequest) => {
+    try {
+      const baudRate = request.baudRate ?? 115_200;
+      const response = await api.serialOpenSession({
+        portPath: request.portPath,
+        baudRate,
+        dataBits: request.dataBits,
+        stopBits: request.stopBits,
+        parity: request.parity,
+        flowControl: request.flowControl,
+      });
+      const info: LocalTerminalInfo = {
+        id: response.sessionId,
+        shell: {
+          id: 'serial',
+          label: `Serial ${response.portPath}`,
+          path: response.portPath,
+          args: [],
+        },
+        cols: request.cols ?? 80,
+        rows: request.rows ?? 24,
+        running: true,
+        detached: false,
+        transport: { type: 'serial', portPath: response.portPath, baudRate },
+      };
+
+      set((state) => {
+        const newTerminals = new Map(state.terminals);
+        newTerminals.set(response.sessionId, info);
+        return { terminals: newTerminals };
+      });
+
+      useToastStore.getState().addToast({
+        title: i18n.t('local_shell.toast.terminal_created'),
+        description: info.shell.label,
+      });
+
+      return info;
+    } catch (error) {
+      const errorMessage = String(error);
+      console.error('Failed to create Serial terminal:', error);
+      useToastStore.getState().addToast({
+        title: i18n.t('local_shell.toast.create_failed'),
+        description: errorMessage,
+        variant: 'error',
+      });
+      pushNotification({
+        kind: 'health',
+        severity: 'error',
+        title: i18n.t('local_shell.toast.create_failed'),
+        body: errorMessage,
+        dedupeKey: `serial-terminal-create-failed:${request.portPath}`,
+      });
+      throw error;
+    }
+  },
+
   closeTerminal: async (sessionId: string) => {
     try {
-      await api.localCloseTerminal(sessionId);
+      const terminal = get().terminals.get(sessionId);
+      if (terminal?.transport?.type === 'serial') {
+        await api.serialCloseSession(sessionId);
+      } else {
+        await api.localCloseTerminal(sessionId);
+      }
       get().removeTerminal(sessionId);
     } catch (error) {
       console.error('Failed to close local terminal:', error);
@@ -255,7 +327,10 @@ export const useLocalTerminalStore = create<LocalTerminalStore>((set, get) => ({
       if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) {
         return;
       }
-      await api.localResizeTerminal(sessionId, cols, rows);
+      const currentTerminal = get().terminals.get(sessionId);
+      if (currentTerminal?.transport?.type !== 'serial') {
+        await api.localResizeTerminal(sessionId, cols, rows);
+      }
       
       set((state) => {
         const terminal = state.terminals.get(sessionId);
@@ -272,8 +347,13 @@ export const useLocalTerminalStore = create<LocalTerminalStore>((set, get) => ({
 
   writeTerminal: async (sessionId: string, data: Uint8Array) => {
     try {
-      // Convert Uint8Array to number[] for Tauri invoke
-      await api.localWriteTerminal(sessionId, Array.from(data));
+      const terminal = get().terminals.get(sessionId);
+      if (terminal?.transport?.type === 'serial') {
+        await api.serialWriteSession({ sessionId, dataBase64: bytesToBase64(data) });
+      } else {
+        // Convert Uint8Array to number[] for Tauri invoke
+        await api.localWriteTerminal(sessionId, Array.from(data));
+      }
     } catch (error) {
       console.error('Failed to write to local terminal:', error);
       // Terminal might have closed, update state

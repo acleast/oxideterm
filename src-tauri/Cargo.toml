@@ -65,6 +65,7 @@ async-trait = "0.1"
 
 # Local Terminal (PTY) - optional, gated behind 'local-terminal' feature
 portable-pty = { version = "0.8", optional = true }
+serialport = "4"
 
 # Session Management
 dashmap = "6"

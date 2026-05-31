@@ -306,19 +306,22 @@ export const TabBarTerminalActions: React.FC<TabBarTerminalActionsProps> = ({
   // ── Split pane state (local_terminal only) ───────────────────────────
   const isLocalTerminal = activeTab.type === 'local_terminal';
   const { splitPane, getPaneCount, sessions, tabs } = useAppStore();
-  const { createTerminal } = useLocalTerminalStore();
+  const { createTerminal, getTerminal } = useLocalTerminalStore();
+  const isSerialTerminal = sessionId
+    ? getTerminal(sessionId)?.transport?.type === 'serial'
+    : false;
   const paneCount = getPaneCount(activeTab.id);
-  const canSplit = paneCount < MAX_PANES_PER_TAB;
+  const canSplit = !isSerialTerminal && paneCount < MAX_PANES_PER_TAB;
 
   const handleSplit = useCallback(async (direction: SplitDirection) => {
-    if (!canSplit || !isLocalTerminal) return;
+    if (!canSplit || !isLocalTerminal || isSerialTerminal) return;
     try {
       const newSession = await createTerminal();
       splitPane(activeTab.id, direction, newSession.id, 'local_terminal');
     } catch (err) {
       console.error('[TabBarTerminalActions] Failed to split pane:', err);
     }
-  }, [canSplit, isLocalTerminal, createTerminal, splitPane, activeTab.id]);
+  }, [canSplit, isLocalTerminal, isSerialTerminal, createTerminal, splitPane, activeTab.id]);
 
   // ── Broadcast state ─────────────────────────────────────────────────
   const broadcastEnabled = useBroadcastStore(s => s.enabled);
@@ -348,7 +351,7 @@ export const TabBarTerminalActions: React.FC<TabBarTerminalActionsProps> = ({
   return (
     <div className="flex-shrink-0 flex items-center h-full border-l border-theme-border">
       {/* ── Split pane actions (local_terminal only) ────────────────── */}
-      {isLocalTerminal && (
+      {isLocalTerminal && !isSerialTerminal && (
         <div className="flex items-center gap-0.5 px-2">
           <button
             onClick={() => handleSplit('horizontal')}
@@ -395,7 +398,7 @@ export const TabBarTerminalActions: React.FC<TabBarTerminalActionsProps> = ({
       )}
 
       {/* ── Separator between split & broadcast/recording groups ─────── */}
-      {isLocalTerminal && (
+      {isLocalTerminal && !isSerialTerminal && (
         <div className="w-px h-4 bg-theme-border/50" />
       )}
 

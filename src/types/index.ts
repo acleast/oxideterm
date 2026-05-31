@@ -748,6 +748,86 @@ export interface SaveConnectionRequest {
   proxy_chain?: SaveProxyHopRequest[];
 }
 
+export type SerialParity = 'none' | 'odd' | 'even';
+export type SerialFlowControl = 'none' | 'software' | 'hardware';
+
+export interface SerialProfile {
+  id: string;
+  name: string;
+  group?: string | null;
+  portPath: string;
+  baudRate: number;
+  dataBits: 5 | 6 | 7 | 8;
+  stopBits: 1 | 2;
+  parity: SerialParity;
+  flowControl: SerialFlowControl;
+  connectOnOpen?: boolean;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt?: number;
+}
+
+export type SerialErrorCode =
+  | 'port_not_found'
+  | 'permission_denied'
+  | 'port_busy'
+  | 'invalid_parameters'
+  | 'open_failed'
+  | 'write_failed'
+  | 'read_failed'
+  | 'device_disconnected'
+  | 'session_not_found'
+  | 'unsupported_platform';
+
+export interface SerialError {
+  code: SerialErrorCode;
+  message: string;
+  portPath?: string;
+  sessionId?: string;
+  recoverable: boolean;
+}
+
+export interface SerialPortInfo {
+  portPath: string;
+  displayName: string;
+  portType: 'usb' | 'bluetooth' | 'pci' | 'unknown';
+  manufacturer?: string;
+  product?: string;
+  serialNumber?: string;
+  vid?: number;
+  pid?: number;
+}
+
+export interface OpenSerialSessionRequest {
+  portPath: string;
+  baudRate?: number;
+  dataBits?: 5 | 6 | 7 | 8;
+  stopBits?: 1 | 2;
+  parity?: SerialParity;
+  flowControl?: SerialFlowControl;
+}
+
+export interface OpenSerialSessionResponse {
+  sessionId: string;
+  portPath: string;
+}
+
+export interface WriteSerialSessionRequest {
+  sessionId: string;
+  dataBase64: string;
+}
+
+export interface SerialDataEvent {
+  sessionId: string;
+  portPath: string;
+  dataBase64: string;
+}
+
+export interface SerialClosedEvent {
+  sessionId: string;
+  portPath: string;
+}
+
 /** Proxy hop request with credentials for save_connection */
 export interface SaveProxyHopRequest {
   host: string;
@@ -1740,7 +1820,8 @@ export interface LocalTerminalInfo {
 
 export type LocalTerminalTransport =
   | { type?: 'pty' }
-  | { type: 'telnet'; host: string; port: number };
+  | { type: 'telnet'; host: string; port: number }
+  | { type: 'serial'; portPath: string; baudRate: number };
 
 /**
  * Background (detached) session info
@@ -1788,6 +1869,14 @@ export interface CreateLocalTerminalRequest {
 export interface CreateTelnetTerminalRequest {
   host: string;
   port?: number;
+  cols?: number;
+  rows?: number;
+}
+
+/**
+ * Request to create a Serial terminal
+ */
+export interface CreateSerialTerminalRequest extends OpenSerialSessionRequest {
   cols?: number;
   rows?: number;
 }

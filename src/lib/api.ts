@@ -2383,6 +2383,31 @@ export const api = {
     return invoke('local_create_telnet_terminal', { request });
   },
 
+  serialListPorts: async (): Promise<import('../types').SerialPortInfo[]> => {
+    if (USE_MOCK) return [];
+    return invoke('serial_list_ports');
+  },
+
+  serialOpenSession: async (request: import('../types').OpenSerialSessionRequest): Promise<import('../types').OpenSerialSessionResponse> => {
+    if (USE_MOCK) {
+      return {
+        sessionId: crypto.randomUUID(),
+        portPath: request.portPath,
+      };
+    }
+    return invoke('serial_open_session', { request });
+  },
+
+  serialWriteSession: async (request: import('../types').WriteSerialSessionRequest): Promise<void> => {
+    if (USE_MOCK) return;
+    return invoke('serial_write_session', { request });
+  },
+
+  serialCloseSession: async (sessionId: string): Promise<void> => {
+    if (USE_MOCK) return;
+    return invoke('serial_close_session', { sessionId });
+  },
+
   /**
    * Close a local terminal session
    */

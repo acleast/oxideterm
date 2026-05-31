@@ -115,6 +115,15 @@ interface LocalTerminalViewProps {
 
 const PREFILL_REPLAY_LINE_COUNT = 50; // Keep aligned with backend replay count
 
+function base64ToBytes(encoded: string): Uint8Array {
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({ 
   sessionId, 
   isActive = true,
@@ -254,6 +263,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
 
   const { writeTerminal, resizeTerminal, getTerminal, updateTerminalState } = useLocalTerminalStore();
   const terminalInfo = getTerminal(sessionId);
+  const isSerialTerminal = terminalInfo?.transport?.type === 'serial';
 
   const writeEncodedTerminalInput = useCallback((input: string) => {
     const write = (bytes: Uint8Array) => {
@@ -1182,19 +1192,23 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
     if (!fontOpenReady) return;
     if (!terminalRef.current) return;
 
-    const dataEventName = `local-terminal-data:${sessionId}`;
-    const closedEventName = `local-terminal-closed:${sessionId}`;
+    const dataEventName = isSerialTerminal ? 'serial:data' : `local-terminal-data:${sessionId}`;
+    const closedEventName = isSerialTerminal ? 'serial:closed' : `local-terminal-closed:${sessionId}`;
 
     // Listen for data - use RAF batching to reduce search index jumping
     // Track mounted state and listener cleanup functions
     let mounted = true;
     let unlistenDataFn: (() => void) | null = null;
     let unlistenClosedFn: (() => void) | null = null;
+    let unlistenErrorFn: (() => void) | null = null;
 
     // Rust PTY sends high-frequency small packets; adaptive renderer handles batching
-    listen<{ sessionId: string; data: number[] }>(dataEventName, (event) => {
+    listen<{ sessionId: string; data?: number[]; dataBase64?: string }>(dataEventName, (event) => {
       if (!mounted || !isMountedRef.current || !terminalRef.current) return;
-      const data = new Uint8Array(event.payload.data);
+      if (event.payload.sessionId !== sessionId) return;
+      const data = event.payload.dataBase64
+        ? base64ToBytes(event.payload.dataBase64)
+        : new Uint8Array(event.payload.data ?? []);
       
       maybeSuggestTerminalEncoding(data);
       const displayData = terminalOutputDecoderRef.current.transform(data).bytes;
@@ -1239,9 +1253,10 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
     });
 
     // Listen for close
-    listen<{ sessionId: string; exitCode: number | null }>(closedEventName, (event) => {
+    listen<{ sessionId: string; exitCode?: number | null }>(closedEventName, (event) => {
       if (!mounted || !isMountedRef.current || !terminalRef.current) return;
-      const { exitCode } = event.payload;
+      if (event.payload.sessionId !== sessionId) return;
+      const exitCode = event.payload.exitCode ?? null;
       
       // Enhanced logging for debugging "秒退" issues
       console.warn(`[LocalTerminalView] Session ${sessionId} closed, exitCode: ${exitCode}`);
@@ -1265,6 +1280,25 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
       }
     });
 
+    if (isSerialTerminal) {
+      listen<{ sessionId?: string; message: string }>('serial:error', (event) => {
+        if (!mounted || !isMountedRef.current || !terminalRef.current) return;
+        if (event.payload.sessionId && event.payload.sessionId !== sessionId) return;
+
+        setIsRunning(false);
+        isRunningRef.current = false;
+        updateTerminalState(sessionId, false);
+        terminalRef.current.writeln('');
+        terminalRef.current.writeln(`\x1b[31m${event.payload.message}\x1b[0m`);
+      }).then((fn) => {
+        if (mounted) {
+          unlistenErrorFn = fn;
+        } else {
+          fn();
+        }
+      });
+    }
+
     return () => {
       mounted = false;
       // Adaptive renderer cleanup is handled by the hook's own useEffect.
@@ -1276,11 +1310,12 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
       
       unlistenDataFn?.();
       unlistenClosedFn?.();
+      unlistenErrorFn?.();
       updateTerminalReadiness(sessionId, {
         frontendOutputListenerReady: false,
       });
     };
-  }, [feedOutput, fontOpenReady, maybeSuggestTerminalEncoding, recorderRef, sessionId, updateTerminalState]);
+  }, [feedOutput, fontOpenReady, isSerialTerminal, maybeSuggestTerminalEncoding, recorderRef, sessionId, updateTerminalState]);
 
   // Listen for AI insert command events (only when this terminal is active)
   useEffect(() => {

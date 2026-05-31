@@ -4,6 +4,9 @@ const apiMocks = vi.hoisted(() => ({
   localListShells: vi.fn(),
   localGetDefaultShell: vi.fn(),
   localCreateTerminal: vi.fn(),
+  serialOpenSession: vi.fn(),
+  serialCloseSession: vi.fn(),
+  serialWriteSession: vi.fn(),
   localCloseTerminal: vi.fn(),
   localResizeTerminal: vi.fn(),
   localWriteTerminal: vi.fn(),
@@ -220,5 +223,40 @@ describe('localTerminalStore', () => {
     expect(useLocalTerminalStore.getState().terminals.has('term-1')).toBe(false);
     expect(useLocalTerminalStore.getState().backgroundSessions.has('term-1')).toBe(false);
     expect(useLocalTerminalStore.getState().pendingReplay.has('term-1')).toBe(false);
+  });
+
+  it('creates serial terminals and routes writes/closes through serial commands', async () => {
+    apiMocks.serialOpenSession.mockResolvedValue({
+      sessionId: 'serial-1',
+      portPath: '/dev/cu.usbserial-1',
+    });
+
+    const terminal = await useLocalTerminalStore.getState().createSerialTerminal({
+      portPath: '/dev/cu.usbserial-1',
+      baudRate: 9600,
+    });
+
+    expect(apiMocks.serialOpenSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        portPath: '/dev/cu.usbserial-1',
+        baudRate: 9600,
+      }),
+    );
+    expect(terminal.transport).toEqual({
+      type: 'serial',
+      portPath: '/dev/cu.usbserial-1',
+      baudRate: 9600,
+    });
+
+    await useLocalTerminalStore.getState().writeTerminal('serial-1', new Uint8Array([0, 255, 65]));
+    expect(apiMocks.serialWriteSession).toHaveBeenCalledWith({
+      sessionId: 'serial-1',
+      dataBase64: 'AP9B',
+    });
+    expect(apiMocks.localWriteTerminal).not.toHaveBeenCalled();
+
+    await useLocalTerminalStore.getState().closeTerminal('serial-1');
+    expect(apiMocks.serialCloseSession).toHaveBeenCalledWith('serial-1');
+    expect(apiMocks.localCloseTerminal).not.toHaveBeenCalled();
   });
 });
