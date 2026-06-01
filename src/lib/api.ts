@@ -30,6 +30,10 @@ import {
   SshHostInfo,
   ResolvedSshConfigHostInfo,
   SshBatchImportResult,
+  ConnectionImportApplyRequest,
+  ConnectionImportApplyResult,
+  ConnectionImportPreview,
+  ConnectionImportSource,
   DataDirInfo,
   DataDirCheck,
   PortableInfoResponse,
@@ -808,6 +812,21 @@ export const api = {
   importSshHosts: async (aliases: string[]): Promise<SshBatchImportResult> => {
     if (USE_MOCK) throw new Error("Mock import not implemented");
     return invoke('import_ssh_hosts', { aliases });
+  },
+
+  previewConnectionImport: async (
+    source: ConnectionImportSource,
+    paths: string[],
+  ): Promise<ConnectionImportPreview> => {
+    if (USE_MOCK) throw new Error("Mock connection import preview not implemented");
+    return invoke('preview_connection_import', { source, paths });
+  },
+
+  applyConnectionImport: async (
+    request: ConnectionImportApplyRequest,
+  ): Promise<ConnectionImportApplyResult> => {
+    if (USE_MOCK) throw new Error("Mock connection import apply not implemented");
+    return invoke('apply_connection_import', { request });
   },
 
   getDataDirectory: async (): Promise<DataDirInfo> => {

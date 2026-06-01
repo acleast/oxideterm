@@ -1095,6 +1095,70 @@ export interface SshBatchImportResult {
   errors: string[];
 }
 
+export type ConnectionImportSource = 'securecrt' | 'xshell' | 'termius';
+export type ConnectionImportDuplicateStrategy = 'skip' | 'rename';
+export type ImportedConnectionAuthType = 'password' | 'key' | 'certificate' | 'agent';
+
+export interface ImportedProxyHopDraft {
+  host: string;
+  port: number;
+  username: string;
+  authType: ImportedConnectionAuthType;
+  keyPath: string | null;
+  certPath: string | null;
+  agentForwarding: boolean;
+}
+
+export interface ImportedConnectionDraft {
+  id: string;
+  source: ConnectionImportSource;
+  sourcePath: string;
+  name: string;
+  group: string | null;
+  host: string;
+  port: number;
+  username: string;
+  authType: ImportedConnectionAuthType;
+  keyPath: string | null;
+  certPath: string | null;
+  proxyChain: ImportedProxyHopDraft[];
+  tags: string[];
+  warnings: string[];
+  unsupportedFields: string[];
+  duplicate: boolean;
+  importable: boolean;
+}
+
+export interface ConnectionImportErrorInfo {
+  sourcePath: string;
+  message: string;
+}
+
+export interface ConnectionImportPreview {
+  source: ConnectionImportSource;
+  total: number;
+  importable: number;
+  duplicates: number;
+  warnings: number;
+  errors: ConnectionImportErrorInfo[];
+  drafts: ImportedConnectionDraft[];
+}
+
+export interface ConnectionImportApplyRequest {
+  source: ConnectionImportSource;
+  paths: string[];
+  selectedDraftIds: string[];
+  duplicateStrategy: ConnectionImportDuplicateStrategy;
+  targetGroup?: string | null;
+}
+
+export interface ConnectionImportApplyResult {
+  imported: number;
+  skipped: number;
+  renamed: number;
+  errors: ConnectionImportErrorInfo[];
+}
+
 export type DataDirInfo = {
   path: string;
   is_custom: boolean;

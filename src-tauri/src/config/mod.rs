@@ -11,6 +11,7 @@
 //! - AI provider API keys: `com.oxideterm.ai` keychain service (since v1.6.0)
 //! - Legacy XOR vault files (`ai_keys/*.vault`) are auto-migrated on first access
 
+pub mod connection_import;
 pub mod keychain;
 pub mod portable;
 pub mod portable_keystore;

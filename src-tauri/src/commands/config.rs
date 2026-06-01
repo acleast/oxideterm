@@ -5,6 +5,12 @@
 //!
 //! Tauri commands for managing saved connections and SSH config import.
 
+use crate::config::connection_import::{
+    self, ConnectionImportApplyRequest, ConnectionImportApplyResult,
+    ConnectionImportDuplicateStrategy, ConnectionImportErrorInfo, ConnectionImportPreview,
+    ConnectionImportSource, ImportedConnectionAuthType, ImportedConnectionDraft,
+    ImportedProxyHopDraft,
+};
 use crate::config::types::{ManagedSshKey, ManagedSshKeyOrigin};
 use crate::config::types::{SerialFlowControl, SerialParity, SerialProfile};
 use crate::config::{
@@ -4280,6 +4286,196 @@ pub async fn import_ssh_hosts(
     Ok(SshBatchImportResult {
         imported,
         skipped,
+        errors,
+    })
+}
+
+fn imported_auth_to_saved(
+    auth_type: ImportedConnectionAuthType,
+    key_path: Option<&String>,
+    cert_path: Option<&String>,
+) -> SavedAuth {
+    match auth_type {
+        ImportedConnectionAuthType::Certificate => match (key_path, cert_path) {
+            (Some(key_path), Some(cert_path)) => SavedAuth::Certificate {
+                key_path: key_path.clone(),
+                cert_path: cert_path.clone(),
+                has_passphrase: false,
+                passphrase_keychain_id: None,
+            },
+            (Some(key_path), None) => SavedAuth::Key {
+                key_path: key_path.clone(),
+                has_passphrase: false,
+                passphrase_keychain_id: None,
+            },
+            _ => SavedAuth::Password { keychain_id: None },
+        },
+        ImportedConnectionAuthType::Key => match key_path {
+            Some(key_path) => SavedAuth::Key {
+                key_path: key_path.clone(),
+                has_passphrase: false,
+                passphrase_keychain_id: None,
+            },
+            None => SavedAuth::Password { keychain_id: None },
+        },
+        ImportedConnectionAuthType::Agent => SavedAuth::Agent,
+        ImportedConnectionAuthType::Password => SavedAuth::Password { keychain_id: None },
+    }
+}
+
+fn imported_proxy_hop_to_saved(hop: &ImportedProxyHopDraft) -> ProxyHopConfig {
+    ProxyHopConfig {
+        host: hop.host.clone(),
+        port: hop.port,
+        username: hop.username.clone(),
+        auth: imported_auth_to_saved(hop.auth_type, hop.key_path.as_ref(), hop.cert_path.as_ref()),
+        agent_forwarding: hop.agent_forwarding,
+    }
+}
+
+fn imported_draft_to_saved_connection(
+    draft: &ImportedConnectionDraft,
+    name: String,
+    group: Option<String>,
+) -> SavedConnection {
+    // Third-party importers intentionally do not carry credential material into
+    // SavedAuth. Password/passphrase entry remains owned by the normal
+    // first-connect Keychain flow.
+    SavedConnection {
+        id: uuid::Uuid::new_v4().to_string(),
+        version: crate::config::CONFIG_VERSION,
+        name,
+        group,
+        host: draft.host.clone(),
+        port: draft.port,
+        username: draft.username.clone(),
+        auth: imported_auth_to_saved(
+            draft.auth_type,
+            draft.key_path.as_ref(),
+            draft.cert_path.as_ref(),
+        ),
+        options: Default::default(),
+        created_at: chrono::Utc::now(),
+        last_used_at: None,
+        updated_at: Some(chrono::Utc::now()),
+        color: None,
+        tags: draft.tags.clone(),
+        proxy_chain: draft
+            .proxy_chain
+            .iter()
+            .map(imported_proxy_hop_to_saved)
+            .collect(),
+    }
+}
+
+fn normalized_import_group(
+    request_group: Option<&String>,
+    draft_group: Option<&String>,
+    source: ConnectionImportSource,
+) -> Option<String> {
+    request_group
+        .and_then(|group| {
+            let trimmed = group.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .or_else(|| draft_group.cloned())
+        .or_else(|| Some(connection_import::default_import_group(source)))
+}
+
+#[tauri::command]
+pub async fn preview_connection_import(
+    state: State<'_, Arc<ConfigState>>,
+    source: ConnectionImportSource,
+    paths: Vec<String>,
+) -> Result<ConnectionImportPreview, String> {
+    let existing_names: HashSet<String> = {
+        let config = state.config.read();
+        config.connections.iter().map(|c| c.name.clone()).collect()
+    };
+
+    connection_import::preview_connection_import(source, &paths, &existing_names)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn apply_connection_import(
+    state: State<'_, Arc<ConfigState>>,
+    request: ConnectionImportApplyRequest,
+) -> Result<ConnectionImportApplyResult, String> {
+    let mut existing_names: HashSet<String> = {
+        let config = state.config.read();
+        config.connections.iter().map(|c| c.name.clone()).collect()
+    };
+    let selected_draft_ids: HashSet<String> = request.selected_draft_ids.iter().cloned().collect();
+    let preview = connection_import::preview_connection_import(
+        request.source,
+        &request.paths,
+        &existing_names,
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let mut renamed = 0usize;
+    let mut errors: Vec<ConnectionImportErrorInfo> = preview.errors;
+
+    {
+        let mut config = state.config.write();
+
+        for draft in preview.drafts {
+            if !selected_draft_ids.contains(&draft.id) {
+                continue;
+            }
+            if !draft.importable {
+                errors.push(ConnectionImportErrorInfo {
+                    source_path: draft.source_path.clone(),
+                    message: "Connection draft is not importable".to_string(),
+                });
+                continue;
+            }
+
+            let mut name = draft.name.clone();
+            if existing_names.contains(&name) {
+                match request.duplicate_strategy {
+                    ConnectionImportDuplicateStrategy::Skip => {
+                        skipped += 1;
+                        continue;
+                    }
+                    ConnectionImportDuplicateStrategy::Rename => {
+                        name = connection_import::unique_import_name(&name, &existing_names);
+                        renamed += 1;
+                    }
+                }
+            }
+
+            let group = normalized_import_group(
+                request.target_group.as_ref(),
+                draft.group.as_ref(),
+                draft.source,
+            );
+            let connection =
+                imported_draft_to_saved_connection(&draft, name.clone(), group.clone());
+            config.add_connection(connection);
+            existing_names.insert(name);
+
+            if let Some(group) = group
+                && !config.groups.contains(&group)
+            {
+                config.groups.push(group);
+            }
+
+            imported += 1;
+        }
+    }
+
+    if imported > 0 {
+        state.save().await?;
+    }
+
+    Ok(ConnectionImportApplyResult {
+        imported,
+        skipped,
+        renamed,
         errors,
     })
 }

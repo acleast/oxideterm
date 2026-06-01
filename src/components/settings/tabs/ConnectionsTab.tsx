@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
+import { ConnectionImportPanel } from '@/components/settings/ConnectionImportPanel';
 import { useToast } from '@/hooks/useToast';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -70,6 +71,15 @@ export const ConnectionsTab = ({
 
     const refreshHosts = async () => {
         setSshHosts(await api.listSshConfigHosts());
+    };
+
+    const handleConnectionImportCompleted = async () => {
+        // Keep all connection entry points fresh after an external importer writes saved connections.
+        await Promise.all([
+            refreshGroups(),
+            refreshHosts(),
+            useAppStore.getState().loadSavedConnections(),
+        ]);
     };
 
     const handleCreateGroup = async () => {
@@ -296,6 +306,8 @@ export const ConnectionsTab = ({
                     )}
                 </div>
             </div>
+
+            <ConnectionImportPanel onImported={handleConnectionImportCompleted} />
         </div>
     );
 };
