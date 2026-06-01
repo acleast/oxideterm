@@ -116,15 +116,11 @@ body:
     attributes:
       label: Checklist
       options:
-        - label: I have tested with the latest release and can still reproduce the issue / 我已使用最新正式版测试，问题仍然存在
-          required: true
-        - label: I searched existing issues for duplicates / 我已搜索过是否已有相同 Issue
+        - label: I tested with the latest release, can still reproduce the issue, and searched existing issues / 我已使用最新正式版测试，问题仍然存在，并已搜索过已有 Issue
           required: true
         - label: This is one reproducible bug, not a usage question or feature request / 这是一个可复现的 bug，而不是使用问题或功能建议
           required: true
-        - label: I have provided the OxideTerm version, platform, and steps to reproduce / 我已提供版本号、平台及复现步骤
-          required: true
         - label: |
-            I understand vague, incomplete, or inactive issues may be closed.
-            我理解描述模糊、信息不足或长期无回复的 Issue 可能会被关闭。
+            I provided the OxideTerm version, platform, and steps to reproduce; I understand vague, incomplete, or inactive issues may be closed.
+            我已提供 OxideTerm 版本、平台及复现步骤；我理解描述模糊、信息不足或长期无回复的 Issue 可能会被关闭。
           required: true

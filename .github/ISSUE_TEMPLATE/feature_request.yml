@@ -75,15 +75,11 @@ body:
     attributes:
       label: Checklist
       options:
-        - label: I am using the latest release and have confirmed this feature does not already exist / 我正在使用最新正式版，并已确认该功能尚不存在
+        - label: I am using the latest release, confirmed this feature does not already exist, and searched existing issues / 我正在使用最新正式版，已确认该功能尚不存在，并已搜索过已有 Issue
           required: true
         - label: This is one focused request within OxideTerm's scope / 这是一个聚焦且属于 OxideTerm 范围内的请求
           required: true
-        - label: I searched existing issues for duplicates / 我已搜索过是否已有相同 Issue
-          required: true
-        - label: I have described a concrete problem or use case and a proposed solution / 我已描述了具体的问题或使用场景，并给出了期望方案
-          required: true
         - label: |
-            I understand feature requests are handled best-effort, and vague or inactive issues may be closed.
-            我理解功能请求会尽力处理，描述模糊或长期无回复的 Issue 可能会被关闭。
+            I have described a concrete problem/use case and proposed solution; I understand feature requests are handled best-effort, and vague or inactive issues may be closed.
+            我已描述具体问题/使用场景和期望方案；我理解功能请求会尽力处理，描述模糊或长期无回复的 Issue 可能会被关闭。
           required: true

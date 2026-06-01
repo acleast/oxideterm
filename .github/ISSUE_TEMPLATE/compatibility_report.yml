@@ -101,9 +101,7 @@ body:
     attributes:
       label: Checklist
       options:
-        - label: I have tested with the latest release and the issue persists / 我已使用最新正式版测试，问题仍然存在
-          required: true
-        - label: I have confirmed that another SSH client can connect with the same credentials and server / 我已确认其他 SSH 客户端使用相同凭据和服务端可以正常连接
+        - label: I tested with the latest release, the issue persists, and another SSH client can connect with the same credentials and server / 我已使用最新正式版测试，问题仍然存在，且其他 SSH 客户端使用相同凭据和服务端可以正常连接
           required: true
         - label: I searched existing issues and provided server details, error messages, and a working-client comparison / 我已搜索过已有 Issue，并提供了服务端信息、错误信息和可正常连接的客户端对比
           required: true
