@@ -215,9 +215,9 @@
   },
   "onboarding": {
     "welcome": "Welcome to OxideTerm",
-    "subtitle": "Rust-native SSH terminal client",
+    "subtitle": "SSH workspace with a pure Rust SSH stack",
     "start_exploring": "Start Exploring",
-    "project_intro": "OxideTerm is a modern, cross-platform SSH terminal client built entirely in Rust. Manage remote servers with multiplexed connections, integrated SFTP, smart port forwarding, AI-powered assistance, and a CLI companion tool — secure, fast, and extensible.",
+    "project_intro": "OxideTerm is a modern, cross-platform SSH workspace built with Tauri + React and a pure Rust SSH stack. Manage remote servers with multiplexed connections, integrated SFTP, smart port forwarding, AI-powered assistance, and a CLI companion tool — secure, fast, and extensible.",
     "highlight_performance": "Rust Performance",
     "highlight_performance_desc": "Async I/O, WebGL rendering, zero-copy binary protocol.",
     "highlight_security_arch": "Security First",

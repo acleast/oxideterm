@@ -215,9 +215,9 @@
   },
   "onboarding": {
     "welcome": "欢迎使用 OxideTerm",
-    "subtitle": "Rust 原生 SSH 终端客户端",
+    "subtitle": "纯 Rust SSH 栈的 SSH 工作区",
     "start_exploring": "开始探索",
-    "project_intro": "OxideTerm 是一款基于 Rust 构建的现代跨平台 SSH 终端客户端。集成多路复用连接、SFTP 文件管理、智能端口转发、AI 辅助终端与命令行伴侣工具 — 安全、高效、可扩展。",
+    "project_intro": "OxideTerm 是一款基于 Tauri + React、采用纯 Rust SSH 栈的现代跨平台 SSH 工作区。集成多路复用连接、SFTP 文件管理、智能端口转发、AI 辅助终端与命令行伴侣工具 — 安全、高效、可扩展。",
     "highlight_performance": "Rust 高性能",
     "highlight_performance_desc": "异步 I/O、WebGL 渲染、零拷贝二进制协议。",
     "highlight_security_arch": "安全优先",

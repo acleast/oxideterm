@@ -215,9 +215,9 @@
   },
   "onboarding": {
     "welcome": "OxideTerm へようこそ",
-    "subtitle": "Rust ネイティブ SSH ターミナルクライアント",
+    "subtitle": "純 Rust SSH スタックの SSH ワークスペース",
     "start_exploring": "使い始める",
-    "project_intro": "OxideTerm は Rust で構築されたモダンなクロスプラットフォーム SSH ターミナルクライアントです。多重化接続、統合 SFTP、スマートポート転送、AI アシスタント、CLI コンパニオンツールを備え、安全・高速・拡張可能です。",
+    "project_intro": "OxideTerm は Tauri + React と純 Rust SSH スタックで構築された、モダンなクロスプラットフォーム SSH ワークスペースです。多重化接続、統合 SFTP、スマートポート転送、AI アシスタント、CLI コンパニオンツールを備え、安全・高速・拡張可能です。",
     "highlight_performance": "Rust 高性能",
     "highlight_performance_desc": "非同期 I/O、WebGL レンダリング、ゼロコピーバイナリプロトコル。",
     "highlight_security_arch": "セキュリティ優先",
