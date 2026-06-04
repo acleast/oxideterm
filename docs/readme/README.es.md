@@ -7,9 +7,9 @@
 <p align="center">
   <strong>Workspace AI-native para servidores remotos.</strong>
   <br>
-  Conéctate a tus servidores por SSH y trabaja con terminales, archivos, puertos, transferencias, edición ligera y la barra lateral autónoma OxideSens en una app local-first.
+  Conéctate a tus servidores por SSH y trabaja con terminales, archivos, puertos, transferencias, edición ligera y OxideSens AI en una app local-first.
   <br>
-  App nativa Tauri · SSH puro en Rust · AI autónoma BYOK · sin cuenta para los workflows SSH principales
+  App nativa Tauri · SSH puro en Rust · OxideSens AI BYOK · sin cuenta para los workflows SSH principales
   <br>
   <strong>Zero Electron. Zero OpenSSL. Zero telemetría. Zero suscripción. BYOK-first. SSH puro en Rust.</strong>
 </p>
@@ -56,7 +56,7 @@
 
 - Gestionar en paralelo terminales SSH, SFTP, port forwards, transferencias in-terminal y shells locales
 - Seguir trabajando ante cortes de red con Grace Period reconnect
-- Pedir a la barra lateral autónoma OxideSens que inspeccione sesiones activas y ejecute acciones aprobadas mediante tu propio proveedor de IA
+- Pedir a OxideSens AI que inspeccione sesiones activas y ejecute acciones aprobadas mediante tu propio proveedor de IA
 
 ---
 
@@ -64,16 +64,16 @@
 
 | Si te importa... | OxideTerm te da... |
 |---|---|
-| Un nodo remoto, muchas herramientas | Terminal, SFTP, port forwarding, trzsz, mini IDE, monitorización y la barra lateral autónoma OxideSens siguen unidos al mismo workspace SSH |
+| Un nodo remoto, muchas herramientas | Terminal, SFTP, port forwarding, trzsz, mini IDE, monitorización y OxideSens AI siguen unidos al mismo workspace SSH |
 | Workflows SSH local-first | SSH, SFTP, forwarding, shell local y configuración funcionan sin registro; la sincronización cloud es opcional vía [plugin oficial](#plugins-oficiales) |
-| AI autónoma BYOK en vez de créditos de plataforma | OxideSens usa tu endpoint OpenAI/Ollama/DeepSeek/OpenAI-compatible con MCP, RAG y acciones aprobadas del workspace |
+| OxideSens AI BYOK en vez de créditos de plataforma | OxideSens usa tu endpoint OpenAI/Ollama/DeepSeek/OpenAI-compatible con MCP, RAG y acciones aprobadas del workspace |
 | Reconexión estable | Grace Period sondea la conexión anterior durante 30 s antes de reemplazarla, para que vim/htop/yazi sobrevivan a cortes breves |
 | App nativa en Rust puro | App nativa Tauri 2.0, russh 0.59 compilado con `ring`, sin Electron ni OpenSSL/libssh2 |
 | Seguridad de credenciales | Contraseñas y claves API quedan en el llavero del sistema, los metadatos se sellan localmente y `.oxide` usa ChaCha20-Poly1305 + Argon2id |
 
 ## Qué es / qué no es
 
-OxideTerm se centra en un **workspace AI local-first para servidores remotos**. Está pensado para usuarios que quieren mantener terminal, archivos, puertos, transferencias, edición ligera y una barra lateral AI BYOK autónoma alrededor de sus propias máquinas y nodos remotos.
+OxideTerm se centra en un **workspace AI local-first para servidores remotos**. Está pensado para usuarios que quieren mantener terminal, archivos, puertos, transferencias, edición ligera y una OxideSens AI alrededor de sus propias máquinas y nodos remotos.
 
 No pretende ser una plataforma cloud de agentes ni un proyecto centrado solo en benchmarks de renderizado de terminal. La dirección es más concreta: que el trabajo remoto se sienta como un workspace local, sin cuenta de OxideTerm.
 
@@ -83,7 +83,7 @@ No pretende ser una plataforma cloud de agentes ni un proyecto centrado solo en 
 
 <table>
 <tr>
-<td align="center"><strong>Terminal SSH + OxideSens AI</strong><br/><br/><img src="../../docs/screenshots/terminal/SSHTERMINAL.png" alt="Terminal SSH con barra lateral OxideSens AI" /></td>
+<td align="center"><strong>Terminal SSH + OxideSens AI</strong><br/><br/><img src="../../docs/screenshots/terminal/SSHTERMINAL.png" alt="Terminal SSH con OxideSens AI" /></td>
 <td align="center"><strong>Gestor de archivos SFTP</strong><br/><br/><img src="../../docs/screenshots/sftp/sftp.png" alt="Gestor de archivos SFTP de doble panel con cola de transferencias" /></td>
 </tr>
 <tr>
