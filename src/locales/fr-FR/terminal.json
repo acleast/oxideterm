@@ -297,6 +297,15 @@
       "icon_folder": "Folder",
       "icon_docker": "Docker",
       "icon_zap": "Custom"
+    },
+    "privilege_helper": {
+      "fill": "Remplir le mot de passe",
+      "filling": "Remplissage...",
+      "fill_title": "Remplir {{label}}",
+      "load_failed": "Impossible de charger l’identifiant de privilège",
+      "send_failed": "Impossible d’envoyer l’identifiant de privilège",
+      "manage": "Enregistrer l’identifiant",
+      "manage_title": "Enregistrer un identifiant privilégié pour cette connexion"
     }
   }
 }

@@ -922,6 +922,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            privilege_credentials: Vec::new(),
         }
     }
 

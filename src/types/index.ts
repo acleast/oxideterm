@@ -748,6 +748,34 @@ export interface SaveConnectionRequest {
   proxy_chain?: SaveProxyHopRequest[];
 }
 
+export type PrivilegeCredentialKind = 'sudo_password' | 'su_password' | 'custom_prompt';
+
+export interface SavedPrivilegeCredential {
+  id: string;
+  connection_id: string;
+  label: string;
+  kind: PrivilegeCredentialKind;
+  username_hint?: string | null;
+  prompt_patterns: string[];
+  keychain_id?: string | null;
+  enabled: boolean;
+  require_click_to_send: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavePrivilegeCredentialRequest {
+  connectionId: string;
+  credentialId?: string | null;
+  label: string;
+  kind: PrivilegeCredentialKind;
+  usernameHint?: string | null;
+  promptPatterns?: string[];
+  secret?: string | null;
+  enabled?: boolean;
+  requireClickToSend?: boolean;
+}
+
 export type SerialParity = 'none' | 'odd' | 'even';
 export type SerialFlowControl = 'none' | 'software' | 'hardware';
 

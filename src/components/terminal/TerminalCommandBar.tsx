@@ -9,6 +9,7 @@ import {
   FilePlay,
   Folder,
   GitBranch,
+  KeyRound,
   Pencil,
   Radio,
   Search,
@@ -53,6 +54,9 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { MAX_PANES_PER_TAB, type SplitDirection } from '@/types';
 import { BroadcastDropdown } from '@/components/layout/TabBarTerminalActions';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { api } from '@/lib/api';
+import { detectPrivilegePrompt, findPrivilegeCredentialsForPrompt } from '@/lib/privilegePromptHelper';
+import type { SavedPrivilegeCredential } from '@/types';
 
 type TerminalCommandBarProps = {
   paneId: string;
@@ -60,14 +64,30 @@ type TerminalCommandBarProps = {
   tabId: string;
   terminalType: TerminalCommandBarTerminalType;
   nodeId?: string | null;
+  connectionId?: string | null;
   isActive: boolean;
   sendInput: (input: string) => void;
+  readVisibleBuffer?: () => string;
+  sendPrivilegeInput?: (input: string) => boolean;
   focusTerminal: () => void;
   onLayoutChange?: () => void;
 };
 
 export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => {
-  const { paneId, sessionId, tabId, terminalType, nodeId, isActive, sendInput, focusTerminal, onLayoutChange } = props;
+  const {
+    paneId,
+    sessionId,
+    tabId,
+    terminalType,
+    nodeId,
+    connectionId,
+    isActive,
+    sendInput,
+    readVisibleBuffer,
+    sendPrivilegeInput,
+    focusTerminal,
+    onLayoutChange,
+  } = props;
   const { t } = useTranslation();
   const state = useTerminalCommandBarState({
     paneId,
@@ -81,14 +101,26 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
   const [highlightedSuggestion, setHighlightedSuggestion] = useState(-1);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [quickCommandsOpen, setQuickCommandsOpen] = useState(false);
+  const [privilegeCredentials, setPrivilegeCredentials] = useState<SavedPrivilegeCredential[]>([]);
+  const [privilegeBufferSnapshot, setPrivilegeBufferSnapshot] = useState('');
+  const [privilegeFillLoading, setPrivilegeFillLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const composingRef = useRef(false);
   const quickCommandSettings = useSettingsStore((s) => s.settings.terminal.commandBar);
   const hydrateQuickCommands = useQuickCommandsStore((s) => s.hydrate);
   const { confirm, ConfirmDialog } = useConfirm();
+  const openConnectionEditor = useAppStore((s) => s.openConnectionEditor);
 
   const placeholder = t('terminal.command_bar.command_placeholder');
+  const detectedPrivilegePrompt = useMemo(
+    () => detectPrivilegePrompt(privilegeBufferSnapshot),
+    [privilegeBufferSnapshot],
+  );
+  const matchedPrivilegeCredentials = useMemo(
+    () => findPrivilegeCredentialsForPrompt(privilegeBufferSnapshot, privilegeCredentials),
+    [privilegeBufferSnapshot, privilegeCredentials],
+  );
 
   const submitCommand = useCallback((commandOverride?: string) => {
     const command = commandOverride ?? state.value;
@@ -104,6 +136,91 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
       void hydrateQuickCommands();
     }
   }, [hydrateQuickCommands, quickCommandSettings.quickCommandsEnabled]);
+
+  useEffect(() => {
+    if (!isActive || !connectionId) {
+      setPrivilegeCredentials([]);
+      return;
+    }
+
+    let cancelled = false;
+    api.listPrivilegeCredentials(connectionId)
+      .then((credentials) => {
+        if (!cancelled) setPrivilegeCredentials(credentials);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('[TerminalCommandBar] Failed to load privilege credentials:', error);
+          setPrivilegeCredentials([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId, isActive]);
+
+  useEffect(() => {
+    if (!isActive || !connectionId || !readVisibleBuffer) {
+      setPrivilegeBufferSnapshot('');
+      return;
+    }
+
+    const refresh = () => {
+      try {
+        const nextSnapshot = readVisibleBuffer();
+        setPrivilegeBufferSnapshot((current) => (
+          current === nextSnapshot ? current : nextSnapshot
+        ));
+      } catch (error) {
+        console.error('[TerminalCommandBar] Failed to read terminal buffer for privilege helper:', error);
+      }
+    };
+
+    refresh();
+    const intervalId = window.setInterval(refresh, 500);
+    return () => window.clearInterval(intervalId);
+  }, [connectionId, isActive, readVisibleBuffer]);
+
+  const handlePrivilegeFill = useCallback(async (credential: SavedPrivilegeCredential) => {
+    if (!connectionId || !sendPrivilegeInput) return;
+
+    setPrivilegeFillLoading(true);
+    try {
+      const secret = await api.getPrivilegeCredentialSecret(
+        connectionId,
+        credential.id,
+      );
+      // Privilege helper secrets intentionally bypass the command draft,
+      // completion/history observers, AI context, diagnostics, and recording.
+      // The string exists only long enough to write `secret + Enter` to the
+      // active PTY; JS strings cannot be explicitly zeroized.
+      const sent = sendPrivilegeInput(`${secret}\n`);
+      if (!sent) {
+        useToastStore.getState().addToast({
+          title: t('terminal.privilege_helper.send_failed'),
+          variant: 'error',
+        });
+      } else {
+        setPrivilegeBufferSnapshot('');
+        focusTerminal();
+      }
+    } catch (error) {
+      console.error('[TerminalCommandBar] Failed to fill privilege prompt:', error);
+      useToastStore.getState().addToast({
+        title: t('terminal.privilege_helper.load_failed'),
+        description: error instanceof Error ? error.message : String(error),
+        variant: 'error',
+      });
+    } finally {
+      setPrivilegeFillLoading(false);
+    }
+  }, [connectionId, focusTerminal, sendPrivilegeInput, t]);
+
+  const handlePrivilegeManage = useCallback(() => {
+    if (!connectionId) return;
+    openConnectionEditor(connectionId);
+    focusTerminal();
+  }, [connectionId, focusTerminal, openConnectionEditor]);
 
   const runCommand = useCallback(async (command: string) => {
     const risk = classifyCommandRisk(command);
@@ -316,6 +433,11 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
           broadcastTargetCount={state.chips.broadcastTargetCount}
           isRecording={state.chips.isRecording}
           gitBranch={state.chips.gitBranch}
+          detectedPrivilegePrompt={!!detectedPrivilegePrompt}
+          matchedPrivilegeCredentials={matchedPrivilegeCredentials.map((match) => match.credential)}
+          privilegeFillLoading={privilegeFillLoading}
+          onPrivilegeFill={handlePrivilegeFill}
+          onPrivilegeManage={handlePrivilegeManage}
         />
         <div className="flex flex-shrink-0 items-center gap-1">
           <TerminalCommandBarActions
@@ -432,6 +554,11 @@ type ChipsProps = {
   broadcastTargetCount: number;
   isRecording: boolean;
   gitBranch: string | null;
+  detectedPrivilegePrompt: boolean;
+  matchedPrivilegeCredentials: SavedPrivilegeCredential[];
+  privilegeFillLoading: boolean;
+  onPrivilegeFill: (credential: SavedPrivilegeCredential) => void;
+  onPrivilegeManage: () => void;
 };
 
 const TerminalCommandBarChips: React.FC<ChipsProps> = ({
@@ -441,6 +568,11 @@ const TerminalCommandBarChips: React.FC<ChipsProps> = ({
   broadcastTargetCount,
   isRecording,
   gitBranch,
+  detectedPrivilegePrompt,
+  matchedPrivilegeCredentials,
+  privilegeFillLoading,
+  onPrivilegeFill,
+  onPrivilegeManage,
 }) => {
   const { t } = useTranslation();
   return (
@@ -458,6 +590,46 @@ const TerminalCommandBarChips: React.FC<ChipsProps> = ({
           <Radio className="h-3 w-3" />
           {broadcastTargetCount > 0 ? broadcastTargetCount : t('terminal.command_bar.all_targets')}
         </span>
+      )}
+      {matchedPrivilegeCredentials.map((credential) => (
+        <button
+          key={credential.id}
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onPrivilegeFill(credential);
+          }}
+          disabled={privilegeFillLoading}
+          className={cn(
+            'inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[11px] text-amber-200',
+            'hover:border-amber-300/50 hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-60',
+          )}
+          title={t('terminal.privilege_helper.fill_title', { label: credential.label })}
+        >
+          <KeyRound className="h-3 w-3" />
+          {privilegeFillLoading
+            ? t('terminal.privilege_helper.filling')
+            : t('terminal.privilege_helper.fill')}
+        </button>
+      ))}
+      {detectedPrivilegePrompt && matchedPrivilegeCredentials.length === 0 && (
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onPrivilegeManage();
+          }}
+          className={cn(
+            'inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[11px] text-amber-200',
+            'hover:border-amber-300/50 hover:bg-amber-400/15',
+          )}
+          title={t('terminal.privilege_helper.manage_title')}
+        >
+          <KeyRound className="h-3 w-3" />
+          {t('terminal.privilege_helper.manage')}
+        </button>
       )}
       {isRecording && (
         <span className="inline-flex items-center gap-1 rounded-md border border-red-500/30 bg-red-500/10 px-1.5 py-0.5 text-[11px] text-red-300">

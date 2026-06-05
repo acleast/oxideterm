@@ -65,6 +65,34 @@ pub enum SavedAuth {
     },
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivilegeCredentialKind {
+    SudoPassword,
+    SuPassword,
+    CustomPrompt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SavedPrivilegeCredential {
+    pub id: String,
+    pub connection_id: String,
+    pub label: String,
+    pub kind: PrivilegeCredentialKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keychain_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub require_click_to_send: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Connection options
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConnectionOptions {
@@ -149,6 +177,10 @@ pub struct SavedConnection {
     /// Target server info is always in host/port/username fields
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<ProxyHopConfig>,
+
+    /// Separately scoped sudo/su helper metadata. Secret values live only in keychain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub privilege_credentials: Vec<SavedPrivilegeCredential>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -269,6 +301,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_port() -> u16 {
     22
 }
@@ -300,6 +336,7 @@ impl SavedConnection {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            privilege_credentials: Vec::new(),
         }
     }
 
@@ -331,6 +368,7 @@ impl SavedConnection {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            privilege_credentials: Vec::new(),
         }
     }
 

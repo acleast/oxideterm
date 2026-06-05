@@ -35,6 +35,7 @@ vi.mock('lucide-react', () => ({
   FilePlay: () => null,
   Folder: () => null,
   GitBranch: () => null,
+  KeyRound: () => null,
   Monitor: () => null,
   Pencil: () => null,
   Play: () => null,
@@ -134,6 +135,20 @@ vi.mock('@/hooks/useToast', () => ({
   },
 }));
 
+const apiMock = vi.hoisted(() => ({
+  listPrivilegeCredentials: vi.fn(),
+  getPrivilegeCredentialSecret: vi.fn(),
+}));
+const appStoreMock = vi.hoisted(() => ({
+  openConnectionEditor: vi.fn(),
+  splitPane: vi.fn(),
+  getPaneCount: vi.fn(() => 1),
+}));
+
+vi.mock('@/lib/api', () => ({
+  api: apiMock,
+}));
+
 vi.mock('@/components/layout/TabBarTerminalActions', () => ({
   BroadcastDropdown: () => null,
 }));
@@ -143,12 +158,16 @@ vi.mock('@/lib/terminalRegistry', () => ({
 }));
 
 vi.mock('@/store/appStore', () => ({
-  useAppStore: () => ({
+  useAppStore: (selector?: (state: unknown) => unknown) => {
+    const state = {
     sessions: new Map(),
     tabs: [{ id: 'tab-1' }],
-    splitPane: vi.fn(),
-    getPaneCount: vi.fn(() => 1),
-  }),
+      splitPane: appStoreMock.splitPane,
+      getPaneCount: appStoreMock.getPaneCount,
+      openConnectionEditor: appStoreMock.openConnectionEditor,
+    };
+    return selector ? selector(state) : state;
+  },
 }));
 
 vi.mock('@/store/broadcastStore', () => ({
@@ -210,6 +229,11 @@ describe('TerminalCommandBar', () => {
     quickCommandsMock.upsertCategory.mockReturnValue({ id: 'new-group', name: 'Ops', icon: 'zap' });
     quickCommandsMock.deleteCategory.mockReturnValue(true);
     quickCommandsMock.hydrate.mockResolvedValue(undefined);
+    apiMock.listPrivilegeCredentials.mockReset();
+    apiMock.listPrivilegeCredentials.mockResolvedValue([]);
+    apiMock.getPrivilegeCredentialSecret.mockReset();
+    apiMock.getPrivilegeCredentialSecret.mockResolvedValue('sudo-secret');
+    appStoreMock.openConnectionEditor.mockReset();
   });
 
   it('keeps the popup closed while typing until the user explicitly opens suggestions', () => {
@@ -499,5 +523,120 @@ describe('TerminalCommandBar', () => {
       name: 'Ops',
       icon: 'zap',
     });
+  });
+
+  it('fills a detected privilege prompt through the secret-only input path', async () => {
+    apiMock.listPrivilegeCredentials.mockResolvedValue([{
+      id: 'sudo-credential',
+      connection_id: 'conn-1',
+      label: 'sudo',
+      kind: 'sudo_password',
+      username_hint: 'tester',
+      prompt_patterns: [],
+      keychain_id: 'privilege-key',
+      enabled: true,
+      require_click_to_send: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }]);
+    const sendInput = vi.fn();
+    const sendPrivilegeInput = vi.fn(() => true);
+
+    render(
+      <TerminalCommandBar
+        paneId="pane-1"
+        sessionId="session-1"
+        tabId="tab-1"
+        terminalType="terminal"
+        connectionId="conn-1"
+        isActive
+        sendInput={sendInput}
+        readVisibleBuffer={() => '[sudo] password for tester:'}
+        sendPrivilegeInput={sendPrivilegeInput}
+        focusTerminal={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText('terminal.privilege_helper.fill'));
+
+    await waitFor(() => {
+      expect(apiMock.getPrivilegeCredentialSecret).toHaveBeenCalledWith('conn-1', 'sudo-credential');
+      expect(sendPrivilegeInput).toHaveBeenCalledWith('sudo-secret\n');
+    });
+    expect(sendInput).not.toHaveBeenCalled();
+  });
+
+  it('offers to manage privilege credentials when a prompt has no matching credential', async () => {
+    const focusTerminal = vi.fn();
+
+    render(
+      <TerminalCommandBar
+        paneId="pane-1"
+        sessionId="session-1"
+        tabId="tab-1"
+        terminalType="terminal"
+        connectionId="conn-1"
+        isActive
+        sendInput={vi.fn()}
+        readVisibleBuffer={() => '[sudo] password for tester:'}
+        sendPrivilegeInput={vi.fn()}
+        focusTerminal={focusTerminal}
+      />,
+    );
+
+    fireEvent.click(await screen.findByText('terminal.privilege_helper.manage'));
+
+    expect(appStoreMock.openConnectionEditor).toHaveBeenCalledWith('conn-1');
+    expect(focusTerminal).toHaveBeenCalled();
+    expect(apiMock.getPrivilegeCredentialSecret).not.toHaveBeenCalled();
+  });
+
+  it('renders one fill chip per matching privilege credential', async () => {
+    const now = new Date().toISOString();
+    apiMock.listPrivilegeCredentials.mockResolvedValue([
+      {
+        id: 'sudo-credential',
+        connection_id: 'conn-1',
+        label: 'sudo',
+        kind: 'sudo_password',
+        username_hint: 'tester',
+        prompt_patterns: [],
+        keychain_id: 'privilege-key',
+        enabled: true,
+        require_click_to_send: true,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 'custom-credential',
+        connection_id: 'conn-1',
+        label: 'custom',
+        kind: 'custom_prompt',
+        username_hint: null,
+        prompt_patterns: ['password for tester'],
+        keychain_id: 'privilege-key-2',
+        enabled: true,
+        require_click_to_send: true,
+        created_at: now,
+        updated_at: now,
+      },
+    ]);
+
+    render(
+      <TerminalCommandBar
+        paneId="pane-1"
+        sessionId="session-1"
+        tabId="tab-1"
+        terminalType="terminal"
+        connectionId="conn-1"
+        isActive
+        sendInput={vi.fn()}
+        readVisibleBuffer={() => '[sudo] password for tester:'}
+        sendPrivilegeInput={vi.fn(() => true)}
+        focusTerminal={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findAllByText('terminal.privilege_helper.fill')).toHaveLength(2);
   });
 });

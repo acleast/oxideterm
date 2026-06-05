@@ -95,6 +95,8 @@ import {
   ManagedSshKeyDeleteResult,
   SaveSerialProfileRequest,
   SerialProfile,
+  SavedPrivilegeCredential,
+  SavePrivilegeCredentialRequest,
 } from '../types';
 import type { PluginManifest, UrlInstallResult } from '../types/plugin';
 
@@ -706,6 +708,49 @@ export const api = {
   getConnectionPassword: async (id: string): Promise<string> => {
     if (USE_MOCK) return 'mock-password';
     return invoke('get_connection_password', { id });
+  },
+
+  listPrivilegeCredentials: async (connectionId: string): Promise<SavedPrivilegeCredential[]> => {
+    if (USE_MOCK) return [];
+    return invoke('list_privilege_credentials', { connectionId });
+  },
+
+  savePrivilegeCredential: async (
+    request: SavePrivilegeCredentialRequest,
+  ): Promise<SavedPrivilegeCredential> => {
+    if (USE_MOCK) {
+      const now = new Date().toISOString();
+      return {
+        id: request.credentialId ?? 'mock-privilege-credential',
+        connection_id: request.connectionId,
+        label: request.label,
+        kind: request.kind,
+        username_hint: request.usernameHint ?? null,
+        prompt_patterns: request.promptPatterns ?? [],
+        keychain_id: request.secret ? 'mock-privilege-keychain' : null,
+        enabled: request.enabled ?? true,
+        require_click_to_send: request.requireClickToSend ?? true,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+    return invoke('save_privilege_credential', { request });
+  },
+
+  deletePrivilegeCredential: async (
+    connectionId: string,
+    credentialId: string,
+  ): Promise<boolean> => {
+    if (USE_MOCK) return true;
+    return invoke('delete_privilege_credential', { connectionId, credentialId });
+  },
+
+  getPrivilegeCredentialSecret: async (
+    connectionId: string,
+    credentialId: string,
+  ): Promise<string> => {
+    if (USE_MOCK) return 'mock-privilege-secret';
+    return invoke('get_privilege_credential_secret', { connectionId, credentialId });
   },
 
   createManagedSshKeyFromText: async (

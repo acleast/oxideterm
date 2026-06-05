@@ -297,6 +297,15 @@
       "icon_folder": "Folder",
       "icon_docker": "Docker",
       "icon_zap": "Custom"
+    },
+    "privilege_helper": {
+      "fill": "Inserisci password",
+      "filling": "Inserimento...",
+      "fill_title": "Inserisci {{label}}",
+      "load_failed": "Impossibile caricare la credenziale privilegiata",
+      "send_failed": "Impossibile inviare la credenziale privilegiata",
+      "manage": "Salva credenziale",
+      "manage_title": "Salva una credenziale privilegiata per questa connessione"
     }
   }
 }

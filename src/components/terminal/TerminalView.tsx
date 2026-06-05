@@ -756,6 +756,17 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     }
   }, [adaptiveRenderer, feedInput, nodeId, sendEncodedTerminalInput, sessionId]);
 
+  const sendPrivilegeInput = useCallback((input: string): boolean => {
+    if (inputLockedRef.current || controllerRuntimePendingRef.current || !transportRef.current) {
+      return false;
+    }
+    // Privilege-helper input is a user-confirmed secret fill. It must bypass
+    // the normal command/input pipeline so it is not recorded, suggested,
+    // exposed to AI context, or transformed by plugins.
+    sendEncodedTerminalInput(input);
+    return true;
+  }, [sendEncodedTerminalInput]);
+
   const focusTerminal = useCallback((mode: 'soft' | 'strong' = 'soft') => {
     const term = terminalRef.current;
     if (!term || searchOpen || aiPanelOpen || scrollbackOpen || !isTerminalContainerRenderable(containerRef.current)) {
@@ -3342,8 +3353,11 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
            tabId={effectiveTabId}
            terminalType="terminal"
            nodeId={nodeId}
+           connectionId={session?.connectionId ?? null}
            isActive={isActive}
            sendInput={sendCommandBarInput}
+           readVisibleBuffer={getVisibleBuffer}
+           sendPrivilegeInput={sendPrivilegeInput}
            focusTerminal={() => { focusTerminal('strong'); }}
            onLayoutChange={handleCommandBarLayoutChange}
          />

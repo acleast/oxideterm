@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Loader2, Plus, Save as SaveIcon, Trash2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -30,7 +30,12 @@ import {
 } from '../ui/tabs';
 import { open } from '@tauri-apps/plugin-dialog';
 import { api } from '../../lib/api';
-import type { ConnectionInfo, SaveConnectionRequest } from '../../types';
+import type {
+  ConnectionInfo,
+  PrivilegeCredentialKind,
+  SaveConnectionRequest,
+  SavedPrivilegeCredential,
+} from '../../types';
 import { ManagedSshKeySelector } from './ManagedSshKeySelector';
 
 type EditableAuthType = 'password' | 'key' | 'managed_key' | 'agent' | 'certificate';
@@ -46,6 +51,26 @@ type EditConnectionPropertiesModalProps = {
   connection: ConnectionInfo | null;
   duplicateDraft?: DuplicateConnectionDraft | null;
   onSaved?: () => void | Promise<void>;
+};
+
+type PrivilegeCredentialDraft = {
+  credentialId: string | null;
+  label: string;
+  kind: PrivilegeCredentialKind;
+  usernameHint: string;
+  promptPatterns: string;
+  secret: string;
+  enabled: boolean;
+};
+
+const EMPTY_PRIVILEGE_DRAFT: PrivilegeCredentialDraft = {
+  credentialId: null,
+  label: '',
+  kind: 'sudo_password',
+  usernameHint: '',
+  promptPatterns: '',
+  secret: '',
+  enabled: true,
 };
 
 export const EditConnectionPropertiesModal = ({
@@ -79,6 +104,10 @@ export const EditConnectionPropertiesModal = ({
   const [groups, setGroups] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [privilegeCredentials, setPrivilegeCredentials] = useState<SavedPrivilegeCredential[]>([]);
+  const [privilegeDraft, setPrivilegeDraft] = useState<PrivilegeCredentialDraft>(EMPTY_PRIVILEGE_DRAFT);
+  const [privilegeSaving, setPrivilegeSaving] = useState(false);
+  const [privilegeError, setPrivilegeError] = useState('');
   // Capture connection snapshot at open time so handleSave never reads a stale prop
   const connectionRef = useRef<ConnectionInfo | null>(null);
   // Duplicate drafts carry secrets/proxy hops that are not present in ConnectionInfo.
@@ -106,7 +135,18 @@ export const EditConnectionPropertiesModal = ({
       setGroup(activeConnection.group || 'Ungrouped');
       setColor(activeConnection.color || '');
       setPostConnectCommand(activeConnection.post_connect_command || '');
+      setPrivilegeCredentials([]);
+      setPrivilegeDraft(EMPTY_PRIVILEGE_DRAFT);
+      setPrivilegeError('');
       api.getGroups().then(setGroups).catch(() => setGroups([]));
+      if (!duplicateDraft) {
+        api.listPrivilegeCredentials(activeConnection.id)
+          .then(setPrivilegeCredentials)
+          .catch((e) => {
+            console.error('Failed to load privilege credentials:', e);
+            setPrivilegeCredentials([]);
+          });
+      }
     }
   }, [activeConnection, duplicateDraft, isOpen]);
 
@@ -179,6 +219,83 @@ export const EditConnectionPropertiesModal = ({
       || value === 'certificate'
     ) {
       setAuthType(value);
+    }
+  };
+
+  const resetPrivilegeDraft = () => {
+    setPrivilegeDraft(EMPTY_PRIVILEGE_DRAFT);
+    setPrivilegeError('');
+  };
+
+  const startEditPrivilegeCredential = (credential: SavedPrivilegeCredential) => {
+    setPrivilegeDraft({
+      credentialId: credential.id,
+      label: credential.label,
+      kind: credential.kind,
+      usernameHint: credential.username_hint ?? '',
+      promptPatterns: credential.prompt_patterns.join('\n'),
+      secret: '',
+      enabled: credential.enabled,
+    });
+    setPrivilegeError('');
+  };
+
+  const handleSavePrivilegeCredential = async () => {
+    const conn = connectionRef.current;
+    if (!conn || isDuplicateMode) return;
+    const label = privilegeDraft.label.trim();
+    if (!label) return;
+
+    setPrivilegeSaving(true);
+    setPrivilegeError('');
+    try {
+      // The secret draft is intentionally sent only through this explicit save
+      // action; Rust stores it in the privilege keychain namespace and persists
+      // only non-secret metadata on the connection.
+      const saved = await api.savePrivilegeCredential({
+        connectionId: conn.id,
+        credentialId: privilegeDraft.credentialId,
+        label,
+        kind: privilegeDraft.kind,
+        usernameHint: privilegeDraft.usernameHint.trim() || null,
+        promptPatterns: privilegeDraft.promptPatterns
+          .split(/\r?\n/)
+          .map((pattern) => pattern.trim())
+          .filter(Boolean),
+        secret: privilegeDraft.secret || null,
+        enabled: privilegeDraft.enabled,
+        requireClickToSend: true,
+      });
+      setPrivilegeCredentials((current) => {
+        const index = current.findIndex((candidate) => candidate.id === saved.id);
+        if (index === -1) return [...current, saved];
+        const next = [...current];
+        next[index] = saved;
+        return next;
+      });
+      resetPrivilegeDraft();
+    } catch (e) {
+      console.error('Failed to save privilege credential:', e);
+      setPrivilegeError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPrivilegeSaving(false);
+    }
+  };
+
+  const handleDeletePrivilegeCredential = async (credential: SavedPrivilegeCredential) => {
+    const conn = connectionRef.current;
+    if (!conn || isDuplicateMode) return;
+
+    setPrivilegeError('');
+    try {
+      await api.deletePrivilegeCredential(conn.id, credential.id);
+      setPrivilegeCredentials((current) => current.filter((candidate) => candidate.id !== credential.id));
+      if (privilegeDraft.credentialId === credential.id) {
+        resetPrivilegeDraft();
+      }
+    } catch (e) {
+      console.error('Failed to delete privilege credential:', e);
+      setPrivilegeError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -445,6 +562,180 @@ export const EditConnectionPropertiesModal = ({
             <p className="text-xs text-theme-text-muted">
               {t('modals.new_connection.post_connect_command_hint')}
             </p>
+          </div>
+
+          <div className="grid gap-3 rounded-lg border border-theme-border/60 bg-theme-bg-panel/45 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <Label className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-theme-text-muted" />
+                  {t('sessionManager.privilege_credentials.title')}
+                </Label>
+                <p className="mt-1 text-xs text-theme-text-muted">
+                  {isDuplicateMode
+                    ? t('sessionManager.privilege_credentials.duplicate_hint')
+                    : t('sessionManager.privilege_credentials.description')}
+                </p>
+              </div>
+              {!isDuplicateMode && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={resetPrivilegeDraft}
+                  className="gap-1"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  {t('sessionManager.privilege_credentials.new')}
+                </Button>
+              )}
+            </div>
+
+            {!isDuplicateMode && (
+              <>
+                <div className="space-y-2">
+                  {privilegeCredentials.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-theme-border/50 px-3 py-2 text-xs text-theme-text-muted">
+                      {t('sessionManager.privilege_credentials.empty')}
+                    </p>
+                  ) : (
+                    privilegeCredentials.map((credential) => (
+                      <div key={credential.id} className="flex items-center gap-2 rounded-md border border-theme-border/50 bg-theme-bg/45 px-2 py-1.5">
+                        <KeyRound className="h-4 w-4 flex-shrink-0 text-amber-300" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm text-theme-text">{credential.label}</p>
+                          <p className="truncate text-xs text-theme-text-muted">
+                            {t(`sessionManager.privilege_credentials.kind.${credential.kind}`)}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => startEditPrivilegeCredential(credential)}
+                        >
+                          {t('sessionManager.privilege_credentials.edit')}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          radius="sm"
+                          onClick={() => void handleDeletePrivilegeCredential(credential)}
+                          aria-label={t('sessionManager.privilege_credentials.delete')}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="grid gap-3 rounded-md border border-theme-border/50 bg-theme-bg/50 p-3">
+                  <div className="grid gap-2">
+                    <Label htmlFor="privilege-label">{t('sessionManager.privilege_credentials.label')}</Label>
+                    <Input
+                      id="privilege-label"
+                      value={privilegeDraft.label}
+                      onChange={(event) => setPrivilegeDraft((draft) => ({ ...draft, label: event.target.value }))}
+                      placeholder={t('sessionManager.privilege_credentials.label_placeholder')}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-2">
+                      <Label>{t('sessionManager.privilege_credentials.kind_label')}</Label>
+                      <Select
+                        value={privilegeDraft.kind}
+                        onValueChange={(value) => setPrivilegeDraft((draft) => ({
+                          ...draft,
+                          kind: value as PrivilegeCredentialKind,
+                        }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="sudo_password">{t('sessionManager.privilege_credentials.kind.sudo_password')}</SelectItem>
+                          <SelectItem value="su_password">{t('sessionManager.privilege_credentials.kind.su_password')}</SelectItem>
+                          <SelectItem value="custom_prompt">{t('sessionManager.privilege_credentials.kind.custom_prompt')}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label htmlFor="privilege-username">{t('sessionManager.privilege_credentials.username_hint')}</Label>
+                      <Input
+                        id="privilege-username"
+                        value={privilegeDraft.usernameHint}
+                        onChange={(event) => setPrivilegeDraft((draft) => ({ ...draft, usernameHint: event.target.value }))}
+                        placeholder={username}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="privilege-secret">{t('sessionManager.privilege_credentials.secret')}</Label>
+                    <Input
+                      id="privilege-secret"
+                      type="password"
+                      value={privilegeDraft.secret}
+                      onChange={(event) => setPrivilegeDraft((draft) => ({ ...draft, secret: event.target.value }))}
+                      placeholder={privilegeDraft.credentialId
+                        ? t('sessionManager.privilege_credentials.secret_keep_placeholder')
+                        : t('sessionManager.privilege_credentials.secret_placeholder')}
+                    />
+                  </div>
+
+                  <div className="grid gap-2">
+                    <Label htmlFor="privilege-patterns">{t('sessionManager.privilege_credentials.prompt_patterns')}</Label>
+                    <textarea
+                      id="privilege-patterns"
+                      value={privilegeDraft.promptPatterns}
+                      onChange={(event) => setPrivilegeDraft((draft) => ({ ...draft, promptPatterns: event.target.value }))}
+                      placeholder={t('sessionManager.privilege_credentials.prompt_patterns_placeholder')}
+                      className="min-h-20 resize-y rounded-md border border-theme-border bg-theme-bg px-3 py-2 text-sm text-theme-text outline-none placeholder:text-theme-text-muted focus:border-theme-accent/60"
+                    />
+                    <p className="text-xs text-theme-text-muted">
+                      {t('sessionManager.privilege_credentials.prompt_patterns_hint')}
+                    </p>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-sm text-theme-text">
+                    <input
+                      type="checkbox"
+                      checked={privilegeDraft.enabled}
+                      onChange={(event) => setPrivilegeDraft((draft) => ({ ...draft, enabled: event.target.checked }))}
+                      className="h-4 w-4 rounded border-theme-border bg-theme-bg"
+                    />
+                    {t('sessionManager.privilege_credentials.enabled')}
+                  </label>
+
+                  {privilegeError && (
+                    <p className="text-xs text-theme-error">{privilegeError}</p>
+                  )}
+
+                  <div className="flex justify-end gap-2">
+                    {privilegeDraft.credentialId && (
+                      <Button type="button" variant="ghost" size="sm" onClick={resetPrivilegeDraft}>
+                        {t('sessionManager.privilege_credentials.cancel_edit')}
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handleSavePrivilegeCredential()}
+                      disabled={privilegeSaving || !privilegeDraft.label.trim()}
+                      className="gap-1"
+                    >
+                      <SaveIcon className="h-3.5 w-3.5" />
+                      {privilegeSaving
+                        ? t('sessionManager.privilege_credentials.saving')
+                        : t('sessionManager.privilege_credentials.save')}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Color */}

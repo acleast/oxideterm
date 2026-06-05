@@ -898,6 +898,7 @@ fn build_saved_connection(
         color: imported.color,
         tags: imported.tags,
         proxy_chain: imported.proxy_chain,
+        privilege_credentials: Vec::new(),
     }
 }
 
@@ -931,6 +932,10 @@ fn merge_saved_connection(
         } else {
             existing.proxy_chain.clone()
         },
+        // Encrypted imports update connection metadata, but privilege helper
+        // secrets stay locally scoped unless an explicit export/import policy is
+        // added for them.
+        privilege_credentials: existing.privilege_credentials.clone(),
     }
 }
 
@@ -2333,6 +2338,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            privilege_credentials: Vec::new(),
         }
     }
 
@@ -2465,6 +2471,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            privilege_credentials: Vec::new(),
         };
 
         let stale = stale_keychain_ids(

@@ -10,7 +10,11 @@ vi.mock('react-i18next', () => ({
 vi.mock('lucide-react', () => ({
   Eye: () => <span>eye</span>,
   EyeOff: () => <span>eye-off</span>,
+  KeyRound: () => <span>key-round</span>,
   Loader2: () => <span>loading</span>,
+  Plus: () => <span>plus</span>,
+  Save: () => <span>save</span>,
+  Trash2: () => <span>trash</span>,
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -56,6 +60,9 @@ vi.mock('@/components/ui/tabs', () => ({
 const api = vi.hoisted(() => ({
   getGroups: vi.fn().mockResolvedValue([]),
   getConnectionPassword: vi.fn().mockResolvedValue('saved-secret'),
+  listPrivilegeCredentials: vi.fn().mockResolvedValue([]),
+  savePrivilegeCredential: vi.fn(),
+  deletePrivilegeCredential: vi.fn(),
   saveConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -69,6 +76,10 @@ describe('EditConnectionPropertiesModal', () => {
     api.getGroups.mockResolvedValue([]);
     api.getConnectionPassword.mockReset();
     api.getConnectionPassword.mockResolvedValue('saved-secret');
+    api.listPrivilegeCredentials.mockReset();
+    api.listPrivilegeCredentials.mockResolvedValue([]);
+    api.savePrivilegeCredential.mockReset();
+    api.deletePrivilegeCredential.mockReset();
     api.saveConnection.mockReset();
     api.saveConnection.mockResolvedValue(undefined);
   });

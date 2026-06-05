@@ -297,6 +297,15 @@
       "icon_folder": "Folder",
       "icon_docker": "Docker",
       "icon_zap": "Custom"
+    },
+    "privilege_helper": {
+      "fill": "Passwort einfügen",
+      "filling": "Füge ein...",
+      "fill_title": "{{label}} einfügen",
+      "load_failed": "Privileg-Anmeldedaten konnten nicht geladen werden",
+      "send_failed": "Privileg-Anmeldedaten konnten nicht gesendet werden",
+      "manage": "Zugang speichern",
+      "manage_title": "Privileg-Zugang für diese Verbindung speichern"
     }
   }
 }

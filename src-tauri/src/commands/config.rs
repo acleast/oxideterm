@@ -11,7 +11,9 @@ use crate::config::connection_import::{
     ConnectionImportSource, ImportedConnectionAuthType, ImportedConnectionDraft,
     ImportedProxyHopDraft,
 };
-use crate::config::types::{ManagedSshKey, ManagedSshKeyOrigin};
+use crate::config::types::{
+    ManagedSshKey, ManagedSshKeyOrigin, PrivilegeCredentialKind, SavedPrivilegeCredential,
+};
 use crate::config::types::{SerialFlowControl, SerialParity, SerialProfile};
 use crate::config::{
     AiProviderVault, CONFIG_ENCRYPTION_KEY_LEN, ConfigFile, ConfigStorage, ConfigStorageFormat,
@@ -22,15 +24,18 @@ use crate::config::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
+use chrono::Utc;
 use parking_lot::RwLock;
 use rand::RngCore;
 use russh::keys::{PrivateKey, PublicKeyBase64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, State};
+use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use super::forwarding::ForwardingRegistry;
@@ -39,6 +44,7 @@ use super::forwarding::ForwardingRegistry;
 const AI_KEYCHAIN_SERVICE: &str = "com.oxideterm.ai";
 const CONFIG_KEYCHAIN_SERVICE: &str = "com.oxideterm.config";
 const MANAGED_SSH_KEYCHAIN_SERVICE: &str = "com.oxideterm.managed-ssh-keys";
+const PRIVILEGE_CREDENTIAL_KEYCHAIN_SERVICE: &str = "com.oxideterm.privilege-credentials";
 const CONFIG_KEYCHAIN_ID: &str = "local-config-master-key";
 const MANAGED_SSH_KEY_SECRET_DIR: &str = "managed-ssh-key-secrets";
 const MANAGED_SSH_KEY_SECRET_FILE_FORMAT: &str = "oxideterm.managed-ssh-key-secret.encrypted";
@@ -279,6 +285,7 @@ pub struct ConfigState {
     config_keychain: Keychain,
     keychain: Keychain,
     managed_keychain: Keychain,
+    privilege_keychain: Keychain,
     pub(crate) ai_keychain: Keychain,
     /// In-memory cache for AI provider API keys.
     /// Populated after the first successful Touch ID authentication so
@@ -302,6 +309,7 @@ impl ConfigState {
             ),
             keychain: Keychain::new(),
             managed_keychain: Keychain::with_service(MANAGED_SSH_KEYCHAIN_SERVICE),
+            privilege_keychain: Keychain::with_service(PRIVILEGE_CREDENTIAL_KEYCHAIN_SERVICE),
             ai_keychain: Keychain::with_biometrics(AI_KEYCHAIN_SERVICE),
             api_key_cache: RwLock::new(HashMap::new()),
             ai_providers: RwLock::new((Vec::new(), None)),
@@ -1271,6 +1279,33 @@ pub(crate) fn collect_connection_keychain_ids(connection: &SavedConnection) -> V
     ids
 }
 
+fn collect_privilege_keychain_ids(connection: &SavedConnection) -> Vec<String> {
+    connection
+        .privilege_credentials
+        .iter()
+        .filter_map(|credential| credential.keychain_id.clone())
+        .collect()
+}
+
+fn privilege_keychain_id(connection_id: &str, credential_id: &str) -> String {
+    format!("privilege:v1:{connection_id}:{credential_id}")
+}
+
+fn default_privilege_prompt_patterns(kind: PrivilegeCredentialKind) -> Vec<String> {
+    match kind {
+        PrivilegeCredentialKind::SudoPassword => {
+            vec![
+                "[sudo] password for".to_string(),
+                "sudo password".to_string(),
+            ]
+        }
+        PrivilegeCredentialKind::SuPassword => {
+            vec!["Password:".to_string(), "su: Password:".to_string()]
+        }
+        PrivilegeCredentialKind::CustomPrompt => Vec::new(),
+    }
+}
+
 impl From<&SavedConnection> for ConnectionInfo {
     fn from(conn: &SavedConnection) -> Self {
         let auth = auth_to_info(&conn.auth);
@@ -1703,6 +1738,9 @@ fn build_saved_connection_from_sync_payload(
         color: payload.color.clone(),
         tags: payload.tags.clone(),
         proxy_chain,
+        privilege_credentials: existing
+            .map(|value| value.privilege_credentials.clone())
+            .unwrap_or_default(),
     })
 }
 
@@ -2795,6 +2833,7 @@ pub async fn save_connection(
                 color: request.color,
                 tags: request.tags,
                 proxy_chain,
+                privilege_credentials: Vec::new(),
             };
 
             if let Some(ref group) = group {
@@ -2882,6 +2921,26 @@ mod tests {
                 keychain_id: Some("kc-1".to_string())
             }
         );
+    }
+
+    #[test]
+    fn save_privilege_credential_request_debug_redacts_secret() {
+        let request = SavePrivilegeCredentialRequest {
+            connection_id: "conn-1".to_string(),
+            credential_id: Some("cred-1".to_string()),
+            label: "sudo".to_string(),
+            kind: PrivilegeCredentialKind::SudoPassword,
+            username_hint: None,
+            prompt_patterns: Vec::new(),
+            secret: Some(Zeroizing::new("sudo-secret".to_string())),
+            enabled: true,
+            require_click_to_send: true,
+        };
+
+        let debug = format!("{request:?}");
+
+        assert!(debug.contains("[redacted secret]"));
+        assert!(!debug.contains("sudo-secret"));
     }
 
     #[test]
@@ -3068,6 +3127,7 @@ mod tests {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            privilege_credentials: Vec::new(),
         };
 
         let ids = collect_connection_keychain_ids(&connection);
@@ -3217,6 +3277,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            privilege_credentials: Vec::new(),
         });
 
         let usage = managed_key_usage_from_config(&config, "managed-key-1");
@@ -3341,6 +3402,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            privilege_credentials: Vec::new(),
         };
 
         let ids = collect_connection_keychain_ids(&connection);
@@ -3400,6 +3462,7 @@ mod tests {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            privilege_credentials: Vec::new(),
         });
 
         let snapshot = SavedConnectionsSyncSnapshot {
@@ -3497,6 +3560,7 @@ mod tests {
                     agent_forwarding: false,
                 },
             ],
+            privilege_credentials: Vec::new(),
         });
 
         let snapshot = SavedConnectionsSyncSnapshot {
@@ -3755,6 +3819,9 @@ pub async fn delete_connection(
         for keychain_id in collect_connection_keychain_ids(&connection) {
             let _ = state.keychain.delete(&keychain_id);
         }
+        for keychain_id in collect_privilege_keychain_ids(&connection) {
+            let _ = state.privilege_keychain.delete(&keychain_id);
+        }
     } // config lock dropped here
 
     forwarding_registry.delete_owned_forwards(&id).await?;
@@ -3789,6 +3856,9 @@ pub async fn delete_connections(
             if let Some(connection) = config.remove_connection(&id) {
                 for keychain_id in collect_connection_keychain_ids(&connection) {
                     let _ = state.keychain.delete(&keychain_id);
+                }
+                for keychain_id in collect_privilege_keychain_ids(&connection) {
+                    let _ = state.privilege_keychain.delete(&keychain_id);
                 }
                 removed.push(connection.id);
             }
@@ -3867,6 +3937,222 @@ pub async fn mark_connection_used(
     }
     state.save().await?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePrivilegeCredentialRequest {
+    pub connection_id: String,
+    pub credential_id: Option<String>,
+    pub label: String,
+    pub kind: PrivilegeCredentialKind,
+    #[serde(default)]
+    pub username_hint: Option<String>,
+    #[serde(default)]
+    pub prompt_patterns: Vec<String>,
+    #[serde(default)]
+    pub secret: Option<Zeroizing<String>>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub require_click_to_send: bool,
+}
+
+impl fmt::Debug for SavePrivilegeCredentialRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // IPC requests can be logged while diagnosing command failures. Keep
+        // metadata visible but never expose the privilege secret value.
+        formatter
+            .debug_struct("SavePrivilegeCredentialRequest")
+            .field("connection_id", &self.connection_id)
+            .field("credential_id", &self.credential_id)
+            .field("label", &self.label)
+            .field("kind", &self.kind)
+            .field("username_hint", &self.username_hint)
+            .field("prompt_patterns", &self.prompt_patterns)
+            .field("secret", &self.secret.as_ref().map(|_| "[redacted secret]"))
+            .field("enabled", &self.enabled)
+            .field("require_click_to_send", &self.require_click_to_send)
+            .finish()
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// List saved sudo/su helper metadata for one connection without reading secrets.
+#[tauri::command]
+pub async fn list_privilege_credentials(
+    state: State<'_, Arc<ConfigState>>,
+    connection_id: String,
+) -> Result<Vec<SavedPrivilegeCredential>, String> {
+    let config = state.config.read();
+    let conn = config
+        .get_connection(&connection_id)
+        .ok_or("Connection not found")?;
+    Ok(conn.privilege_credentials.clone())
+}
+
+/// Save sudo/su helper metadata and optionally replace its keychain secret.
+#[tauri::command]
+pub async fn save_privilege_credential(
+    state: State<'_, Arc<ConfigState>>,
+    request: SavePrivilegeCredentialRequest,
+) -> Result<SavedPrivilegeCredential, String> {
+    state.ensure_ready()?;
+    let connection_id = request.connection_id.trim();
+    if connection_id.is_empty() {
+        return Err("Connection id is required".to_string());
+    }
+    let label = request.label.trim();
+    if label.is_empty() {
+        return Err("Credential label is required".to_string());
+    }
+
+    let now = Utc::now();
+    let credential_id = request
+        .credential_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let keychain_id = privilege_keychain_id(connection_id, &credential_id);
+
+    if let Some(secret) = request.secret.as_ref() {
+        // The privilege secret is intentionally stored in a dedicated service
+        // and never in SavedConnection metadata, so SSH passwords cannot be
+        // reused for sudo/su by accident.
+        state
+            .privilege_keychain
+            .store(&keychain_id, secret.as_str())
+            .map_err(|e| e.to_string())?;
+    }
+
+    let credential = {
+        let mut config = state.config.write();
+        let conn = config
+            .connections
+            .iter_mut()
+            .find(|conn| conn.id == connection_id)
+            .ok_or("Connection not found")?;
+        let existing = conn
+            .privilege_credentials
+            .iter()
+            .find(|credential| credential.id == credential_id)
+            .cloned();
+        let prompt_patterns = if request.prompt_patterns.is_empty() {
+            default_privilege_prompt_patterns(request.kind)
+        } else {
+            request
+                .prompt_patterns
+                .into_iter()
+                .map(|pattern| pattern.trim().to_string())
+                .filter(|pattern| !pattern.is_empty())
+                .collect()
+        };
+        let keychain_id = if request.secret.is_some() {
+            Some(keychain_id.clone())
+        } else {
+            existing
+                .as_ref()
+                .and_then(|credential| credential.keychain_id.clone())
+        };
+        let credential = SavedPrivilegeCredential {
+            id: credential_id.clone(),
+            connection_id: connection_id.to_string(),
+            label: label.to_string(),
+            kind: request.kind,
+            username_hint: request
+                .username_hint
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            prompt_patterns,
+            keychain_id,
+            enabled: request.enabled,
+            require_click_to_send: request.require_click_to_send,
+            created_at: existing
+                .as_ref()
+                .map(|credential| credential.created_at)
+                .unwrap_or(now),
+            updated_at: now,
+        };
+        if let Some(index) = conn
+            .privilege_credentials
+            .iter()
+            .position(|candidate| candidate.id == credential_id)
+        {
+            conn.privilege_credentials[index] = credential.clone();
+        } else {
+            conn.privilege_credentials.push(credential.clone());
+        }
+        credential
+    };
+
+    state.save().await?;
+    Ok(credential)
+}
+
+#[tauri::command]
+pub async fn delete_privilege_credential(
+    state: State<'_, Arc<ConfigState>>,
+    connection_id: String,
+    credential_id: String,
+) -> Result<bool, String> {
+    state.ensure_ready()?;
+    let removed = {
+        let mut config = state.config.write();
+        let conn = config
+            .connections
+            .iter_mut()
+            .find(|conn| conn.id == connection_id)
+            .ok_or("Connection not found")?;
+        let before = conn.privilege_credentials.len();
+        conn.privilege_credentials
+            .retain(|credential| credential.id != credential_id);
+        before != conn.privilege_credentials.len()
+    };
+    if removed {
+        let keychain_id = privilege_keychain_id(&connection_id, &credential_id);
+        let _ = state.privilege_keychain.delete(&keychain_id);
+        state.save().await?;
+    }
+    Ok(removed)
+}
+
+/// Read one privilege secret only for an explicit user-confirmed fill action.
+#[tauri::command]
+pub async fn get_privilege_credential_secret(
+    state: State<'_, Arc<ConfigState>>,
+    connection_id: String,
+    credential_id: String,
+) -> Result<String, String> {
+    let keychain_id = {
+        let config = state.config.read();
+        let conn = config
+            .get_connection(&connection_id)
+            .ok_or("Connection not found")?;
+        let credential = conn
+            .privilege_credentials
+            .iter()
+            .find(|credential| credential.id == credential_id)
+            .ok_or("Privilege credential not found")?;
+        if !credential.enabled {
+            return Err("Privilege credential is disabled".to_string());
+        }
+        credential
+            .keychain_id
+            .clone()
+            .ok_or("Privilege credential secret is not saved")?
+    };
+
+    state
+        .privilege_keychain
+        .get(&keychain_id)
+        .map_err(|e| e.to_string())
 }
 
 /// Get password for a connection (from keychain)
@@ -4156,6 +4442,7 @@ pub async fn import_ssh_host(
         color: None,
         tags: vec!["ssh-config".to_string()],
         proxy_chain,
+        privilege_credentials: Vec::new(),
     };
 
     {
@@ -4265,6 +4552,7 @@ pub async fn import_ssh_hosts(
             color: None,
             tags: vec!["ssh-config".to_string()],
             proxy_chain,
+            privilege_credentials: Vec::new(),
         };
 
         {
@@ -4365,6 +4653,7 @@ fn imported_draft_to_saved_connection(
             .iter()
             .map(imported_proxy_hop_to_saved)
             .collect(),
+        privilege_credentials: Vec::new(),
     }
 }
 
