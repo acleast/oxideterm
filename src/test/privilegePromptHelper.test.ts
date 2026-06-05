@@ -46,6 +46,14 @@ describe('detectPrivilegePrompt', () => {
   });
 
   it('detects generic password prompts only after privilege commands', () => {
+    expect(detectPrivilegePrompt('❯ sudo yazi\nPassword:')).toEqual({
+      kind: 'sudo_password',
+      promptText: 'Password:',
+    });
+    expect(detectPrivilegePrompt('❯ sudo yazi\n密码：')).toEqual({
+      kind: 'sudo_password',
+      promptText: '密码：',
+    });
     expect(detectPrivilegePrompt('su - root\nPassword:')).toEqual({
       kind: 'su_password',
       promptText: 'Password:',
@@ -97,6 +105,29 @@ describe('detectPrivilegePrompt', () => {
     expect(
       findPrivilegeCredentialForPrompt('[sudo] password for dominical:', credentials)?.credential.id,
     ).toBe('current-user');
+  });
+
+  it('matches generic sudo prompts to username-hinted credentials', () => {
+    const now = new Date().toISOString();
+    const credentials: SavedPrivilegeCredential[] = [
+      {
+        id: 'local-sudo',
+        connection_id: 'local-shell:default',
+        label: 'Local sudo',
+        kind: 'sudo_password',
+        username_hint: 'dominical',
+        prompt_patterns: [],
+        keychain_id: 'secret-1',
+        enabled: true,
+        require_click_to_send: true,
+        created_at: now,
+        updated_at: now,
+      },
+    ];
+
+    expect(
+      findPrivilegeCredentialForPrompt('❯ sudo yazi\nPassword:', credentials)?.credential.id,
+    ).toBe('local-sudo');
   });
 
   it('returns every matching credential in stable saved order', () => {

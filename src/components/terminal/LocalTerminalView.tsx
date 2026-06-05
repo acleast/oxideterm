@@ -408,6 +408,15 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
     writeEncodedTerminalInput(input);
   }, [feedInput, sessionId, writeEncodedTerminalInput]);
 
+  const sendPrivilegeInput = useCallback((input: string): boolean => {
+    if (!isRunningRef.current) return false;
+    // Privilege-helper input is a user-confirmed secret fill. Keep it out of
+    // command drafts, autosuggest/history, AI input observation, plugins, and
+    // recordings, matching the SSH TerminalView secret-input boundary.
+    writeEncodedTerminalInput(input);
+    return true;
+  }, [writeEncodedTerminalInput]);
+
   // ── Listen for TabBar recording events ──────────────────────────────────
   useEffect(() => {
     const onStartRec = (e: Event) => {
@@ -1935,6 +1944,8 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
           terminalType="local_terminal"
           isActive={isActive}
           sendInput={sendCommandBarInput}
+          readVisibleBuffer={isSerialTerminal ? undefined : getVisibleBuffer}
+          sendPrivilegeInput={isSerialTerminal ? undefined : sendPrivilegeInput}
           focusTerminal={() => { focusTerminal('strong'); }}
           onLayoutChange={handleCommandBarLayoutChange}
         />

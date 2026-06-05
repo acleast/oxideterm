@@ -69,9 +69,12 @@ export function detectPrivilegePrompt(text: string): PrivilegePromptMatch | unde
     };
   }
 
-  if (GENERIC_PASSWORD_PROMPT_RE.test(line) && recentCommandLooksLikePrivilegeRequest(tail)) {
+  const genericPrivilegeKind = GENERIC_PASSWORD_PROMPT_RE.test(line)
+    ? recentPrivilegeCommandKind(tail)
+    : undefined;
+  if (genericPrivilegeKind) {
     return {
-      kind: 'su_password',
+      kind: genericPrivilegeKind,
       promptText: line,
     };
   }
@@ -113,14 +116,18 @@ export function findPrivilegeCredentialsForPrompt(
   return matches.map((credential) => ({ prompt, credential }));
 }
 
-function recentCommandLooksLikePrivilegeRequest(tail: string): boolean {
-  return tail
+function recentPrivilegeCommandKind(tail: string): 'sudo_password' | 'su_password' | undefined {
+  for (const line of tail
     .split('\n')
     .slice(-6, -1)
-    .some((line) => {
-      const trimmed = line.trim();
-      return /(?:^|\s)(sudo|su)(?:\s|$)/.test(trimmed);
-    });
+    .reverse()) {
+    // Prompt-themed shells often prefix commands with glyphs. Scan tokens in
+    // order so `sudo su` is treated as the sudo prompt that asked first.
+    const token = line.trim().split(/\s+/).find((value) => value === 'sudo' || value === 'su');
+    if (token === 'sudo') return 'sudo_password';
+    if (token === 'su') return 'su_password';
+  }
+  return undefined;
 }
 
 function promptMatchesCustomPatterns(promptText: string, patterns: string[]): boolean {
