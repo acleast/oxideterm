@@ -18,6 +18,10 @@ export type PrivilegePromptMatch =
       kind: 'custom_prompt';
       credentialId: string;
       promptText: string;
+    }
+  | {
+      kind: 'generic_password';
+      promptText: string;
     };
 
 export type MatchedPrivilegeCredential = {
@@ -69,12 +73,12 @@ export function detectPrivilegePrompt(text: string): PrivilegePromptMatch | unde
     };
   }
 
-  const genericPrivilegeKind = GENERIC_PASSWORD_PROMPT_RE.test(line)
-    ? recentPrivilegeCommandKind(tail)
-    : undefined;
-  if (genericPrivilegeKind) {
+  if (GENERIC_PASSWORD_PROMPT_RE.test(line)) {
+    // Plain terminal buffers do not provide trustworthy command metadata.
+    // Treat a bare password prompt as a scoped, click-only secret candidate
+    // surface instead of guessing sudo/su from nearby visible text.
     return {
-      kind: genericPrivilegeKind,
+      kind: 'generic_password',
       promptText: line,
     };
   }
@@ -101,6 +105,12 @@ export function findPrivilegeCredentialsForPrompt(
     if (prompt.kind === 'custom_prompt') {
       return candidate.id === prompt.credentialId;
     }
+    if (prompt.kind === 'generic_password') {
+      if (candidate.kind === 'custom_prompt') {
+        return promptMatchesCustomPatterns(prompt.promptText, candidate.prompt_patterns);
+      }
+      return candidate.kind === 'sudo_password' || candidate.kind === 'su_password';
+    }
     if (candidate.kind !== prompt.kind && candidate.kind !== 'custom_prompt') {
       return false;
     }
@@ -114,20 +124,6 @@ export function findPrivilegeCredentialsForPrompt(
   });
 
   return matches.map((credential) => ({ prompt, credential }));
-}
-
-function recentPrivilegeCommandKind(tail: string): 'sudo_password' | 'su_password' | undefined {
-  for (const line of tail
-    .split('\n')
-    .slice(-6, -1)
-    .reverse()) {
-    // Prompt-themed shells often prefix commands with glyphs. Scan tokens in
-    // order so `sudo su` is treated as the sudo prompt that asked first.
-    const token = line.trim().split(/\s+/).find((value) => value === 'sudo' || value === 'su');
-    if (token === 'sudo') return 'sudo_password';
-    if (token === 'su') return 'su_password';
-  }
-  return undefined;
 }
 
 function promptMatchesCustomPatterns(promptText: string, patterns: string[]): boolean {

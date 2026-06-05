@@ -45,24 +45,27 @@ describe('detectPrivilegePrompt', () => {
     });
   });
 
-  it('detects generic password prompts only after privilege commands', () => {
+  it('detects generic password prompts without command guessing', () => {
     expect(detectPrivilegePrompt('❯ sudo yazi\nPassword:')).toEqual({
-      kind: 'sudo_password',
+      kind: 'generic_password',
       promptText: 'Password:',
     });
     expect(detectPrivilegePrompt('❯ sudo yazi\n密码：')).toEqual({
-      kind: 'sudo_password',
+      kind: 'generic_password',
       promptText: '密码：',
     });
     expect(detectPrivilegePrompt('su - root\nPassword:')).toEqual({
-      kind: 'su_password',
+      kind: 'generic_password',
       promptText: 'Password:',
     });
     expect(detectPrivilegePrompt('su - root\n密码：')).toEqual({
-      kind: 'su_password',
+      kind: 'generic_password',
       promptText: '密码：',
     });
-    expect(detectPrivilegePrompt('mysql login\nPassword:')).toBeUndefined();
+    expect(detectPrivilegePrompt('mysql login\nPassword:')).toEqual({
+      kind: 'generic_password',
+      promptText: 'Password:',
+    });
   });
 
   it('rejects password result and help lines', () => {
@@ -107,7 +110,7 @@ describe('detectPrivilegePrompt', () => {
     ).toBe('current-user');
   });
 
-  it('matches generic sudo prompts to username-hinted credentials', () => {
+  it('matches generic password prompts to scoped click-only candidates', () => {
     const now = new Date().toISOString();
     const credentials: SavedPrivilegeCredential[] = [
       {
@@ -123,11 +126,25 @@ describe('detectPrivilegePrompt', () => {
         created_at: now,
         updated_at: now,
       },
+      {
+        id: 'local-su',
+        connection_id: 'local-shell:default',
+        label: 'Local su',
+        kind: 'su_password',
+        username_hint: null,
+        prompt_patterns: [],
+        keychain_id: 'secret-2',
+        enabled: true,
+        require_click_to_send: true,
+        created_at: now,
+        updated_at: now,
+      },
     ];
 
     expect(
-      findPrivilegeCredentialForPrompt('❯ sudo yazi\nPassword:', credentials)?.credential.id,
-    ).toBe('local-sudo');
+      findPrivilegeCredentialsForPrompt('mysql login\nPassword:', credentials)
+        .map(match => match.credential.id),
+    ).toEqual(['local-sudo', 'local-su']);
   });
 
   it('returns every matching credential in stable saved order', () => {
