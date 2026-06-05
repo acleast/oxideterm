@@ -309,8 +309,9 @@ vi.mock('@/store/settingsStore', () => ({
 }));
 
 vi.mock('@/store/sessionTreeStore', () => ({
-  useSessionTreeStore: (selector: (state: { terminalNodeMap: Map<string, string> }) => unknown) => selector({
+  useSessionTreeStore: (selector: (state: { terminalNodeMap: Map<string, string>; nodes: unknown[] }) => unknown) => selector({
     terminalNodeMap: new Map([['session-1', 'node-1']]),
+    nodes: [],
   }),
 }));
 

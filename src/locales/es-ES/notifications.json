@@ -35,8 +35,7 @@
       "transfer": "Transferencia",
       "update": "Actualización",
       "health": "Salud",
-      "plugin": "Plugin",
-      "agent": "Agente"
+      "plugin": "Plugin"
     },
     "time": {
       "just_now": "Ahora mismo",

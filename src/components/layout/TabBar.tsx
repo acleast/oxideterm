@@ -3,7 +3,7 @@
 
 import React, { useRef, useCallback, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Terminal, FolderOpen, GitFork, RefreshCw, XCircle, WifiOff, Settings, Activity, Network, Plug, Square, HardDrive, LayoutList, Puzzle, Monitor, Copy, CirclePause, Bot, Bell } from 'lucide-react';
+import { X, Terminal, FolderOpen, GitFork, RefreshCw, XCircle, WifiOff, Settings, Activity, Network, Plug, Square, HardDrive, LayoutList, Puzzle, Monitor, Copy, CirclePause, Bell } from 'lucide-react';
 import { useAppStore } from '../../store/appStore';
 import { useSessionTreeStore } from '../../store/sessionTreeStore';
 import { useReconnectOrchestratorStore } from '../../store/reconnectOrchestratorStore';
@@ -57,8 +57,6 @@ const TabIcon = ({ type }: { type: string }) => {
       return <Monitor className={iconClass} />;
     case 'launcher':
       return <Monitor className={iconClass} />;
-    case 'ai_agent':
-      return <Bot className={iconClass} />;
     case 'activity':
     case 'notifications':
     case 'event_log':

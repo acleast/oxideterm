@@ -5426,7 +5426,6 @@ pub async fn check_data_directory(path: String) -> Result<DataDirCheck, String> 
         "connections.json",
         "state.redb",
         "chat_history.redb",
-        "agent_history.redb",
         "sftp_progress.redb",
         "rag_index.redb",
         "plugin-config.json",

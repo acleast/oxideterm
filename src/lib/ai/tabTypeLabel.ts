@@ -21,7 +21,6 @@ export function tabTypeLabel(t: TabType): string {
     case 'plugin_manager': return 'Plugin Manager';
     case 'graphics': return 'Graphics Forwarding';
     case 'launcher': return 'Application Launcher';
-    case 'ai_agent': return 'OxideSens Agent';
     default: return String(t);
   }
 }

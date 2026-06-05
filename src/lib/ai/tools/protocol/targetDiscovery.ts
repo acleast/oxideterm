@@ -51,7 +51,6 @@ const SINGLETON_TAB_CAPABILITIES: Partial<Record<TabType, ToolCapability[]>> = {
   session_manager: ['state.list', 'navigation.open'],
   plugin_manager: ['plugin.invoke', 'state.list'],
   launcher: ['navigation.open'],
-  ai_agent: ['state.list'],
   activity: ['state.list'],
   notifications: ['state.list'],
   event_log: ['state.list'],

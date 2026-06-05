@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! State persistence using redb + MessagePack (rmp-serde)
-//! Handles session metadata, forward rules, AI chat history and agent task persistence
+//! Handles session metadata, forward rules, and AI chat history persistence.
 
-pub mod agent_history;
 pub mod ai_chat;
 pub mod forwarding;
 pub mod lazy_state;
@@ -12,7 +11,6 @@ pub mod lazy_store;
 pub mod session;
 pub mod store;
 
-pub use agent_history::{AgentHistoryError, AgentHistoryStore};
 pub use ai_chat::{
     AiChatError, AiChatStats, AiChatStore, ContextSnapshot, ConversationMeta, FullConversation,
     PersistedDiagnosticEvent, PersistedMessage, PersistedToolCall, PersistedTranscriptEntry,

@@ -97,7 +97,6 @@ use session::{AutoReconnectService, SessionRegistry};
 use sftp::session::SftpRegistry;
 use sftp::{LazyProgressStore, ProgressStore, TransferManager};
 use ssh::SshConnectionRegistry;
-use state::agent_history::AgentHistoryStore;
 use state::ai_chat::AiChatStore;
 use state::{LazyManagedStore, LazyStateStore};
 use std::fs::OpenOptions;
@@ -265,31 +264,6 @@ pub fn run() {
     });
     write_startup_log("AI chat store registered for lazy initialization");
 
-    // Initialize agent history store for task persistence
-    let agent_history_db_path = match config::storage::config_dir() {
-        Ok(dir) => dir.join("agent_history.redb"),
-        Err(_) => std::path::PathBuf::from(""),
-    };
-
-    let agent_history_db_path = if agent_history_db_path.as_os_str().is_empty() {
-        None
-    } else {
-        Some(agent_history_db_path)
-    };
-    let agent_history_store = LazyManagedStore::new("Agent history store", move || {
-        let path = agent_history_db_path.as_ref().ok_or_else(|| {
-            "Agent history persistence is disabled because the config directory is unavailable."
-                .to_string()
-        })?;
-        AgentHistoryStore::new(path.clone()).map_err(|e| {
-            format!(
-                "Failed to initialize agent history store at {:?}: {}",
-                path, e
-            )
-        })
-    });
-    write_startup_log("Agent history store registered for lazy initialization");
-
     // Initialize RAG document store
     let rag_data_dir = config::storage::config_dir().ok();
     let rag_store = LazyManagedStore::new("RAG store", move || {
@@ -429,9 +403,6 @@ pub fn run() {
 
     // Always manage AI chat store wrapper to avoid "state not managed" errors
     let builder = builder.manage(ai_chat_store);
-
-    // Always manage agent history store wrapper to avoid "state not managed" errors
-    let builder = builder.manage(agent_history_store);
 
     // Always manage RAG store wrapper to avoid "state not managed" errors
     let builder = builder.manage(rag_store);
@@ -820,21 +791,6 @@ pub fn run() {
         commands::ai_chat_replace_conversation_message_list,
         commands::ai_chat_replace_conversation_message_list_with_transcript,
         commands::ai_chat_get_stats,
-        // Agent history persistence commands (v2)
-        commands::agent_history_save_meta,
-        commands::agent_history_update_meta,
-        commands::agent_history_list_meta,
-        commands::agent_history_append_step,
-        commands::agent_history_save_steps,
-        commands::agent_history_get_steps,
-        commands::agent_history_save_checkpoint,
-        commands::agent_history_load_checkpoint,
-        commands::agent_history_clear_checkpoint,
-        commands::agent_history_save_handoff,
-        commands::agent_history_get_handoff,
-        commands::agent_history_list_lineage,
-        commands::agent_history_delete,
-        commands::agent_history_clear,
         // RAG document retrieval commands
         commands::rag_create_collection,
         commands::rag_list_collections,
@@ -1237,21 +1193,6 @@ pub fn run() {
         commands::ai_chat_replace_conversation_message_list,
         commands::ai_chat_replace_conversation_message_list_with_transcript,
         commands::ai_chat_get_stats,
-        // Agent history persistence commands (v2)
-        commands::agent_history_save_meta,
-        commands::agent_history_update_meta,
-        commands::agent_history_list_meta,
-        commands::agent_history_append_step,
-        commands::agent_history_save_steps,
-        commands::agent_history_get_steps,
-        commands::agent_history_save_checkpoint,
-        commands::agent_history_load_checkpoint,
-        commands::agent_history_clear_checkpoint,
-        commands::agent_history_save_handoff,
-        commands::agent_history_get_handoff,
-        commands::agent_history_list_lineage,
-        commands::agent_history_delete,
-        commands::agent_history_clear,
         // RAG document retrieval commands
         commands::rag_create_collection,
         commands::rag_list_collections,

@@ -23,15 +23,13 @@ export type NotificationKind =
   | 'transfer'
   | 'update'
   | 'health'
-  | 'plugin'
-  | 'agent';
+  | 'plugin';
 
 export type NotificationSeverity = 'info' | 'warning' | 'error' | 'critical';
 
 export type NotificationSource =
   | { type: 'system' }
-  | { type: 'plugin'; pluginId: string }
-  | { type: 'agent' };
+  | { type: 'plugin'; pluginId: string };
 
 export type NotificationScope =
   | { type: 'global' }

@@ -91,3 +91,10 @@ export const CONTEXT_DANGER_THRESHOLD = 0.85;
 
 /** Context usage above this ratio triggers automatic compaction when sending a message. */
 export const COMPACTION_TRIGGER_THRESHOLD = 0.80;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tool Output Limits
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Max bytes of tool output to include in the model context per call. */
+export const MAX_TOOL_OUTPUT_BYTES = 8192;

@@ -180,7 +180,6 @@ function resetAppStore() {
     tabHistory: [],
     tabHistoryCursor: -1,
     _isNavigating: false,
-    lastNonAgentTabType: null,
     modals: {
       newConnection: false,
       settings: false,

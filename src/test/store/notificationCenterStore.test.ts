@@ -60,7 +60,7 @@ describe('notificationCenterStore', () => {
       title: 'Updated title',
       body: 'Updated body',
       createdAtMs: 200,
-      source: { type: 'agent' },
+      source: { type: 'system' },
       scope: { type: 'node', nodeId: 'node-1' },
     }));
 
@@ -71,7 +71,7 @@ describe('notificationCenterStore', () => {
       title: 'Updated title',
       body: 'Updated body',
       createdAtMs: 200,
-      source: { type: 'agent' },
+      source: { type: 'system' },
       scope: { type: 'node', nodeId: 'node-1' },
       status: 'unread',
     });

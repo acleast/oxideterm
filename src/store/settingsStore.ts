@@ -413,8 +413,6 @@ export interface AiSettings {
   mcpServers?: import('../lib/ai/mcp/mcpTypes').McpServerConfig[];
   /** Global embedding provider/model (separate from chat provider) */
   embeddingConfig?: import('../types').EmbeddingConfig;
-  /** Agent role configuration (planner/reviewer can use different provider/model) */
-  agentRoles?: import('../types').AgentRolesConfig;
   /** OxideSens execution profiles: model, policy, context, and command defaults. */
   executionProfiles?: AiExecutionProfilesConfig;
 }
@@ -1933,7 +1931,6 @@ const AI_KEYS: Array<keyof AiSettings> = [
   'contextSources',
   'mcpServers',
   'embeddingConfig',
-  'agentRoles',
 ];
 const RECONNECT_KEYS: Array<keyof ReconnectSettings> = ['enabled', 'maxAttempts', 'baseDelayMs', 'maxDelayMs'];
 const CONNECTION_POOL_KEYS: Array<keyof ConnectionPoolSettings> = ['idleTimeoutSecs'];

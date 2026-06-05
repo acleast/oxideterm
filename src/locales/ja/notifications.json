@@ -35,8 +35,7 @@
       "transfer": "転送",
       "update": "アップデート",
       "health": "ヘルス",
-      "plugin": "プラグイン",
-      "agent": "エージェント"
+      "plugin": "プラグイン"
     },
     "time": {
       "just_now": "たった今",

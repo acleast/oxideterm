@@ -35,8 +35,7 @@
       "transfer": "전송",
       "update": "업데이트",
       "health": "상태",
-      "plugin": "플러그인",
-      "agent": "에이전트"
+      "plugin": "플러그인"
     },
     "time": {
       "just_now": "방금",

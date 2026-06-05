@@ -65,8 +65,6 @@ interface AppStore {
   readonly sidebarCollapsed: boolean;
   readonly sidebarActiveSection: SidebarSection;
   modals: ModalsState;
-  /** Last active tab type that is not 'ai_agent' — used by Agent to inherit tool context */
-  lastNonAgentTabType: TabType | null;
   /** Pre-fill data consumed by NewConnectionModal on open */
   quickConnectData: QuickConnectData;
   savedConnections: ConnectionInfo[];
@@ -337,7 +335,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   tabHistory: [],
   tabHistoryCursor: -1,
   _isNavigating: false,
-  lastNonAgentTabType: null,
   // Sidebar state is now delegated to settingsStore
   // These getters provide backwards compatibility for components that read from appStore
   get sidebarCollapsed() {
@@ -674,7 +671,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
 
     // Handle global/singleton tabs
-    if (type === 'settings' || type === 'connection_monitor' || type === 'connection_pool' || type === 'topology' || type === 'file_manager' || type === 'session_manager' || type === 'plugin_manager' || type === 'graphics' || type === 'launcher' || type === 'ai_agent' || type === 'activity') {
+    if (type === 'settings' || type === 'connection_monitor' || type === 'connection_pool' || type === 'topology' || type === 'file_manager' || type === 'session_manager' || type === 'plugin_manager' || type === 'graphics' || type === 'launcher' || type === 'activity') {
       const existingTab = get().tabs.find(t => t.type === type);
       if (existingTab) {
         if (!options?.skipFocus) set({ activeTabId: existingTab.id });
@@ -708,9 +705,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
       } else if (type === 'launcher') {
         title = i18n.t('launcher.tabTitle', 'Launcher');
         icon = '🚀';
-      } else if (type === 'ai_agent') {
-        title = i18n.t('agent.tabTitle', 'AI Agent');
-        icon = '🤖';
       } else if (type === 'activity') {
         title = i18n.t('tabs.activity', 'Activity');
         icon = '🔔';
@@ -1025,12 +1019,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setActiveTab: (tabId) => {
     const state = get();
 
-    // Track the last non-agent tab type so Agent can inherit tool context
-    const targetTab = state.tabs.find(t => t.id === tabId);
     const patch: Partial<AppStore> = { activeTabId: tabId };
-    if (targetTab && targetTab.type !== 'ai_agent') {
-      patch.lastNonAgentTabType = targetTab.type;
-    }
 
     // Push to navigation history unless we're navigating via back/forward
     if (!state._isNavigating && tabId !== state.activeTabId) {

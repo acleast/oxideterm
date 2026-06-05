@@ -42,7 +42,7 @@ import { useBroadcastStore } from '../../../store/broadcastStore';
 import { waitForTerminalReady } from '../../terminalRegistry';
 import { compressOutput } from './outputCompressor';
 import { sanitizeConnectionInfo } from '../contextSanitizer';
-import { MAX_OUTPUT_BYTES } from '../agentConfig';
+import { MAX_TOOL_OUTPUT_BYTES } from '../constants';
 import {
   buildFileDiffSummary,
   createTerminalOutputSubscription,
@@ -111,7 +111,7 @@ export type ToolExecutionContext = {
   activeSessionId?: string | null;
   /** Terminal type of the active session, if any */
   activeTerminalType?: 'terminal' | 'local_terminal' | null;
-  /** If true, tabs created by tools won't steal focus (used by Agent mode) */
+  /** If true, tabs created by tools won't steal focus. */
   skipFocus?: boolean;
   /** If true, execution/write/interaction tools must pass target_id, node_id, or session_id explicitly. */
   requireExplicitTarget?: boolean;
@@ -748,8 +748,8 @@ async function executeContextFreeTool(
 
 function truncateOutput(output: string): { text: string; truncated: boolean } {
   const compressed = compressOutput(output);
-  if (compressed.length <= MAX_OUTPUT_BYTES) return { text: compressed, truncated: false };
-  return { text: compressed.slice(0, MAX_OUTPUT_BYTES) + '\n... (output truncated)', truncated: true };
+  if (compressed.length <= MAX_TOOL_OUTPUT_BYTES) return { text: compressed, truncated: false };
+  return { text: compressed.slice(0, MAX_TOOL_OUTPUT_BYTES) + '\n... (output truncated)', truncated: true };
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -4536,14 +4536,14 @@ async function execReadMcpResource(
   const { useMcpRegistry } = await import('../mcp');
   const content = await useMcpRegistry.getState().readResource(serverId, uri);
   const text = content.text ?? (content.blob ? `[base64 binary, ${content.blob.length} chars, mime=${content.mimeType ?? 'unknown'}]` : '(empty)');
-  const output = text.slice(0, MAX_OUTPUT_BYTES);
+  const output = text.slice(0, MAX_TOOL_OUTPUT_BYTES);
   return {
     toolCallId,
     toolName: 'read_mcp_resource',
     success: true,
     output,
     durationMs: Date.now() - startTime,
-    truncated: text.length > MAX_OUTPUT_BYTES,
+    truncated: text.length > MAX_TOOL_OUTPUT_BYTES,
   };
 }
 
@@ -4573,7 +4573,7 @@ async function executeMcpTool(
   const textParts = result.content
     .filter(c => c.type === 'text' && c.text)
     .map(c => c.text!);
-  const output = textParts.join('\n').slice(0, MAX_OUTPUT_BYTES);
+  const output = textParts.join('\n').slice(0, MAX_TOOL_OUTPUT_BYTES);
 
   const rawText = textParts.join('\n');
   return {
@@ -4583,7 +4583,7 @@ async function executeMcpTool(
     output: result.isError ? '' : output,
     error: result.isError ? (output || 'MCP tool returned an error with no message.') : undefined,
     durationMs: Date.now() - startTime,
-    truncated: !result.isError && rawText.length > MAX_OUTPUT_BYTES,
+    truncated: !result.isError && rawText.length > MAX_TOOL_OUTPUT_BYTES,
   };
 }
 
