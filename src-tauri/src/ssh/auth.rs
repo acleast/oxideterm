@@ -881,14 +881,14 @@ fn sign_auth_payload_with_hash_alg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use rand10::{rand_core::UnwrapErr, rngs::SysRng};
     use russh::MethodSet;
     use russh::keys::Algorithm;
     use russh::keys::ssh_key::LineEnding;
     use tempfile::tempdir;
 
     fn write_test_key(path: &std::path::Path, passphrase: Option<&str>) {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
         let key = match passphrase {
             Some(pass) => key.encrypt(&mut rng, pass).unwrap(),

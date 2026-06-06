@@ -1116,12 +1116,12 @@ pub async fn disconnect_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use rand10::{rand_core::UnwrapErr, rngs::SysRng};
     use russh::keys::{Algorithm, PrivateKey};
     use std::path::PathBuf;
 
     fn fake_key_auth(path: &str) -> KeyAuth {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         KeyAuth {
             key_path: PathBuf::from(path),
             key_pair: PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap(),

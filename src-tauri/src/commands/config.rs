@@ -3089,7 +3089,7 @@ pub async fn save_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use rand10::{rand_core::UnwrapErr, rngs::SysRng};
     use russh::keys::ssh_key::LineEnding;
     use russh::keys::{Algorithm, PrivateKey};
     use tempfile::tempdir;
@@ -3097,7 +3097,7 @@ mod tests {
     fn generated_private_key_text(passphrase: Option<&str>) -> String {
         let temp_dir = tempdir().unwrap();
         let key_path = temp_dir.path().join("id_ed25519");
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
         let key = match passphrase {
             Some(passphrase) => key.encrypt(&mut rng, passphrase).unwrap(),

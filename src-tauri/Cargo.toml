@@ -44,10 +44,10 @@ mimalloc = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util", "process"] }
 
 # SSH Protocol
-russh = { version = "0.59", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh = { version = "0.61.2", default-features = false, features = ["ring", "rsa", "flate2"] }
 russh-sftp = "2"
-signature = "2"
-ssh-encoding = "0.2"
+signature = "3.0.0-rc.10"
+ssh-encoding = "=0.3.0-rc.9"
 
 # WebSocket
 tokio-tungstenite = "0.24"
@@ -172,12 +172,11 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 anyhow = "1"
+rand10 = { package = "rand", version = "0.10" }
 tempfile = "3"
 
 [patch.crates-io]
-russh = { path = "vendor/russh-0.59.0" }
-# rsa 0.10.0-rc.10 needs a small compatibility fix for pkcs8 0.11.
-rsa = { path = "vendor/rsa-0.10.0-rc.10" }
+russh = { path = "vendor/russh-0.61.2" }
 
 [profile.release]
 # 1. 链接时优化 (LTO)

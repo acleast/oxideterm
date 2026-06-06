@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rand::rngs::OsRng;
+use rand10::{rand_core::UnwrapErr, rngs::SysRng};
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::ssh_key::certificate::{Builder as CertificateBuilder, CertType};
 use russh::keys::{Algorithm, Certificate, PrivateKey, PublicKey};
@@ -91,7 +91,7 @@ impl TestSshServer {
             auth_rejection_time: Duration::from_millis(1),
             auth_rejection_time_initial: Some(Duration::from_millis(0)),
             inactivity_timeout: Some(Duration::from_secs(30)),
-            keys: vec![PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap()],
+            keys: vec![PrivateKey::random(&mut UnwrapErr(SysRng), Algorithm::Ed25519).unwrap()],
             ..Default::default()
         });
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -475,7 +475,7 @@ struct CertificateMaterialFiles {
 fn generate_key_files() -> KeyMaterialFiles {
     let temp_dir = TempDir::new().unwrap();
     let key_path = temp_dir.path().join("id_ed25519");
-    let private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
+    let private_key = PrivateKey::random(&mut UnwrapErr(SysRng), Algorithm::Ed25519).unwrap();
     let public_key = private_key.public_key().clone();
     private_key
         .write_openssh_file(&key_path, LineEnding::LF)
@@ -493,8 +493,9 @@ fn generate_certificate_files(username: &str) -> CertificateMaterialFiles {
     let key_path = temp_dir.path().join("id_ed25519");
     let cert_path = temp_dir.path().join("id_ed25519-cert.pub");
 
-    let ca_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
-    let subject_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519).unwrap();
+    let mut rng = UnwrapErr(SysRng);
+    let ca_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
+    let subject_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
     subject_key
         .write_openssh_file(&key_path, LineEnding::LF)
         .unwrap();
@@ -504,7 +505,7 @@ fn generate_certificate_files(username: &str) -> CertificateMaterialFiles {
         .unwrap()
         .as_secs();
     let mut builder = CertificateBuilder::new_with_random_nonce(
-        &mut OsRng,
+        &mut rng,
         subject_key.public_key().clone(),
         now.saturating_sub(60),
         now + 3600,

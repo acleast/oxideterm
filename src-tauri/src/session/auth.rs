@@ -221,13 +221,13 @@ pub fn describe_key(key: &KeyPair) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use rand10::{rand_core::UnwrapErr, rngs::SysRng};
     use russh::keys::ssh_key::LineEnding;
     use russh::keys::{Algorithm, PrivateKey};
     use tempfile::tempdir;
 
     fn write_test_key(path: &Path, passphrase: Option<&str>) {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
         let key = match passphrase {
             Some(pass) => key.encrypt(&mut rng, pass).unwrap(),
