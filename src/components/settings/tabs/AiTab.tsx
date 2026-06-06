@@ -116,6 +116,16 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
 
 const REASONING_EFFORTS: AiReasoningEffort[] = ['auto', 'off', 'low', 'medium', 'high', 'max'];
 const INHERIT_REASONING = '__inherit__';
+type AiSettingsPage = 'general' | 'providers' | 'agents' | 'context' | 'tools';
+const AI_SETTINGS_PAGES: AiSettingsPage[] = ['general', 'providers', 'agents', 'context', 'tools'];
+// Keep Tauri OxideSens pages aligned with the native settings split.
+const AI_SETTINGS_PAGE_LABEL_KEYS: Record<AiSettingsPage, string> = {
+    general: 'settings_view.ai.page_general',
+    providers: 'settings_view.ai.page_providers',
+    agents: 'settings_view.ai.page_agents',
+    context: 'settings_view.ai.page_context',
+    tools: 'settings_view.ai.page_tools',
+};
 
 type ReasoningSelectValue = AiReasoningEffort | typeof INHERIT_REASONING;
 type AcpAgentPatch = Partial<Omit<AcpAgentConfig, 'capabilityPolicy' | 'auth' | 'status'>> & {
@@ -193,6 +203,7 @@ export const AiTab = ({
     const [providerSettingsExpanded, setProviderSettingsExpanded] = useState(true);
     const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
     const [expandedProviderModels, setExpandedProviderModels] = useState<Record<string, boolean>>({});
+    const [activePage, setActivePage] = useState<AiSettingsPage>('general');
     const [acpAgentsExpanded, setAcpAgentsExpanded] = useState(false);
     const [testingAcpAgentId, setTestingAcpAgentId] = useState<string | null>(null);
     const [savingAcpAuthAgentId, setSavingAcpAuthAgentId] = useState<string | null>(null);
@@ -401,6 +412,7 @@ export const AiTab = ({
             if (detail?.tab !== 'ai' || detail.section !== 'tool-use') {
                 return;
             }
+            setActivePage('tools');
             setToolUseExpanded(true);
             window.requestAnimationFrame(() => {
                 toolUseSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -420,10 +432,26 @@ export const AiTab = ({
                 </div>
                 <Separator />
 
-                <div className="rounded-lg border border-theme-border bg-theme-bg-card p-5">
-                    <h4 className="text-sm font-medium text-theme-text mb-4 uppercase tracking-wider">{t('settings_view.ai.general')}</h4>
+                <div className="flex flex-wrap gap-2 rounded-lg border border-theme-border bg-theme-bg-card p-2">
+                    {AI_SETTINGS_PAGES.map((page) => (
+                        <button
+                            key={page}
+                            type="button"
+                            onClick={() => setActivePage(page)}
+                            className={`rounded-md px-3 py-1.5 text-sm transition-colors ${activePage === page
+                                ? 'bg-theme-accent/15 text-theme-accent'
+                                : 'text-theme-text-muted hover:bg-theme-bg-hover hover:text-theme-text'
+                            }`}
+                        >
+                            {t(AI_SETTINGS_PAGE_LABEL_KEYS[page])}
+                        </button>
+                    ))}
+                </div>
 
-                    <div className="flex items-center justify-between mb-6">
+                <div className="rounded-lg border border-theme-border bg-theme-bg-card p-5">
+                    <h4 className="text-sm font-medium text-theme-text mb-4 uppercase tracking-wider">{t(AI_SETTINGS_PAGE_LABEL_KEYS[activePage])}</h4>
+
+                    <div className={cn('flex items-center justify-between mb-6', activePage !== 'general' && 'hidden')}>
                         <div>
                             <Label className="text-theme-text">{t('settings_view.ai.enable')}</Label>
                             <p className="text-xs text-theme-text-muted mt-0.5">{t('settings_view.ai.enable_hint')}</p>
@@ -441,15 +469,17 @@ export const AiTab = ({
                         />
                     </div>
 
-                    <div className="mb-6 p-3 rounded bg-theme-bg-card border border-theme-border">
+                    <div className={cn('mb-6 p-3 rounded bg-theme-bg-card border border-theme-border', activePage !== 'general' && 'hidden')}>
                         <p className="text-xs text-theme-text-muted leading-relaxed">
                             <span className="font-semibold text-theme-text-muted">{t('settings_view.ai.privacy_notice')}:</span> {t('settings_view.ai.privacy_text')}
                         </p>
                     </div>
 
-	                    <Separator className="my-6 opacity-50" />
+		                    <Separator className={cn('my-6 opacity-50', activePage === 'general' && 'hidden')} />
 
-		                    <div className={ai.enabled ? '' : 'opacity-50'}>
+			                    <div className={cn(ai.enabled ? '' : 'opacity-50', activePage === 'general' && 'hidden')}>
+                            {activePage === 'agents' && (
+                                <>
                             <div className="mb-6 max-w-3xl rounded-lg border border-theme-border/70 bg-theme-bg/60 p-4">
                                 <div className="mb-3 flex items-center justify-between gap-3">
                                     <div>
@@ -781,8 +811,12 @@ export const AiTab = ({
                                     ))}
                                 </div>
                             )}
+                                </>
+                            )}
 
-	                        <button
+                            {activePage === 'providers' && (
+                                <>
+		                        <button
 	                            type="button"
                             className="mb-4 flex w-full max-w-3xl items-center justify-between gap-3 rounded-md px-1 py-1 text-left text-theme-text-muted hover:bg-theme-bg-hover/40 hover:text-theme-text transition-colors"
                             onClick={() => setProviderSettingsExpanded((current) => !current)}
@@ -1089,9 +1123,12 @@ export const AiTab = ({
                             >
                                 + {t('settings_view.ai.add_provider')}
                             </Button>
-                        </div>}
+	                        </div>}
+                                </>
+                            )}
 
-                        <Separator className="my-6 opacity-50" />
+                            <div className={cn('contents', activePage !== 'context' && 'hidden')}>
+	                        <Separator className="my-6 opacity-50" />
 
                         <h4 className="text-sm font-medium text-theme-text mb-4 uppercase tracking-wider">{t('settings_view.ai.context_controls')}</h4>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl">
@@ -1156,9 +1193,8 @@ export const AiTab = ({
                                     </div>
                                 </label>
                             </div>
-                        </div>
-
-                        <Separator className="my-6 opacity-50" />
+		                    </div>
+		                    <Separator className="my-6 opacity-50" />
 
                         <h4 className="text-sm font-medium text-theme-text mb-4 uppercase tracking-wider">{t('settings_view.ai.system_prompt_title')}</h4>
                         <div className="max-w-3xl grid gap-2">
@@ -1173,7 +1209,7 @@ export const AiTab = ({
                                 className="w-full bg-theme-bg border border-theme-border rounded-md px-3 py-2 text-sm text-theme-text placeholder-theme-text-muted/40 resize-y min-h-[80px] max-h-[200px] focus:outline-none focus:ring-1 focus:ring-theme-accent/40"
                             />
                             <p className="text-xs text-theme-text-muted">{t('settings_view.ai.system_prompt_hint')}</p>
-                        </div>
+	                    </div>
 
                         <Separator className="my-6 opacity-50" />
 
@@ -1214,9 +1250,8 @@ export const AiTab = ({
                                     {t('settings_view.ai.memory_clear')}
                                 </Button>
                             </div>
-                        </div>
-
-                        <Separator className="my-6 opacity-50" />
+	                    </div>
+	                    <Separator className="my-6 opacity-50" />
 
                         <h4 className="text-sm font-medium text-theme-text mb-4 uppercase tracking-wider">{t('settings_view.ai.reasoning_title')}</h4>
                         <div className="max-w-3xl grid gap-2">
@@ -1236,7 +1271,7 @@ export const AiTab = ({
                                 </SelectContent>
                             </Select>
                             <p className="text-xs text-theme-text-muted">{t('settings_view.ai.reasoning_hint')}</p>
-                        </div>
+	                    </div>
                         <div className="mt-4 max-w-3xl">
                             <button
                                 type="button"
@@ -1452,7 +1487,10 @@ export const AiTab = ({
                         </div>
                     </div>
 
-                    <Separator className="my-6 opacity-50" />
+                                </div>
+
+                            <div className={cn('contents', activePage !== 'tools' && 'hidden')}>
+	                    <Separator className="my-6 opacity-50" />
 
                     <div ref={toolUseSectionRef} className={ai.enabled ? '' : 'opacity-50 pointer-events-none'}>
                         <div className="mb-4 flex items-center justify-between gap-3">
@@ -1638,6 +1676,7 @@ export const AiTab = ({
                         </div>
                         )}
                     </div>
+                                </div>
                 </div>
             </div>
 
