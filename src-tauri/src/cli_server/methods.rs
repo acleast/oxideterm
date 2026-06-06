@@ -2481,6 +2481,7 @@ async fn import_hosts(app: &tauri::AppHandle, params: Value) -> Result<Value, (i
             color: None,
             tags: vec!["ssh-config".to_string()],
             proxy_chain: Vec::new(),
+            upstream_proxy: crate::config::SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         };
 

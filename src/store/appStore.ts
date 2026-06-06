@@ -1490,6 +1490,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     try {
       // Get full connection info with credentials from backend
       const savedConn = await api.getSavedConnectionForConnect(connectionId);
+      const upstreamProxy = savedConn.upstream_proxy ?? undefined;
 
       // Map auth_type for manual preset (no default_key in HopInfo)
       const mapPresetAuthType = (authType: string): 'password' | 'key' | 'agent' => {
@@ -1532,13 +1533,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
           savedConnectionId: connectionId,
           hops,
           target,
+          upstreamProxy,
         };
 
         // Step 1: 展开预设链为树节点（不建立连接）
         const expandResult = await treeStore.expandManualPreset(request);
 
         // Step 2: 使用线性连接器连接整条链路
-        const connectedNodeIds = await treeStore.connectNodeWithAncestors(expandResult.targetNodeId);
+        const connectedNodeIds = await treeStore.connectNodeWithAncestors(expandResult.targetNodeId, {
+          rootUpstreamProxy: upstreamProxy,
+        });
 
         // Step 3: 注册拓扑映射
         for (const nodeId of connectedNodeIds) {
@@ -1585,7 +1589,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
         // 如果节点未连接，尝试连接
         if (existingNode.runtime.status === 'idle' || existingNode.runtime.status === 'error') {
-          await treeStore.connectNodeWithAncestors(nodeId);
+          await treeStore.connectNodeWithAncestors(nodeId, { rootUpstreamProxy: upstreamProxy });
         }
       } else {
         // 创建新根节点
@@ -1608,7 +1612,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         });
 
         // 自动连接新创建的节点
-        await treeStore.connectNodeWithAncestors(nodeId);
+        await treeStore.connectNodeWithAncestors(nodeId, { rootUpstreamProxy: upstreamProxy });
       }
 
       await api.markConnectionUsed(connectionId);

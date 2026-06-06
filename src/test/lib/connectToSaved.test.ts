@@ -103,6 +103,57 @@ describe('connectToSaved', () => {
     expect(result).toEqual({ nodeId: 'node-target', sessionId: 'term-target' });
   });
 
+  it('passes upstream proxy only to the root hop of a saved proxy chain', async () => {
+    const upstreamProxy = {
+      protocol: 'socks5',
+      host: 'proxy.local',
+      port: 1080,
+      auth: { type: 'password', username: 'proxy-user', password: 'proxy-secret' },
+      remoteDns: true,
+      noProxy: '',
+    };
+    apiMocks.getSavedConnectionForConnect.mockResolvedValue({
+      host: 'target.example.com',
+      port: 22,
+      username: 'target',
+      auth_type: 'agent',
+      agent_forwarding: false,
+      proxy_chain: [
+        {
+          host: 'jump.example.com',
+          port: 22,
+          username: 'jump',
+          auth_type: 'agent',
+          agent_forwarding: false,
+        },
+      ],
+      upstream_proxy: upstreamProxy,
+    });
+    sessionTreeState.expandManualPreset.mockResolvedValue({
+      targetNodeId: 'node-target',
+      pathNodeIds: ['node-jump', 'node-target'],
+      chainDepth: 2,
+    });
+    sessionTreeState.connectNode.mockResolvedValue(undefined);
+    sessionTreeState.createTerminalForNode.mockResolvedValue('term-target');
+
+    await connectToSaved('saved-proxied', {
+      createTab: vi.fn(),
+      toast: vi.fn(),
+      t: (key: string) => key,
+    });
+
+    expect(sessionTreeState.expandManualPreset).toHaveBeenCalledWith(expect.objectContaining({
+      upstreamProxy,
+    }));
+    expect(apiMocks.preflightTreeNode).toHaveBeenNthCalledWith(1, 'node-jump', upstreamProxy);
+    expect(apiMocks.preflightTreeNode).toHaveBeenNthCalledWith(2, 'node-target');
+    expect(sessionTreeState.connectNode).toHaveBeenNthCalledWith(1, 'node-jump', expect.objectContaining({
+      upstreamProxy,
+    }));
+    expect(sessionTreeState.connectNode).toHaveBeenNthCalledWith(2, 'node-target');
+  });
+
   it('reconnects idle direct nodes and creates a new terminal when none exists', async () => {
     sessionTreeState.nodes = [
       {

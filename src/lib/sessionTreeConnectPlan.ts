@@ -1,6 +1,6 @@
 import { api } from './api';
 import { useSessionTreeStore } from '../store/sessionTreeStore';
-import type { HostKeyStatus } from '../types';
+import type { HostKeyStatus, UpstreamProxyForConnect } from '../types';
 
 export type SessionTreeConnectStep = {
   nodeId: string;
@@ -8,6 +8,7 @@ export type SessionTreeConnectStep = {
   port: number;
   trustHostKey?: boolean;
   expectedHostKeyFingerprint?: string;
+  upstreamProxy?: UpstreamProxyForConnect;
 };
 
 export type SessionTreeConnectPlan = {
@@ -26,6 +27,28 @@ export type SessionTreeConnectChallenge = {
 const hasAcceptedFingerprint = (step: SessionTreeConnectStep) =>
   typeof step.expectedHostKeyFingerprint === 'string' && typeof step.trustHostKey === 'boolean';
 
+const connectOptionsForStep = (step: SessionTreeConnectStep) => {
+  const options = {
+    trustHostKey: step.trustHostKey,
+    expectedHostKeyFingerprint: step.expectedHostKeyFingerprint,
+    upstreamProxy: step.upstreamProxy,
+  };
+
+  return Object.values(options).some((value) => value !== undefined) ? options : undefined;
+};
+
+async function connectStep(
+  connectNode: ReturnType<typeof useSessionTreeStore.getState>['connectNode'],
+  step: SessionTreeConnectStep,
+) {
+  const options = connectOptionsForStep(step);
+  if (options) {
+    await connectNode(step.nodeId, options);
+  } else {
+    await connectNode(step.nodeId);
+  }
+}
+
 export async function continueSessionTreeConnectPlan(
   plan: SessionTreeConnectPlan,
 ): Promise<SessionTreeConnectChallenge | null> {
@@ -35,21 +58,20 @@ export async function continueSessionTreeConnectPlan(
     const step = plan.steps[index];
 
     if (hasAcceptedFingerprint(step)) {
-      await connectNode(step.nodeId, {
-        trustHostKey: step.trustHostKey,
-        expectedHostKeyFingerprint: step.expectedHostKeyFingerprint,
-      });
+      await connectStep(connectNode, step);
       continue;
     }
 
     // Proxy-chain host keys must be verified hop-by-hop. Later hops may only be
     // reachable after the previous node is already connected, so we cannot
     // preflight the whole chain from the client up front.
-    const preflight = await api.preflightTreeNode(step.nodeId);
+    const preflight = step.upstreamProxy
+      ? await api.preflightTreeNode(step.nodeId, step.upstreamProxy)
+      : await api.preflightTreeNode(step.nodeId);
 
     switch (preflight.status) {
       case 'verified':
-        await connectNode(step.nodeId);
+        await connectStep(connectNode, step);
         continue;
       case 'unknown':
       case 'changed':

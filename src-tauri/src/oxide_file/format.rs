@@ -4,7 +4,7 @@
 //! .oxide file format specification and binary serialization
 
 use super::error::OxideFileError;
-use crate::config::types::ConnectionOptions;
+use crate::config::types::{ConnectionOptions, SavedUpstreamProxyProtocol};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read};
@@ -185,6 +185,12 @@ pub struct EncryptedConnection {
     pub color: Option<String>,
     pub tags: Vec<String>,
     pub options: ConnectionOptions,
+    /// Upstream proxy policy metadata. Passwords and local keychain ids are not portable.
+    #[serde(
+        default,
+        skip_serializing_if = "EncryptedUpstreamProxyPolicy::is_use_global"
+    )]
+    pub upstream_proxy: EncryptedUpstreamProxyPolicy,
     /// Proxy chain for multi-hop connections (intermediate jump hosts)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<EncryptedProxyHop>,
@@ -212,6 +218,57 @@ pub struct EncryptedProxyHop {
     pub port: u16,
     pub username: String,
     pub auth: EncryptedAuth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum EncryptedUpstreamProxyPolicy {
+    UseGlobal,
+    Direct,
+    Custom { proxy: EncryptedUpstreamProxyConfig },
+}
+
+impl Default for EncryptedUpstreamProxyPolicy {
+    fn default() -> Self {
+        Self::UseGlobal
+    }
+}
+
+impl EncryptedUpstreamProxyPolicy {
+    pub fn is_use_global(&self) -> bool {
+        matches!(self, Self::UseGlobal)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EncryptedUpstreamProxyConfig {
+    pub protocol: SavedUpstreamProxyProtocol,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub auth: EncryptedUpstreamProxyAuth,
+    #[serde(default = "default_upstream_proxy_remote_dns")]
+    pub remote_dns: bool,
+    #[serde(default)]
+    pub no_proxy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EncryptedUpstreamProxyAuth {
+    None,
+    Password { username: String },
+}
+
+impl Default for EncryptedUpstreamProxyAuth {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+fn default_upstream_proxy_remote_dns() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

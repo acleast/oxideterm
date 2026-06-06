@@ -12,7 +12,7 @@ use super::command_facts::CommandFactStore;
 use super::history_archive::TerminalHistoryArchive;
 use super::scroll_buffer::ScrollBuffer;
 use super::state::{SessionState, SessionStateMachine};
-use crate::ssh::{HandleController, SessionCommand};
+use crate::ssh::{HandleController, SessionCommand, UpstreamProxyConfig};
 use crate::state::BufferConfig;
 
 // Re-export AuthMethod from ssh module (single source of truth)
@@ -44,6 +44,9 @@ pub struct SessionConfig {
     /// Enable SSH agent forwarding
     #[serde(default)]
     pub agent_forwarding: bool,
+    /// Runtime-only upstream proxy for the first TCP dial.
+    #[serde(default, skip)]
+    pub upstream_proxy: Option<UpstreamProxyConfig>,
     /// Trust the current host key after an explicit preflight confirmation
     #[serde(default)]
     pub trust_host_key: Option<bool>,
@@ -78,6 +81,7 @@ impl SessionConfig {
             cols: 80,
             rows: 24,
             agent_forwarding: false,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         }
@@ -101,6 +105,7 @@ impl SessionConfig {
             cols: 80,
             rows: 24,
             agent_forwarding: false,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         }

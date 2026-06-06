@@ -18,10 +18,15 @@ use crate::config::types::{
 use crate::config::types::{SerialFlowControl, SerialParity, SerialProfile};
 use crate::config::{
     AiProviderVault, CONFIG_ENCRYPTION_KEY_LEN, ConfigFile, ConfigStorage, ConfigStorageFormat,
-    Keychain, KeychainError, PortableBootstrapStatus, ProxyHopConfig, ResolvedProxyJumpHost,
-    ResolvedSshConfigHost, SavedAuth, SavedConnection, SshConfigHost, default_ssh_config_path,
-    load_ssh_config_content, parse_ssh_config, portable_aware_app_data_dir,
+    GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID, Keychain, KeychainError,
+    PortableBootstrapStatus, ProxyHopConfig, ResolvedProxyJumpHost, ResolvedSshConfigHost,
+    SavedAuth, SavedConnection, SshConfigHost, default_ssh_config_path, load_ssh_config_content,
+    parse_ssh_config, portable_aware_app_data_dir,
     resolve_ssh_config_host, resolve_ssh_config_host_content,
+};
+use crate::config::{
+    SavedUpstreamProxyAuth, SavedUpstreamProxyConfig, SavedUpstreamProxyPolicy,
+    UpstreamProxyAuthForConnect, UpstreamProxyForConnect,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
@@ -862,6 +867,11 @@ pub struct ConnectionInfo {
     pub post_connect_command: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<ProxyHopInfo>,
+    #[serde(
+        default,
+        skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global"
+    )]
+    pub upstream_proxy: SavedUpstreamProxyPolicy,
 }
 
 /// Serial profile info for frontend. Kept separate from SSH saved connections.
@@ -1275,11 +1285,31 @@ pub(crate) fn collect_keychain_ids_for_auth(auth: &SavedAuth) -> Vec<String> {
     }
 }
 
+fn collect_keychain_ids_for_upstream_proxy(policy: &SavedUpstreamProxyPolicy) -> Vec<String> {
+    match policy {
+        SavedUpstreamProxyPolicy::Custom {
+            proxy:
+                SavedUpstreamProxyConfig {
+                    auth:
+                        SavedUpstreamProxyAuth::Password {
+                            keychain_id: Some(keychain_id),
+                            ..
+                        },
+                    ..
+                },
+        } => vec![keychain_id.clone()],
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn collect_connection_keychain_ids(connection: &SavedConnection) -> Vec<String> {
     let mut ids = collect_keychain_ids_for_auth(&connection.auth);
     for hop in &connection.proxy_chain {
         ids.extend(collect_keychain_ids_for_auth(&hop.auth));
     }
+    ids.extend(collect_keychain_ids_for_upstream_proxy(
+        &connection.upstream_proxy,
+    ));
     ids
 }
 
@@ -1437,6 +1467,7 @@ impl From<&SavedConnection> for ConnectionInfo {
             agent_forwarding: conn.options.agent_forwarding,
             post_connect_command: conn.options.post_connect_command.clone(),
             proxy_chain,
+            upstream_proxy: conn.upstream_proxy.clone(),
         }
     }
 }
@@ -1790,6 +1821,13 @@ fn build_saved_connection_from_sync_payload(
         preserve_auth,
         keychain,
     )?;
+    let upstream_proxy = materialize_upstream_proxy_policy(
+        payload.upstream_proxy.clone(),
+        existing
+            .filter(|_| preserve_auth)
+            .map(|value| &value.upstream_proxy),
+        keychain,
+    )?;
 
     Ok(SavedConnection {
         id: payload.id.clone(),
@@ -1826,6 +1864,7 @@ fn build_saved_connection_from_sync_payload(
         color: payload.color.clone(),
         tags: payload.tags.clone(),
         proxy_chain,
+        upstream_proxy,
         privilege_credentials: existing
             .map(|value| value.privilege_credentials.clone())
             .unwrap_or_default(),
@@ -1986,6 +2025,8 @@ pub struct SaveConnectionRequest {
     #[serde(default)]
     pub post_connect_command: Option<String>,
     pub proxy_chain: Option<Vec<ProxyHopRequest>>, // Multi-hop proxy chain
+    #[serde(default)]
+    pub upstream_proxy: SavedUpstreamProxyPolicy,
 }
 
 /// Request to create/update a saved serial terminal profile.
@@ -2548,6 +2589,94 @@ fn build_saved_auth_for_update(
     }
 }
 
+fn existing_upstream_proxy_password_keychain_id(
+    policy: Option<&SavedUpstreamProxyPolicy>,
+) -> Option<String> {
+    match policy {
+        Some(SavedUpstreamProxyPolicy::Custom {
+            proxy:
+                SavedUpstreamProxyConfig {
+                    auth:
+                        SavedUpstreamProxyAuth::Password {
+                            keychain_id: Some(keychain_id),
+                            ..
+                        },
+                    ..
+                },
+        }) => Some(keychain_id.clone()),
+        _ => None,
+    }
+}
+
+fn materialize_upstream_proxy_policy(
+    policy: SavedUpstreamProxyPolicy,
+    existing: Option<&SavedUpstreamProxyPolicy>,
+    keychain: &Keychain,
+) -> Result<SavedUpstreamProxyPolicy, String> {
+    match policy {
+        SavedUpstreamProxyPolicy::UseGlobal => Ok(SavedUpstreamProxyPolicy::UseGlobal),
+        SavedUpstreamProxyPolicy::Direct => Ok(SavedUpstreamProxyPolicy::Direct),
+        SavedUpstreamProxyPolicy::Custom { proxy } => {
+            let host = proxy.host.trim().to_string();
+            if host.is_empty() {
+                return Err("Upstream proxy host is required".to_string());
+            }
+            if proxy.port == 0 {
+                return Err("Upstream proxy port is required".to_string());
+            }
+
+            let auth = match proxy.auth {
+                SavedUpstreamProxyAuth::None => SavedUpstreamProxyAuth::None,
+                SavedUpstreamProxyAuth::Password {
+                    username,
+                    keychain_id,
+                    plaintext_password,
+                } => {
+                    let username = username.trim().to_string();
+                    if username.is_empty() {
+                        return Err("Upstream proxy username is required".to_string());
+                    }
+                    if let Some(password) = plaintext_password {
+                        let keychain_id = existing_upstream_proxy_password_keychain_id(existing)
+                            .or(keychain_id)
+                            .unwrap_or_else(|| {
+                                format!("oxide_conn_upstream_proxy_{}", uuid::Uuid::new_v4())
+                            });
+                        // Proxy passwords cross the IPC boundary once and are
+                        // persisted only as keychain references in ConfigFile.
+                        keychain
+                            .store(&keychain_id, password.as_str())
+                            .map_err(|error| error.to_string())?;
+                        SavedUpstreamProxyAuth::Password {
+                            username,
+                            keychain_id: Some(keychain_id),
+                            plaintext_password: None,
+                        }
+                    } else {
+                        SavedUpstreamProxyAuth::Password {
+                            username,
+                            keychain_id: keychain_id
+                                .or_else(|| existing_upstream_proxy_password_keychain_id(existing)),
+                            plaintext_password: None,
+                        }
+                    }
+                }
+            };
+
+            Ok(SavedUpstreamProxyPolicy::Custom {
+                proxy: SavedUpstreamProxyConfig {
+                    protocol: proxy.protocol,
+                    host,
+                    port: proxy.port,
+                    auth,
+                    remote_dns: proxy.remote_dns,
+                    no_proxy: proxy.no_proxy.trim().to_string(),
+                },
+            })
+        }
+    }
+}
+
 /// Save (create or update) a connection
 #[tauri::command]
 pub async fn save_connection(
@@ -2761,6 +2890,11 @@ pub async fn save_connection(
                 request.passphrase.as_ref().map(|s| s.as_str()),
                 &state.keychain,
             )?;
+            conn.upstream_proxy = materialize_upstream_proxy_policy(
+                request.upstream_proxy,
+                Some(&existing.upstream_proxy),
+                &state.keychain,
+            )?;
 
             let now = chrono::Utc::now();
             conn.last_used_at = Some(now);
@@ -2791,6 +2925,8 @@ pub async fn save_connection(
                 request.passphrase.as_ref().map(|s| s.as_str()),
                 &state.keychain,
             )?;
+            let upstream_proxy =
+                materialize_upstream_proxy_policy(request.upstream_proxy, None, &state.keychain)?;
 
             let mut proxy_chain = Vec::new();
 
@@ -2921,6 +3057,7 @@ pub async fn save_connection(
                 color: request.color,
                 tags: request.tags,
                 proxy_chain,
+                upstream_proxy,
                 privilege_credentials: Vec::new(),
             };
 
@@ -3260,6 +3397,7 @@ mod tests {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         };
 
@@ -3410,6 +3548,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         });
 
@@ -3480,6 +3619,41 @@ mod tests {
     }
 
     #[test]
+    fn upstream_proxy_to_connect_info_hydrates_keychain_password() {
+        let keychain = Keychain::in_memory_for_tests("com.oxideterm.test");
+        keychain.store("kc-upstream-proxy", "proxy-secret").unwrap();
+        let policy = SavedUpstreamProxyPolicy::Custom {
+            proxy: SavedUpstreamProxyConfig {
+                protocol: crate::config::SavedUpstreamProxyProtocol::Socks5,
+                host: "proxy.local".to_string(),
+                port: 1080,
+                auth: SavedUpstreamProxyAuth::Password {
+                    username: "proxy-user".to_string(),
+                    keychain_id: Some("kc-upstream-proxy".to_string()),
+                    plaintext_password: None,
+                },
+                remote_dns: true,
+                no_proxy: "localhost".to_string(),
+            },
+        };
+
+        let proxy = upstream_proxy_to_connect_info(&policy, &keychain).unwrap();
+
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.no_proxy, "localhost");
+        match proxy.auth {
+            UpstreamProxyAuthForConnect::Password { username, password } => {
+                assert_eq!(username, "proxy-user");
+                assert_eq!(
+                    password.as_ref().map(|value| value.as_str()),
+                    Some("proxy-secret")
+                );
+            }
+            UpstreamProxyAuthForConnect::None => panic!("expected password auth"),
+        }
+    }
+
+    #[test]
     fn ensure_resolved_host_can_connect_rejects_certificate_without_identity() {
         let resolved = ResolvedSshConfigHost {
             alias: "prod".to_string(),
@@ -3535,6 +3709,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         };
 
@@ -3595,6 +3770,7 @@ mod tests {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         });
 
@@ -3625,6 +3801,7 @@ mod tests {
                     agent_forwarding: true,
                     post_connect_command: Some("cd /srv/prod".to_string()),
                     proxy_chain: Vec::new(),
+                    upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
                 }),
             }],
         };
@@ -3693,6 +3870,7 @@ mod tests {
                     agent_forwarding: false,
                 },
             ],
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         });
 
@@ -3733,6 +3911,7 @@ mod tests {
                         managed_key_name: None,
                         agent_forwarding: false,
                     }],
+                    upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
                 }),
             }],
         };
@@ -3793,6 +3972,7 @@ mod tests {
                         managed_key_name: None,
                         agent_forwarding: true,
                     }],
+                    upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
                 }),
             }],
         };
@@ -3871,6 +4051,7 @@ mod tests {
                     agent_forwarding: false,
                     post_connect_command: None,
                     proxy_chain: Vec::new(),
+                    upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
                 }),
             }],
         };
@@ -4553,6 +4734,7 @@ pub async fn import_ssh_host(
         color: None,
         tags: vec!["ssh-config".to_string()],
         proxy_chain,
+        upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
         privilege_credentials: Vec::new(),
     };
 
@@ -4663,6 +4845,7 @@ pub async fn import_ssh_hosts(
             color: None,
             tags: vec!["ssh-config".to_string()],
             proxy_chain,
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         };
 
@@ -4764,6 +4947,7 @@ fn imported_draft_to_saved_connection(
             .iter()
             .map(imported_proxy_hop_to_saved)
             .collect(),
+        upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
         privilege_credentials: Vec::new(),
     }
 }
@@ -4959,6 +5143,7 @@ pub struct SavedConnectionForConnect {
     pub agent_forwarding: bool,
     pub post_connect_command: Option<String>,
     pub proxy_chain: Vec<ProxyHopForConnect>,
+    pub upstream_proxy: Option<UpstreamProxyForConnect>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4975,6 +5160,101 @@ pub struct ProxyHopForConnect {
     pub agent_forwarding: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalUpstreamProxyPasswordSaveResult {
+    pub keychain_id: String,
+}
+
+#[tauri::command]
+pub async fn save_global_upstream_proxy_password(
+    state: State<'_, Arc<ConfigState>>,
+    password: String,
+) -> Result<GlobalUpstreamProxyPasswordSaveResult, String> {
+    let password = Zeroizing::new(password);
+    state
+        .keychain
+        .store(GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID, password.as_str())
+        .map_err(|err| format!("Failed to save global upstream proxy password: {}", err))?;
+    Ok(GlobalUpstreamProxyPasswordSaveResult {
+        keychain_id: GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID.to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn delete_global_upstream_proxy_password(
+    state: State<'_, Arc<ConfigState>>,
+) -> Result<(), String> {
+    state
+        .keychain
+        .delete(GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID)
+        .map_err(|err| format!("Failed to delete global upstream proxy password: {}", err))
+}
+
+fn upstream_proxy_config_to_connect_info(
+    proxy: &SavedUpstreamProxyConfig,
+    keychain: &Keychain,
+) -> Option<UpstreamProxyForConnect> {
+    let auth = match &proxy.auth {
+        SavedUpstreamProxyAuth::None => UpstreamProxyAuthForConnect::None,
+        SavedUpstreamProxyAuth::Password {
+            username,
+            keychain_id,
+            plaintext_password,
+        } => {
+            // This DTO is transient: it lets the saved-connection connect flow
+            // hydrate keychain-backed proxy credentials without storing them in
+            // the session tree or app settings JSON.
+            let password = plaintext_password
+                .as_ref()
+                .map(|password| password.as_str().to_string())
+                .or_else(|| keychain_id.as_ref().and_then(|id| keychain.get(id).ok()))
+                .map(Zeroizing::new);
+            UpstreamProxyAuthForConnect::Password {
+                username: username.clone(),
+                password,
+            }
+        }
+    };
+
+    Some(UpstreamProxyForConnect {
+        protocol: proxy.protocol,
+        host: proxy.host.clone(),
+        port: proxy.port,
+        auth,
+        remote_dns: proxy.remote_dns,
+        no_proxy: proxy.no_proxy.clone(),
+    })
+}
+
+fn global_upstream_proxy_to_connect_info(
+    settings: &serde_json::Value,
+    keychain: &Keychain,
+) -> Option<UpstreamProxyForConnect> {
+    let proxy_value = settings.pointer("/network/upstreamProxy")?;
+    if proxy_value.is_null() {
+        return None;
+    }
+    let proxy = serde_json::from_value::<SavedUpstreamProxyConfig>(proxy_value.clone()).ok()?;
+    upstream_proxy_config_to_connect_info(&proxy, keychain)
+}
+
+fn upstream_proxy_to_connect_info(
+    policy: &SavedUpstreamProxyPolicy,
+    keychain: &Keychain,
+    app_settings: Option<&serde_json::Value>,
+) -> Option<UpstreamProxyForConnect> {
+    match policy {
+        SavedUpstreamProxyPolicy::Direct => None,
+        SavedUpstreamProxyPolicy::Custom { proxy } => {
+            upstream_proxy_config_to_connect_info(proxy, keychain)
+        }
+        SavedUpstreamProxyPolicy::UseGlobal => {
+            global_upstream_proxy_to_connect_info(app_settings?, keychain)
+        }
+    }
+}
+
 /// Get saved connection with credentials for connecting
 /// This retrieves passwords from keychain so frontend can call connect_v2
 #[tauri::command]
@@ -4982,8 +5262,16 @@ pub async fn get_saved_connection_for_connect(
     state: State<'_, Arc<ConfigState>>,
     id: String,
 ) -> Result<SavedConnectionForConnect, String> {
-    let config = state.config.read();
-    let conn = config.get_connection(&id).ok_or("Connection not found")?;
+    let conn = {
+        let config = state.config.read();
+        config
+            .get_connection(&id)
+            .cloned()
+            .ok_or("Connection not found")?
+    };
+    let app_settings = crate::commands::app_settings::load_current_app_settings_value()
+        .await
+        .ok();
 
     // Convert main auth
     let (auth_type, password, key_path, cert_path, passphrase, managed_key_id) =
@@ -5032,6 +5320,11 @@ pub async fn get_saved_connection_for_connect(
         agent_forwarding: conn.options.agent_forwarding,
         post_connect_command: conn.options.post_connect_command.clone(),
         proxy_chain,
+        upstream_proxy: upstream_proxy_to_connect_info(
+            &conn.upstream_proxy,
+            &state.keychain,
+            app_settings.as_ref(),
+        ),
     })
 }
 

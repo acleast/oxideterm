@@ -307,6 +307,10 @@ fn default_settings() -> Value {
         "connectionPool": {
             "idleTimeoutSecs": 1800
         },
+        "network": {
+            "upstreamProxy": null,
+            "upstreamProxyDisclaimerAccepted": false
+        },
         "experimental": {
             "virtualSessionProxy": false,
             "gpuCanvas": false
@@ -575,6 +579,16 @@ fn sanitize_settings(raw: Value) -> SanitizedSettings {
             &mut validation_warnings,
         );
     }
+    if let Some(value) = get_path_mut(&mut settings, &["network", "upstreamProxy", "port"]) {
+        clamp_i64(
+            value,
+            1080,
+            1,
+            65_535,
+            "network.upstreamProxy.port",
+            &mut validation_warnings,
+        );
+    }
     if let Some(value) = get_path_mut(&mut settings, &["ai", "toolUse", "maxRounds"]) {
         clamp_i64(
             value,
@@ -736,6 +750,30 @@ fn sanitize_settings(raw: Value) -> SanitizedSettings {
         "ask",
         &mut validation_warnings,
     );
+    sanitize_enum(
+        &mut settings,
+        &["network", "upstreamProxy", "protocol"],
+        &["socks5", "http_connect"],
+        "socks5",
+        &mut validation_warnings,
+    );
+    sanitize_enum(
+        &mut settings,
+        &["network", "upstreamProxy", "auth", "type"],
+        &["none", "password"],
+        "none",
+        &mut validation_warnings,
+    );
+
+    if let Some(auth) = get_path_mut(&mut settings, &["network", "upstreamProxy", "auth"])
+        .and_then(Value::as_object_mut)
+    {
+        // Proxy credentials must be stored through keychain-aware commands, not
+        // in the JSON app settings file or app-settings snapshots.
+        auth.remove("password");
+        auth.remove("plaintextPassword");
+        auth.remove("proxyAuthorization");
+    }
 
     if let Some(object) = object_mut(&mut settings, "terminal") {
         if let Some(in_band) = object
@@ -824,6 +862,10 @@ async fn read_settings_file(path: &Path) -> Result<Option<AppSettingsEnvelope>, 
         settings: sanitized.settings,
         updated_at: now_ms(),
     }))
+}
+
+pub async fn load_current_app_settings_value() -> Result<Value, String> {
+    Ok(load_app_settings(None).await?.settings)
 }
 
 #[tauri::command]
@@ -924,6 +966,7 @@ const APP_SETTINGS_SECTION_IDS: &[&str] = &[
     "terminalBehavior",
     "appearance",
     "connections",
+    "network",
     "fileAndEditor",
     "ai",
     "localTerminal",
@@ -935,6 +978,7 @@ const DEFAULT_EXPORT_SECTIONS: &[&str] = &[
     "terminalBehavior",
     "appearance",
     "connections",
+    "network",
     "fileAndEditor",
 ];
 
@@ -981,6 +1025,7 @@ const APPEARANCE_KEYS: &[&str] = &[
 const CONNECTION_DEFAULT_KEYS: &[&str] = &["username", "port"];
 const RECONNECT_KEYS: &[&str] = &["enabled", "maxAttempts", "baseDelayMs", "maxDelayMs"];
 const CONNECTION_POOL_KEYS: &[&str] = &["idleTimeoutSecs"];
+const NETWORK_KEYS: &[&str] = &["upstreamProxy", "upstreamProxyDisclaimerAccepted"];
 const SFTP_KEYS: &[&str] = &[
     "maxConcurrentTransfers",
     "directoryParallelism",
@@ -1121,6 +1166,11 @@ fn build_sectioned_snapshot(
                     ),
                 );
             }
+            "network" => merge_object_field(
+                &mut partial,
+                "network",
+                pick_fields(root.get("network").and_then(Value::as_object), NETWORK_KEYS),
+            ),
             "fileAndEditor" => {
                 merge_object_field(
                     &mut partial,
@@ -1234,6 +1284,14 @@ fn merge_selected_import_sections(current: Value, imported: Value, selected: &[S
                     imported_root.get("connectionPool").cloned(),
                 );
             }
+            "network" => merge_object_field(
+                next.as_object_mut().unwrap(),
+                "network",
+                pick_fields(
+                    imported_root.get("network").and_then(Value::as_object),
+                    NETWORK_KEYS,
+                ),
+            ),
             "fileAndEditor" => {
                 let root = next.as_object_mut().unwrap();
                 merge_object_field(root, "sftp", imported_root.get("sftp").cloned());
@@ -1379,6 +1437,34 @@ mod tests {
             json!("gpui-preview")
         );
         assert!(sanitized.validation_warnings.is_empty());
+    }
+
+    #[test]
+    fn network_proxy_settings_drop_plaintext_passwords() {
+        let sanitized = sanitize_settings(json!({
+            "version": SETTINGS_SCHEMA_VERSION,
+            "network": {
+                "upstreamProxy": {
+                    "protocol": "socks5",
+                    "host": "proxy.example.com",
+                    "port": 1080,
+                    "auth": {
+                        "type": "password",
+                        "username": "proxy-user",
+                        "password": "proxy-secret",
+                        "proxyAuthorization": "Basic secret"
+                    },
+                    "remoteDns": true,
+                    "noProxy": "localhost"
+                },
+                "upstreamProxyDisclaimerAccepted": true
+            }
+        }));
+
+        let auth = &sanitized.settings["network"]["upstreamProxy"]["auth"];
+        assert_eq!(auth["username"], json!("proxy-user"));
+        assert!(auth.get("password").is_none());
+        assert!(auth.get("proxyAuthorization").is_none());
     }
 
     #[test]

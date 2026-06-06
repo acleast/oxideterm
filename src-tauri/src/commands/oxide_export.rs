@@ -13,10 +13,14 @@ use tracing::info;
 
 use crate::commands::config::ConfigState;
 use crate::commands::forwarding::ForwardingRegistry;
-use crate::config::types::{ConfigFile, SavedAuth};
+use crate::config::types::{
+    ConfigFile, SavedAuth, SavedUpstreamProxyAuth, SavedUpstreamProxyConfig,
+    SavedUpstreamProxyPolicy,
+};
 use crate::oxide_file::{
     EncryptedAuth, EncryptedConnection, EncryptedForward, EncryptedManagedKeyMetadata,
     EncryptedPayload, EncryptedPluginSetting, EncryptedPortableSecret, EncryptedProxyHop,
+    EncryptedUpstreamProxyAuth, EncryptedUpstreamProxyConfig, EncryptedUpstreamProxyPolicy,
     OxideMetadata, compute_checksum, encrypt_oxide_file, encrypt_oxide_file_with_progress,
 };
 use zeroize::Zeroizing;
@@ -779,6 +783,7 @@ async fn export_to_oxide_inner(
             color: saved_conn.color.clone(),
             tags: saved_conn.tags.clone(),
             options: saved_conn.options.clone(),
+            upstream_proxy: export_upstream_proxy_policy(&saved_conn.upstream_proxy),
             proxy_chain: encrypted_proxy_chain,
             forwards,
         });
@@ -874,6 +879,36 @@ async fn export_to_oxide_inner(
     Ok(bytes)
 }
 
+fn export_upstream_proxy_policy(policy: &SavedUpstreamProxyPolicy) -> EncryptedUpstreamProxyPolicy {
+    match policy {
+        SavedUpstreamProxyPolicy::UseGlobal => EncryptedUpstreamProxyPolicy::UseGlobal,
+        SavedUpstreamProxyPolicy::Direct => EncryptedUpstreamProxyPolicy::Direct,
+        SavedUpstreamProxyPolicy::Custom { proxy } => EncryptedUpstreamProxyPolicy::Custom {
+            proxy: export_upstream_proxy_config(proxy),
+        },
+    }
+}
+
+fn export_upstream_proxy_config(proxy: &SavedUpstreamProxyConfig) -> EncryptedUpstreamProxyConfig {
+    EncryptedUpstreamProxyConfig {
+        protocol: proxy.protocol,
+        host: proxy.host.clone(),
+        port: proxy.port,
+        auth: match &proxy.auth {
+            SavedUpstreamProxyAuth::None => EncryptedUpstreamProxyAuth::None,
+            SavedUpstreamProxyAuth::Password { username, .. } => {
+                // Portable exports preserve auth metadata only; password and
+                // local keychain id never leave this machine.
+                EncryptedUpstreamProxyAuth::Password {
+                    username: username.clone(),
+                }
+            }
+        },
+        remote_dns: proxy.remote_dns,
+        no_proxy: proxy.no_proxy.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,6 +957,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            upstream_proxy: crate::config::SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         }
     }

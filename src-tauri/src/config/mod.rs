@@ -42,6 +42,9 @@ pub use storage::{
     load_bootstrap_config, save_bootstrap_config,
 };
 pub use types::{
-    CONFIG_VERSION, ConfigFile, ConnectionOptions, ProxyHopConfig, SavedAuth, SavedConnection,
+    CONFIG_VERSION, ConfigFile, ConnectionOptions, GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID,
+    ProxyHopConfig, SavedAuth, SavedConnection, SavedUpstreamProxyAuth, SavedUpstreamProxyConfig,
+    SavedUpstreamProxyPolicy, SavedUpstreamProxyProtocol, UpstreamProxyAuthForConnect,
+    UpstreamProxyForConnect,
 };
 pub use vault::{AiProviderVault, AiVault, VaultError};

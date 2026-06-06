@@ -7,11 +7,14 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 /// Current configuration version
 pub const CONFIG_VERSION: u32 = 1;
 pub const CONNECTION_TOMBSTONE_RETENTION_DAYS: i64 = 30;
+pub const GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID: &str = "oxide_global_upstream_proxy_password";
 
 /// Proxy hop configuration for multi-hop connections
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +25,127 @@ pub struct ProxyHopConfig {
     pub auth: SavedAuth,
     #[serde(default)]
     pub agent_forwarding: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedUpstreamProxyProtocol {
+    Socks5,
+    HttpConnect,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SavedUpstreamProxyAuth {
+    None,
+    Password {
+        username: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keychain_id: Option<String>,
+        #[serde(default, rename = "password", skip_serializing)]
+        plaintext_password: Option<Zeroizing<String>>,
+    },
+}
+
+impl fmt::Debug for SavedUpstreamProxyAuth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("None"),
+            Self::Password {
+                username,
+                keychain_id,
+                plaintext_password,
+            } => formatter
+                .debug_struct("Password")
+                .field("username", username)
+                .field("keychain_id", keychain_id)
+                .field(
+                    "plaintext_password",
+                    &plaintext_password.as_ref().map(|_| "[redacted secret]"),
+                )
+                .finish(),
+        }
+    }
+}
+
+impl Default for SavedUpstreamProxyAuth {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedUpstreamProxyConfig {
+    pub protocol: SavedUpstreamProxyProtocol,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub auth: SavedUpstreamProxyAuth,
+    #[serde(default = "default_proxy_remote_dns")]
+    pub remote_dns: bool,
+    #[serde(default)]
+    pub no_proxy: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum SavedUpstreamProxyPolicy {
+    UseGlobal,
+    Direct,
+    Custom { proxy: SavedUpstreamProxyConfig },
+}
+
+impl Default for SavedUpstreamProxyPolicy {
+    fn default() -> Self {
+        Self::UseGlobal
+    }
+}
+
+impl SavedUpstreamProxyPolicy {
+    pub fn is_use_global(&self) -> bool {
+        matches!(self, Self::UseGlobal)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UpstreamProxyAuthForConnect {
+    None,
+    Password {
+        username: String,
+        password: Option<Zeroizing<String>>,
+    },
+}
+
+impl fmt::Debug for UpstreamProxyAuthForConnect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("None"),
+            Self::Password { username, password } => formatter
+                .debug_struct("Password")
+                .field("username", username)
+                .field("password", &password.as_ref().map(|_| "[redacted secret]"))
+                .finish(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpstreamProxyForConnect {
+    pub protocol: SavedUpstreamProxyProtocol,
+    pub host: String,
+    pub port: u16,
+    pub auth: UpstreamProxyAuthForConnect,
+    #[serde(default = "default_proxy_remote_dns")]
+    pub remote_dns: bool,
+    #[serde(default)]
+    pub no_proxy: String,
+}
+
+fn default_proxy_remote_dns() -> bool {
+    true
 }
 
 /// Authentication method for saved connections
@@ -179,6 +303,13 @@ pub struct SavedConnection {
     /// Target server info is always in host/port/username fields
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<ProxyHopConfig>,
+
+    /// Upstream proxy policy for the local TCP outlet before the first SSH hop.
+    #[serde(
+        default,
+        skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global"
+    )]
+    pub upstream_proxy: SavedUpstreamProxyPolicy,
 
     /// Separately scoped sudo/su helper metadata. Secret values live only in keychain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -338,6 +469,7 @@ impl SavedConnection {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         }
     }
@@ -370,6 +502,7 @@ impl SavedConnection {
             color: None,
             tags: Vec::new(),
             proxy_chain: Vec::new(),
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         }
     }

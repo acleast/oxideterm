@@ -1763,6 +1763,19 @@ export interface HopInfo {
   agentForwarding?: boolean;
 }
 
+export type UpstreamProxyProtocol = 'socks5' | 'http_connect';
+
+export type UpstreamProxyForConnect = {
+  protocol: UpstreamProxyProtocol;
+  host: string;
+  port: number;
+  auth:
+    | { type: 'none' }
+    | { type: 'password'; username: string; password?: string };
+  remoteDns: boolean;
+  noProxy: string;
+};
+
 /**
  * 预设链连接请求
  */
@@ -1770,6 +1783,7 @@ export interface ConnectPresetChainRequest {
   savedConnectionId: string;
   hops: HopInfo[];
   target: HopInfo;
+  upstreamProxy?: UpstreamProxyForConnect;
 }
 
 /**
@@ -1781,6 +1795,7 @@ export interface ConnectTreeNodeRequest {
   rows?: number;
   trustHostKey?: boolean;
   expectedHostKeyFingerprint?: string;
+  upstreamProxy?: UpstreamProxyForConnect;
   attemptId?: string;
   traceLabel?: string;
   traceStepIndex?: number;

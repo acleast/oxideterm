@@ -54,6 +54,7 @@ import {
   SearchOptions,
   ArchiveHealthSnapshot,
   ConnectPresetChainRequest,
+  UpstreamProxyForConnect,
   StartTerminalHistorySearchResponse,
   TerminalHistorySearchResultsResponse,
   StartTerminalSearchModelResponse,
@@ -351,6 +352,7 @@ export type SavedConnectionForConnect = {
   agent_forwarding: boolean;
   post_connect_command?: string | null;
   proxy_chain: SavedConnectionProxyHopForConnect[];
+  upstream_proxy?: UpstreamProxyForConnect | null;
 };
 
 export type CliCompanionStatus = {
@@ -2234,9 +2236,12 @@ export const api = {
     return invoke('connect_tree_node', { request });
   },
 
-  preflightTreeNode: async (nodeId: string): Promise<import('../types').HostKeyStatus> => {
+  preflightTreeNode: async (
+    nodeId: string,
+    upstreamProxy?: UpstreamProxyForConnect,
+  ): Promise<import('../types').HostKeyStatus> => {
     if (USE_MOCK) return { status: 'verified' };
-    return invoke('preflight_tree_node', { nodeId });
+    return invoke('preflight_tree_node', { nodeId, upstreamProxy });
   },
 
   /**

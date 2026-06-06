@@ -201,6 +201,7 @@ export async function connectToSaved(
 
   try {
     const savedConn = await api.getSavedConnectionForConnect(connectionId);
+    const upstreamProxy = savedConn.upstream_proxy ?? undefined;
 
     // ========== Proxy Chain 支持 ==========
     if (savedConn.proxy_chain && savedConn.proxy_chain.length > 0) {
@@ -260,6 +261,7 @@ export async function connectToSaved(
         savedConnectionId: connectionId,
         hops,
         target,
+        upstreamProxy,
       };
 
       const expandResult = await expandManualPreset(request);
@@ -277,6 +279,7 @@ export async function connectToSaved(
               nodeId,
               host: endpoint.host,
               port: endpoint.port,
+              upstreamProxy: index === 0 ? upstreamProxy : undefined,
             };
           }),
         },
@@ -312,7 +315,7 @@ export async function connectToSaved(
           plan: {
             targetNodeId: nodeId,
             currentIndex: 0,
-            steps: [{ nodeId, host: savedConn.host, port: savedConn.port }],
+            steps: [{ nodeId, host: savedConn.host, port: savedConn.port, upstreamProxy }],
           },
         }, options);
       }
@@ -337,7 +340,7 @@ export async function connectToSaved(
           targetNodeId: nodeId,
           cleanupNodeId: nodeId,
           currentIndex: 0,
-          steps: [{ nodeId, host: savedConn.host, port: savedConn.port }],
+          steps: [{ nodeId, host: savedConn.host, port: savedConn.port, upstreamProxy }],
         },
       }, options);
     }

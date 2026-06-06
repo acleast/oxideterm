@@ -398,6 +398,7 @@ mod tests {
             cols: 80,
             rows: 24,
             agent_forwarding: false,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };
@@ -430,6 +431,7 @@ mod tests {
             cols: 80,
             rows: 24,
             agent_forwarding: false,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };
@@ -457,6 +459,7 @@ mod tests {
             cols: 80,
             rows: 24,
             agent_forwarding: true,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };

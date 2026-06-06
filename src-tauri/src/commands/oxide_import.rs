@@ -22,12 +22,15 @@ use crate::commands::config::{ConfigState, collect_connection_keychain_ids};
 use crate::commands::forwarding::ForwardingRegistry;
 use crate::config::types::{
     CONFIG_VERSION, ConnectionOptions, ManagedSshKey, ManagedSshKeyOrigin, ProxyHopConfig,
-    SavedAuth, SavedConnection,
+    SavedAuth, SavedConnection, SavedUpstreamProxyAuth, SavedUpstreamProxyConfig,
+    SavedUpstreamProxyPolicy,
 };
 use crate::forwarding::{ForwardRule, ForwardStatus};
 use crate::oxide_file::{
     EncryptedAuth, EncryptedForward, EncryptedManagedKeyMetadata, EncryptedPluginSetting,
-    EncryptedPortableSecret, EncryptedProxyHop, OxideMetadata, decrypt_oxide_file_with_progress,
+    EncryptedPortableSecret, EncryptedProxyHop, EncryptedUpstreamProxyAuth,
+    EncryptedUpstreamProxyConfig, EncryptedUpstreamProxyPolicy, OxideMetadata,
+    decrypt_oxide_file_with_progress,
 };
 use crate::state::PersistedForward;
 use zeroize::Zeroizing;
@@ -735,6 +738,7 @@ struct PreparedImportConnection {
     color: Option<String>,
     tags: Vec<String>,
     proxy_chain: Vec<ProxyHopConfig>,
+    upstream_proxy: SavedUpstreamProxyPolicy,
 }
 
 fn plan_import_action(
@@ -876,6 +880,37 @@ fn merge_connection_options(
     merged
 }
 
+fn import_upstream_proxy_policy(policy: EncryptedUpstreamProxyPolicy) -> SavedUpstreamProxyPolicy {
+    match policy {
+        EncryptedUpstreamProxyPolicy::UseGlobal => SavedUpstreamProxyPolicy::UseGlobal,
+        EncryptedUpstreamProxyPolicy::Direct => SavedUpstreamProxyPolicy::Direct,
+        EncryptedUpstreamProxyPolicy::Custom { proxy } => SavedUpstreamProxyPolicy::Custom {
+            proxy: import_upstream_proxy_config(proxy),
+        },
+    }
+}
+
+fn import_upstream_proxy_config(proxy: EncryptedUpstreamProxyConfig) -> SavedUpstreamProxyConfig {
+    SavedUpstreamProxyConfig {
+        protocol: proxy.protocol,
+        host: proxy.host,
+        port: proxy.port,
+        auth: match proxy.auth {
+            EncryptedUpstreamProxyAuth::None => SavedUpstreamProxyAuth::None,
+            EncryptedUpstreamProxyAuth::Password { username } => {
+                // .oxide files never carry proxy passwords or local keychain ids.
+                SavedUpstreamProxyAuth::Password {
+                    username,
+                    keychain_id: None,
+                    plaintext_password: None,
+                }
+            }
+        },
+        remote_dns: proxy.remote_dns,
+        no_proxy: proxy.no_proxy,
+    }
+}
+
 fn build_saved_connection(
     id: String,
     created_at: chrono::DateTime<Utc>,
@@ -898,6 +933,7 @@ fn build_saved_connection(
         color: imported.color,
         tags: imported.tags,
         proxy_chain: imported.proxy_chain,
+        upstream_proxy: imported.upstream_proxy,
         privilege_credentials: Vec::new(),
     }
 }
@@ -932,6 +968,7 @@ fn merge_saved_connection(
         } else {
             existing.proxy_chain.clone()
         },
+        upstream_proxy: imported.upstream_proxy,
         // Encrypted imports update connection metadata, but privilege helper
         // secrets stay locally scoped unless an explicit export/import policy is
         // added for them.
@@ -1877,6 +1914,7 @@ async fn import_from_oxide_inner(
             color: enc_conn.color,
             tags: enc_conn.tags,
             proxy_chain,
+            upstream_proxy: import_upstream_proxy_policy(enc_conn.upstream_proxy),
         };
 
         let (
@@ -2338,6 +2376,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         }
     }
@@ -2415,6 +2454,7 @@ mod tests {
             color: None,
             tags: vec!["ops".to_string(), "linux".to_string()],
             proxy_chain: Vec::new(),
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
         };
 
         let merged = merge_saved_connection(&existing, imported);
@@ -2471,6 +2511,7 @@ mod tests {
                 },
                 agent_forwarding: false,
             }],
+            upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             privilege_credentials: Vec::new(),
         };
 

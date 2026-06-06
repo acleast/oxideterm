@@ -262,7 +262,7 @@ mod tests {
     use super::super::format::EncryptedAuth;
     use super::*;
     use crate::config::types::ConnectionOptions;
-    use crate::oxide_file::EncryptedConnection;
+    use crate::oxide_file::{EncryptedConnection, EncryptedUpstreamProxyPolicy};
     use chrono::Utc;
 
     fn create_test_connection() -> EncryptedConnection {
@@ -278,6 +278,7 @@ mod tests {
             color: None,
             tags: vec![],
             options: ConnectionOptions::default(),
+            upstream_proxy: EncryptedUpstreamProxyPolicy::UseGlobal,
             proxy_chain: vec![],
             forwards: vec![],
         }

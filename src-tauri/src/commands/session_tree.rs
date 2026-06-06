@@ -13,10 +13,16 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::RwLock;
 
+use crate::config::{
+    SavedUpstreamProxyProtocol, UpstreamProxyAuthForConnect, UpstreamProxyForConnect,
+};
 use crate::session::AuthMethod;
 use crate::session::tree::{FlatNode, NodeConnection, NodeOrigin, NodeState, SessionTree};
 use crate::session::types::SessionConfig;
-use crate::ssh::{HostKeyStatus, SshConnectionRegistry, check_host_key};
+use crate::ssh::{
+    HostKeyStatus, SshConnectionRegistry, UpstreamProxyAuth, UpstreamProxyConfig,
+    UpstreamProxyProtocol, check_host_key_with_upstream_proxy,
+};
 use zeroize::Zeroizing;
 
 use super::forwarding::ForwardingRegistry;
@@ -127,6 +133,8 @@ pub struct ConnectPresetChainRequest {
     pub saved_connection_id: String,
     pub hops: Vec<HopInfo>,
     pub target: HopInfo,
+    #[serde(default)]
+    pub upstream_proxy: Option<UpstreamProxyForConnect>,
 }
 
 /// 跳板机信息
@@ -245,6 +253,36 @@ fn build_connection(
     conn.display_name = display_name;
     conn.agent_forwarding = agent_forwarding;
     conn
+}
+
+fn build_runtime_upstream_proxy(
+    upstream_proxy: Option<UpstreamProxyForConnect>,
+) -> Result<Option<UpstreamProxyConfig>, String> {
+    let Some(upstream_proxy) = upstream_proxy else {
+        return Ok(None);
+    };
+
+    let auth = match upstream_proxy.auth {
+        UpstreamProxyAuthForConnect::None => UpstreamProxyAuth::None,
+        UpstreamProxyAuthForConnect::Password { username, password } => {
+            let password = password.ok_or("Upstream proxy password required")?;
+            UpstreamProxyAuth::Password { username, password }
+        }
+    };
+
+    // Upstream proxy credentials are a one-shot connect boundary: they come
+    // from get_saved_connection_for_connect and are not written into tree nodes.
+    Ok(Some(UpstreamProxyConfig {
+        protocol: match upstream_proxy.protocol {
+            SavedUpstreamProxyProtocol::Socks5 => UpstreamProxyProtocol::Socks5,
+            SavedUpstreamProxyProtocol::HttpConnect => UpstreamProxyProtocol::HttpConnect,
+        },
+        host: upstream_proxy.host,
+        port: upstream_proxy.port,
+        auth,
+        remote_dns: upstream_proxy.remote_dns,
+        no_proxy: upstream_proxy.no_proxy,
+    }))
 }
 
 // ============================================================================
@@ -983,6 +1021,8 @@ pub struct ConnectTreeNodeRequest {
     #[serde(default)]
     pub expected_host_key_fingerprint: Option<String>,
     #[serde(default)]
+    pub upstream_proxy: Option<UpstreamProxyForConnect>,
+    #[serde(default)]
     pub attempt_id: Option<String>,
     #[serde(default)]
     pub trace_label: Option<String>,
@@ -1088,6 +1128,7 @@ pub async fn preflight_tree_node(
     state: State<'_, Arc<SessionTreeState>>,
     connection_registry: State<'_, Arc<SshConnectionRegistry>>,
     node_id: String,
+    upstream_proxy: Option<UpstreamProxyForConnect>,
 ) -> Result<HostKeyStatus, String> {
     let (host, port, parent_node_id) = {
         let tree = state.tree.read().await;
@@ -1120,7 +1161,8 @@ pub async fn preflight_tree_node(
             .await
             .map_err(|e| e.to_string())
     } else {
-        Ok(check_host_key(&host, port, 10).await)
+        let upstream_proxy = build_runtime_upstream_proxy(upstream_proxy)?;
+        Ok(check_host_key_with_upstream_proxy(&host, port, 10, upstream_proxy.as_ref()).await)
     }
 }
 
@@ -1159,6 +1201,7 @@ pub async fn connect_tree_node(
     let node_id = request.node_id.clone();
     let trace = ConnectionTraceContext::from_request(&request);
     trace.emit(&app, "queued", "running", 5, None);
+    let request_upstream_proxy = build_runtime_upstream_proxy(request.upstream_proxy.clone())?;
 
     // 1. 获取节点信息并构建 SessionConfig
     let (session_config, parent_node_id) = {
@@ -1214,6 +1257,7 @@ pub async fn connect_tree_node(
             agent_forwarding: node.connection.agent_forwarding,
             trust_host_key: request.trust_host_key,
             expected_host_key_fingerprint: request.expected_host_key_fingerprint.clone(),
+            upstream_proxy: request_upstream_proxy.clone(),
         };
 
         (config, node.parent_id.clone())
@@ -1456,6 +1500,7 @@ pub async fn connect_manual_preset(
 ) -> Result<ConnectManualPresetResponse, String> {
     let cols = cols.unwrap_or(80);
     let rows = rows.unwrap_or(24);
+    let request_upstream_proxy = build_runtime_upstream_proxy(request.upstream_proxy.clone())?;
 
     // 1. 构建连接信息
     let mut hops = Vec::new();
@@ -1539,6 +1584,15 @@ pub async fn connect_manual_preset(
                 .get_node(node_id)
                 .ok_or_else(|| format!("Node not found: {}", node_id))?;
 
+            // Only the first transport dial uses the upstream proxy; descendants
+            // are reached through the already established parent SSH tunnel.
+            let parent_ssh_id = if let Some(ref parent_id) = node.parent_id {
+                tree.get_node(parent_id)
+                    .and_then(|p| p.ssh_connection_id.clone())
+            } else {
+                None
+            };
+
             let config = SessionConfig {
                 host: node.connection.host.clone(),
                 port: node.connection.port,
@@ -1549,16 +1603,13 @@ pub async fn connect_manual_preset(
                 cols,
                 rows,
                 agent_forwarding: node.connection.agent_forwarding,
+                upstream_proxy: if parent_ssh_id.is_none() {
+                    request_upstream_proxy.clone()
+                } else {
+                    None
+                },
                 trust_host_key: None,
                 expected_host_key_fingerprint: None,
-            };
-
-            // 获取父节点的 SSH 连接 ID（如果有）
-            let parent_ssh_id = if let Some(ref parent_id) = node.parent_id {
-                tree.get_node(parent_id)
-                    .and_then(|p| p.ssh_connection_id.clone())
-            } else {
-                None
             };
 
             (config, parent_ssh_id)

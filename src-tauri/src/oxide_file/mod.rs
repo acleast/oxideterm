@@ -22,5 +22,6 @@ pub use error::OxideFileError;
 pub use format::{
     EncryptedAuth, EncryptedConnection, EncryptedForward, EncryptedManagedKeyMetadata,
     EncryptedPayload, EncryptedPluginSetting, EncryptedPortableSecret, EncryptedProxyHop,
+    EncryptedUpstreamProxyAuth, EncryptedUpstreamProxyConfig, EncryptedUpstreamProxyPolicy,
     OxideFile, OxideMetadata,
 };

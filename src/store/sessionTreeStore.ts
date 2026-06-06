@@ -36,6 +36,7 @@ import type {
   UnifiedNodeStatus,
   NodeRuntimeState,
   TreeNodeState,
+  UpstreamProxyForConnect,
 } from '../types';
 
 // ============================================================================
@@ -256,7 +257,7 @@ interface SessionTreeStore {
   
   // ========== Connection Management ==========
   /** 连接节点 (建立 SSH 连接) */
-  connectNode: (nodeId: string, options?: { trustHostKey?: boolean; expectedHostKeyFingerprint?: string; traceMode?: ConnectionTraceMode }) => Promise<void>;
+  connectNode: (nodeId: string, options?: { trustHostKey?: boolean; expectedHostKeyFingerprint?: string; upstreamProxy?: UpstreamProxyForConnect; traceMode?: ConnectionTraceMode }) => Promise<void>;
   /** 断开节点 (级联断开所有子节点) */
   disconnectNode: (nodeId: string) => Promise<void>;
   /**
@@ -273,7 +274,7 @@ interface SessionTreeStore {
    * @returns 成功连接的节点 ID 列表
    * @throws 如果任何节点连接失败，抛出错误并指出失败点
    */
-  connectNodeWithAncestors: (nodeId: string, options?: { traceMode?: ConnectionTraceMode }) => Promise<string[]>;
+  connectNodeWithAncestors: (nodeId: string, options?: { traceMode?: ConnectionTraceMode; rootUpstreamProxy?: UpstreamProxyForConnect }) => Promise<string[]>;
   /** 级联重连节点及其之前已连接的子节点 */
   reconnectCascade: (nodeId: string, options?: { skipChildren?: boolean }) => Promise<string[]>;
   /** 
@@ -286,7 +287,7 @@ interface SessionTreeStore {
    */
   resetNodeState: (nodeId: string) => Promise<void>;
   /** 内部连接方法（无锁检查，供 connectNodeWithAncestors 使用） */
-  connectNodeInternal: (nodeId: string, trace?: ConnectionTraceRequestContext) => Promise<void>;
+  connectNodeInternal: (nodeId: string, trace?: ConnectionTraceRequestContext, upstreamProxy?: UpstreamProxyForConnect) => Promise<void>;
   
   // ========== Terminal Management (新增) ==========
   /** 为节点创建新终端 */
@@ -723,7 +724,7 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
      * - 锁获取失败：静默返回，不抛异常
      * - 连接失败：回滚状态，释放锁，抛出异常
      */
-    connectNode: async (nodeId: string, options?: { trustHostKey?: boolean; expectedHostKeyFingerprint?: string; traceMode?: ConnectionTraceMode }) => {
+    connectNode: async (nodeId: string, options?: { trustHostKey?: boolean; expectedHostKeyFingerprint?: string; upstreamProxy?: UpstreamProxyForConnect; traceMode?: ConnectionTraceMode }) => {
       const node = get().getRawNode(nodeId);
       if (!node) throw new Error(`Node ${nodeId} not found`);
       
@@ -785,6 +786,7 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
           nodeId,
           trustHostKey: options?.trustHostKey,
           expectedHostKeyFingerprint: options?.expectedHostKeyFingerprint,
+          upstreamProxy: options?.upstreamProxy,
           ...toConnectTraceFields(trace),
         });
         
@@ -1053,7 +1055,7 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
      * @returns 成功连接的节点 ID 列表
      * @throws ConnectionChainError 如果任何节点连接失败
      */
-    connectNodeWithAncestors: async (nodeId: string, options?: { traceMode?: ConnectionTraceMode }): Promise<string[]> => {
+    connectNodeWithAncestors: async (nodeId: string, options?: { traceMode?: ConnectionTraceMode; rootUpstreamProxy?: UpstreamProxyForConnect }): Promise<string[]> => {
       console.debug(`[connectNodeWithAncestors] 📥 ENTRY: connectNodeWithAncestors called for node ${nodeId}`);
       
       // ========== Step 1: 获取链式锁 ==========
@@ -1139,13 +1141,14 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
           
           try {
             // 调用单节点连接（不带锁检查，因为我们已经持有锁）
+            const upstreamProxy = node.parentId ? undefined : options?.rootUpstreamProxy;
             await get().connectNodeInternal(node.id, {
               attemptId,
               mode: traceMode,
               stepIndex: i + 1,
               totalSteps: nodesToConnect.length,
               label: getConnectionTraceLabel(node),
-            });
+            }, upstreamProxy);
             connectedNodeIds.push(node.id);
             
             // 短暂延迟，让后端有时间稳定
@@ -1201,7 +1204,7 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
      * - 不在 finally 中释放锁
      * - 专为批量连接设计
      */
-    connectNodeInternal: async (nodeId: string, trace?: ConnectionTraceRequestContext) => {
+    connectNodeInternal: async (nodeId: string, trace?: ConnectionTraceRequestContext, upstreamProxy?: UpstreamProxyForConnect) => {
       const node = get().getRawNode(nodeId);
       if (!node) throw new Error(`Node ${nodeId} not found`);
       
@@ -1217,7 +1220,7 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
       
       let response: Awaited<ReturnType<typeof api.connectTreeNode>>;
       try {
-        response = await api.connectTreeNode({ nodeId, ...toConnectTraceFields(trace) });
+        response = await api.connectTreeNode({ nodeId, upstreamProxy, ...toConnectTraceFields(trace) });
       } catch (error) {
         if (!isAlreadyConnectedError(error)) {
           throw error;
@@ -1234,7 +1237,7 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
 
         // Refresh tree snapshot before retry to reduce stale state drift.
         await get().fetchTree();
-        response = await api.connectTreeNode({ nodeId, ...toConnectTraceFields(trace) });
+        response = await api.connectTreeNode({ nodeId, upstreamProxy, ...toConnectTraceFields(trace) });
       }
       
       // 更新连接 ID

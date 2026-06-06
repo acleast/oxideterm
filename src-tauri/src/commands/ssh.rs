@@ -562,6 +562,7 @@ pub async fn create_terminal(
         cols: request.cols,
         rows: request.rows,
         agent_forwarding,
+        upstream_proxy: None,
         trust_host_key: None,
         expected_host_key_fingerprint: None,
     };
