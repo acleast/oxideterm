@@ -5351,6 +5351,24 @@ pub async fn test_upstream_proxy_route(
     .await)
 }
 
+#[tauri::command]
+pub async fn resolve_upstream_proxy_for_connect(
+    state: State<'_, Arc<ConfigState>>,
+    policy: SavedUpstreamProxyPolicy,
+) -> Result<Option<UpstreamProxyForConnect>, String> {
+    let app_settings = crate::commands::app_settings::load_current_app_settings_value()
+        .await
+        .ok();
+
+    // This one-shot DTO hydrates use_global/keychain proxy credentials for
+    // unsaved manual connections without storing proxy secrets in tree nodes.
+    Ok(upstream_proxy_to_connect_info(
+        &policy,
+        &state.keychain,
+        app_settings.as_ref(),
+    ))
+}
+
 fn runtime_upstream_proxy_from_connect_info(
     upstream_proxy: UpstreamProxyForConnect,
 ) -> Result<RuntimeUpstreamProxyConfig, String> {

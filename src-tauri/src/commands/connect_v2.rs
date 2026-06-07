@@ -29,6 +29,9 @@ use tracing::{info, warn};
 use super::{ForwardingRegistry, HealthRegistry, ProfilerRegistry};
 use crate::bridge::BridgeManager;
 use crate::commands::config::ConfigState;
+use crate::config::{
+    SavedUpstreamProxyProtocol, UpstreamProxyAuthForConnect, UpstreamProxyForConnect,
+};
 use crate::session::{
     AuthMethod, KeyAuth, SessionConfig, SessionInfo, SessionRegistry, SessionStats,
 };
@@ -36,7 +39,8 @@ use crate::sftp::session::SftpRegistry;
 use crate::ssh::{
     ManagedKeyResolver, ProxyChain, ProxyConnectEndpoint, ProxyConnectEndpointKind,
     ProxyConnectError, ProxyConnectOperation, ProxyHop, SshClient, SshConfig,
-    SshConnectionRegistry, SshError, connect_via_proxy_for_test_with_managed_key_resolver,
+    SshConnectionRegistry, SshError, UpstreamProxyAuth, UpstreamProxyConfig, UpstreamProxyProtocol,
+    connect_via_proxy_for_test_with_managed_key_resolver,
 };
 use zeroize::Zeroizing;
 
@@ -54,6 +58,8 @@ pub struct ConnectRequest {
     pub rows: u32,
     pub name: Option<String>,
     pub proxy_chain: Option<Vec<ProxyChainRequest>>,
+    #[serde(default)]
+    pub upstream_proxy: Option<UpstreamProxyForConnect>,
     #[serde(default)]
     pub trust_host_key: Option<bool>,
     #[serde(default)]
@@ -948,6 +954,36 @@ fn build_proxy_chain(requests: &[ProxyChainRequest]) -> Result<ProxyChain, (usiz
     Ok(chain)
 }
 
+fn build_test_upstream_proxy(
+    upstream_proxy: Option<UpstreamProxyForConnect>,
+) -> Result<Option<UpstreamProxyConfig>, String> {
+    let Some(upstream_proxy) = upstream_proxy else {
+        return Ok(None);
+    };
+
+    let auth = match upstream_proxy.auth {
+        UpstreamProxyAuthForConnect::None => UpstreamProxyAuth::None,
+        UpstreamProxyAuthForConnect::Password { username, password } => {
+            let password = password.ok_or("Upstream proxy password required")?;
+            UpstreamProxyAuth::Password { username, password }
+        }
+    };
+
+    // Test connection must use the same transient proxy payload as real
+    // connection attempts so proxy-only hosts do not report false failures.
+    Ok(Some(UpstreamProxyConfig {
+        protocol: match upstream_proxy.protocol {
+            SavedUpstreamProxyProtocol::Socks5 => UpstreamProxyProtocol::Socks5,
+            SavedUpstreamProxyProtocol::HttpConnect => UpstreamProxyProtocol::HttpConnect,
+        },
+        host: upstream_proxy.host,
+        port: upstream_proxy.port,
+        auth,
+        remote_dns: upstream_proxy.remote_dns,
+        no_proxy: upstream_proxy.no_proxy,
+    }))
+}
+
 /// Test an SSH connection without creating a persistent session.
 ///
 /// Performs the full SSH handshake + authentication, then immediately
@@ -988,6 +1024,19 @@ pub async fn test_connection(
     };
     let managed_key_resolver =
         managed_key_resolver_from_config_state(Arc::clone(config_state.inner()));
+    let upstream_proxy = match build_test_upstream_proxy(request.upstream_proxy.clone()) {
+        Ok(proxy) => proxy,
+        Err(message) => {
+            return Ok(build_failed_test_connection_response(
+                start.elapsed().as_millis() as u64,
+                TestConnectionPhase::Preparation,
+                TestConnectionCategory::ProxyAuthentication,
+                "Upstream proxy configuration is incomplete",
+                message,
+                Some(target_location(&request)),
+            ));
+        }
+    };
 
     let response = if let Some(proxy_chain_requests) = request
         .proxy_chain
@@ -1022,7 +1071,8 @@ pub async fn test_connection(
                     location,
                 ));
             }
-        };
+        }
+        .with_upstream_proxy(upstream_proxy.clone());
 
         match connect_via_proxy_for_test_with_managed_key_resolver(
             &proxy_chain,
@@ -1058,7 +1108,7 @@ pub async fn test_connection(
             cols: request.cols,
             rows: request.rows,
             proxy_chain: None,
-            upstream_proxy: None,
+            upstream_proxy,
             strict_host_key_checking: true,
             trust_host_key: request.trust_host_key,
             expected_host_key_fingerprint: request.expected_host_key_fingerprint.clone(),
@@ -1256,6 +1306,7 @@ mod tests {
                     auth: AuthRequest::Agent,
                 },
             ]),
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };
@@ -1306,6 +1357,7 @@ mod tests {
             rows: default_rows(),
             name: Some("Target".to_string()),
             proxy_chain: None,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };
@@ -1339,6 +1391,7 @@ mod tests {
             rows: default_rows(),
             name: Some("Target".to_string()),
             proxy_chain: None,
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };
@@ -1377,6 +1430,7 @@ mod tests {
                 username: "jump1".to_string(),
                 auth: AuthRequest::Agent,
             }]),
+            upstream_proxy: None,
             trust_host_key: None,
             expected_host_key_fingerprint: None,
         };

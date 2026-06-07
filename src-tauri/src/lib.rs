@@ -606,6 +606,7 @@ pub fn run() {
         commands::tree_drill_down,
         commands::preflight_tree_node,
         commands::config::test_upstream_proxy_route,
+        commands::config::resolve_upstream_proxy_for_connect,
         commands::expand_manual_preset,
         // Auto-route commands (auto-generated from saved connections)
         commands::get_topology_nodes,
@@ -1015,6 +1016,7 @@ pub fn run() {
         commands::add_root_node,
         commands::preflight_tree_node,
         commands::config::test_upstream_proxy_route,
+        commands::config::resolve_upstream_proxy_for_connect,
         commands::tree_drill_down,
         commands::expand_manual_preset,
         // Auto-route commands (auto-generated from saved connections)

@@ -8,6 +8,7 @@ import type {
   TestConnectionRequest,
 } from './api';
 import type { ProxyHopConfig } from '@/types';
+import type { UpstreamProxyForConnect } from '@/types';
 import { findUnsupportedProxyHopAuth } from './proxyHopSupport';
 
 type ManualTestConnectionInput = {
@@ -24,6 +25,7 @@ type ManualTestConnectionInput = {
   trustHostKey?: boolean;
   expectedHostKeyFingerprint?: string;
   proxyChain?: Array<ManualProxyHopInput> | null;
+  upstreamProxy?: UpstreamProxyForConnect | null;
 };
 
 type ManualProxyHopInput = {
@@ -154,6 +156,7 @@ export function buildTestConnectionRequest(
     trust_host_key: input.trustHostKey,
     expected_host_key_fingerprint: input.expectedHostKeyFingerprint,
     proxy_chain: input.proxyChain?.length ? input.proxyChain.map(buildProxyHopRequest) : undefined,
+    upstream_proxy: input.upstreamProxy ?? undefined,
   };
 
   switch (input.authType) {
@@ -245,5 +248,6 @@ export function buildSavedConnectionTestRequest(
     managedKeyId: connection.managed_key_id,
     passphrase: connection.passphrase,
     proxyChain: connection.proxy_chain.map(normalizeProxyHopInput),
+    upstreamProxy: connection.upstream_proxy,
   });
 }

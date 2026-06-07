@@ -26,6 +26,9 @@ use tracing::{debug, info, warn};
 use super::{ForwardingRegistry, HealthRegistry, ProfilerRegistry};
 use crate::agent::AgentRegistry;
 use crate::bridge::{BridgeManager, WsBridge};
+use crate::config::{
+    SavedUpstreamProxyProtocol, UpstreamProxyAuthForConnect, UpstreamProxyForConnect,
+};
 use crate::forwarding::ForwardingManager;
 use crate::session::{
     AuthMethod, ScrollBuffer, SessionConfig, SessionInfo, SessionRegistry, parse_terminal_output,
@@ -33,7 +36,8 @@ use crate::session::{
 use crate::sftp::session::SftpRegistry;
 use crate::ssh::{
     ConnectionInfo, ConnectionPoolConfig, ConnectionSummary, HostKeyStatus, SshConnectionRegistry,
-    accept_host_key, check_host_key, get_host_key_cache, get_known_hosts,
+    UpstreamProxyAuth, UpstreamProxyConfig, UpstreamProxyProtocol, accept_host_key,
+    check_host_key_with_upstream_proxy, get_host_key_cache, get_known_hosts,
 };
 use crate::state::BufferConfig;
 
@@ -1307,6 +1311,8 @@ const PREFLIGHT_TIMEOUT_SECS: u64 = 10;
 pub struct SshPreflightRequest {
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub upstream_proxy: Option<UpstreamProxyForConnect>,
 }
 
 /// SSH 主机密钥预检查响应
@@ -1331,9 +1337,46 @@ pub struct SshPreflightResponse {
 pub async fn ssh_preflight(request: SshPreflightRequest) -> Result<SshPreflightResponse, String> {
     info!("SSH preflight check: {}:{}", request.host, request.port);
 
-    let status = check_host_key(&request.host, request.port, PREFLIGHT_TIMEOUT_SECS).await;
+    let upstream_proxy = build_preflight_upstream_proxy(request.upstream_proxy)?;
+    let status = check_host_key_with_upstream_proxy(
+        &request.host,
+        request.port,
+        PREFLIGHT_TIMEOUT_SECS,
+        upstream_proxy.as_ref(),
+    )
+    .await;
 
     Ok(SshPreflightResponse { status })
+}
+
+fn build_preflight_upstream_proxy(
+    upstream_proxy: Option<UpstreamProxyForConnect>,
+) -> Result<Option<UpstreamProxyConfig>, String> {
+    let Some(upstream_proxy) = upstream_proxy else {
+        return Ok(None);
+    };
+
+    let auth = match upstream_proxy.auth {
+        UpstreamProxyAuthForConnect::None => UpstreamProxyAuth::None,
+        UpstreamProxyAuthForConnect::Password { username, password } => {
+            let password = password.ok_or("Upstream proxy password required")?;
+            UpstreamProxyAuth::Password { username, password }
+        }
+    };
+
+    // Preflight must use the same one-shot proxy payload as the real SSH
+    // connection, otherwise proxy-only hosts fail before connect_tree_node runs.
+    Ok(Some(UpstreamProxyConfig {
+        protocol: match upstream_proxy.protocol {
+            SavedUpstreamProxyProtocol::Socks5 => UpstreamProxyProtocol::Socks5,
+            SavedUpstreamProxyProtocol::HttpConnect => UpstreamProxyProtocol::HttpConnect,
+        },
+        host: upstream_proxy.host,
+        port: upstream_proxy.port,
+        auth,
+        remote_dns: upstream_proxy.remote_dns,
+        no_proxy: upstream_proxy.no_proxy,
+    }))
 }
 
 /// 接受主机密钥请求

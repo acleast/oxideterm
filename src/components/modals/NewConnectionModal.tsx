@@ -47,12 +47,11 @@ import { ManagedSshKeySelector } from './ManagedSshKeySelector';
 import {
   UpstreamProxyPolicyFields,
   defaultSavedUpstreamProxyPolicy,
-  upstreamProxyForConnectFromPolicy,
 } from './UpstreamProxyPolicyFields';
 import { Plus, Trash2, Key, Lock, ChevronDown, ChevronRight, Info, RefreshCw } from 'lucide-react';
 import { useSessionTreeStore } from '../../store/sessionTreeStore';
 import { useToast } from '../../hooks/useToast';
-import type { SavedUpstreamProxyPolicy } from '../../types';
+import type { SavedUpstreamProxyPolicy, UpstreamProxyForConnect } from '../../types';
 import {
   Tooltip,
   TooltipContent,
@@ -134,6 +133,7 @@ export const NewConnectionModal = () => {
   const [postConnectCommand, setPostConnectCommand] = useState('');
   const [connectHostKeyStatus, setConnectHostKeyStatus] = useState<HostKeyStatus | null>(null);
   const [pendingConnectRequest, setPendingConnectRequest] = useState<ConnectFormRequest | null>(null);
+  const [pendingConnectUpstreamProxy, setPendingConnectUpstreamProxy] = useState<UpstreamProxyForConnect | undefined>(undefined);
   const [pendingProxyConnectPlan, setPendingProxyConnectPlan] = useState<SessionTreeConnectPlan | null>(null);
   const [testHostKeyStatus, setTestHostKeyStatus] = useState<HostKeyStatus | null>(null);
   const [pendingTestRequest, setPendingTestRequest] = useState<TestConnectionRequest | null>(null);
@@ -152,7 +152,7 @@ export const NewConnectionModal = () => {
   const currentConnectStep = pendingProxyConnectPlan
     ? pendingProxyConnectPlan.steps[pendingProxyConnectPlan.currentIndex]
     : pendingConnectRequest
-      ? { host: pendingConnectRequest.host, port: pendingConnectRequest.port }
+      ? { host: pendingConnectRequest.host, port: pendingConnectRequest.port, upstreamProxy: pendingConnectUpstreamProxy }
       : null;
 
   const loadSerialPorts = useCallback(async () => {
@@ -201,7 +201,8 @@ export const NewConnectionModal = () => {
 
     setConnectHostKeyStatus(null);
     setPendingConnectRequest(null);
-  setPendingProxyConnectPlan(null);
+    setPendingConnectUpstreamProxy(undefined);
+    setPendingProxyConnectPlan(null);
     toggleModal('newConnection', false);
 
     if (saveConnection) {
@@ -258,17 +259,23 @@ export const NewConnectionModal = () => {
     upstreamProxyPolicy,
   ]);
 
+  const resolveUpstreamProxyForManualConnect = useCallback(async (): Promise<UpstreamProxyForConnect | undefined> => {
+    const proxy = await api.resolveUpstreamProxyForConnect(upstreamProxyPolicy);
+    return proxy ?? undefined;
+  }, [upstreamProxyPolicy]);
+
   const executeConnect = useCallback(async (
     request: ConnectFormRequest,
     options?: { trustHostKey?: boolean; expectedHostKeyFingerprint?: string },
+    upstreamProxy?: UpstreamProxyForConnect,
   ) => {
     const nodeId = await addRootNode(request);
     await connectNode(nodeId, {
       ...options,
-      upstreamProxy: upstreamProxyForConnectFromPolicy(upstreamProxyPolicy),
+      upstreamProxy,
     });
     await finalizeConnectedNode(request, nodeId);
-  }, [addRootNode, connectNode, finalizeConnectedNode, upstreamProxyPolicy]);
+  }, [addRootNode, connectNode, finalizeConnectedNode]);
 
   const continueProxyConnectPlan = useCallback(async (
     request: ConnectFormRequest,
@@ -278,6 +285,7 @@ export const NewConnectionModal = () => {
 
     if (challenge) {
       setPendingConnectRequest(request);
+      setPendingConnectUpstreamProxy(undefined);
       setPendingProxyConnectPlan(challenge.plan);
       setConnectHostKeyStatus(challenge.status);
       return false;
@@ -291,6 +299,7 @@ export const NewConnectionModal = () => {
     const planToCleanup = pendingProxyConnectPlan;
     setConnectHostKeyStatus(null);
     setPendingConnectRequest(null);
+    setPendingConnectUpstreamProxy(undefined);
     setPendingProxyConnectPlan(null);
 
     if (planToCleanup) {
@@ -536,6 +545,7 @@ export const NewConnectionModal = () => {
         agentForwarding,
         postConnectCommand,
       };
+      const upstreamProxy = await resolveUpstreamProxyForManualConnect();
 
       if (proxyServers.length > 0) {
         const expandResult = await expandManualPreset({
@@ -564,6 +574,7 @@ export const NewConnectionModal = () => {
             passphrase: request.passphrase,
             agentForwarding: request.agentForwarding,
           },
+          upstreamProxy,
         });
 
         createdProxyPlan = {
@@ -579,6 +590,7 @@ export const NewConnectionModal = () => {
               nodeId,
               host: endpoint.host,
               port: endpoint.port,
+              upstreamProxy: index === 0 ? upstreamProxy : undefined,
             };
           }),
         };
@@ -588,15 +600,20 @@ export const NewConnectionModal = () => {
         return;
       }
 
-      const preflight = await api.sshPreflight({ host: request.host, port: request.port });
+      const preflight = await api.sshPreflight({
+        host: request.host,
+        port: request.port,
+        upstreamProxy,
+      });
 
       if (preflight.status === 'verified') {
-        await executeConnect(request);
+        await executeConnect(request, undefined, upstreamProxy);
         return;
       }
 
       if (preflight.status === 'unknown' || preflight.status === 'changed') {
         setPendingConnectRequest(request);
+        setPendingConnectUpstreamProxy(upstreamProxy);
         setConnectHostKeyStatus(preflight);
         return;
       }
@@ -627,6 +644,7 @@ export const NewConnectionModal = () => {
     }
     setTesting(true);
     try {
+      const upstreamProxy = await resolveUpstreamProxyForManualConnect();
       const request = buildTestConnectionRequest({
         host,
         port: parseInt(port) || 22,
@@ -649,6 +667,7 @@ export const NewConnectionModal = () => {
           certPath: hop.cert_path,
           passphrase: hop.passphrase,
         })),
+        upstreamProxy,
       });
 
       if (request.proxy_chain?.length) {
@@ -656,7 +675,7 @@ export const NewConnectionModal = () => {
         return;
       }
 
-      const preflight = await api.sshPreflight({ host, port: parseInt(port) || 22 });
+      const preflight = await api.sshPreflight({ host, port: parseInt(port) || 22, upstreamProxy });
 
       if (preflight.status === 'verified') {
         await executeTestConnection(request);
@@ -741,11 +760,12 @@ export const NewConnectionModal = () => {
       await executeConnect(pendingConnectRequest, {
         trustHostKey: persist,
         expectedHostKeyFingerprint: connectHostKeyStatus.fingerprint,
-      });
+      }, pendingConnectUpstreamProxy);
     } catch (e) {
       console.error(e);
       setConnectHostKeyStatus(null);
       setPendingConnectRequest(null);
+      setPendingConnectUpstreamProxy(undefined);
       await cleanupSessionTreeConnectPlan(pendingProxyConnectPlan).catch((cleanupError) => {
         console.warn('Failed to clean up pending proxy plan after accept failure:', cleanupError);
       });
@@ -757,7 +777,8 @@ export const NewConnectionModal = () => {
   };
 
   const handleRemoveChangedHostKey = async () => {
-    if (!testHostKeyStatus || testHostKeyStatus.status !== 'changed') {
+    const testRequest = pendingTestRequest;
+    if (!testRequest || !testHostKeyStatus || testHostKeyStatus.status !== 'changed') {
       return;
     }
 
@@ -770,7 +791,11 @@ export const NewConnectionModal = () => {
         keyType: testHostKeyStatus.keyType,
         expectedFingerprint: testHostKeyStatus.expectedFingerprint,
       });
-      const preflight = await api.sshPreflight({ host, port: currentPort });
+      const preflight = await api.sshPreflight({
+        host,
+        port: currentPort,
+        upstreamProxy: testRequest.upstream_proxy,
+      });
       setTestHostKeyStatus(preflight);
     } catch (e) {
       toastError(t('modals.new_connection.test_failed'), String(e));
@@ -796,6 +821,7 @@ export const NewConnectionModal = () => {
       const preflight = await api.sshPreflight({
         host: currentConnectStep.host,
         port: currentConnectStep.port,
+        upstreamProxy: currentConnectStep.upstreamProxy ?? pendingConnectUpstreamProxy,
       });
 
       if (pendingProxyConnectPlan) {
@@ -817,7 +843,7 @@ export const NewConnectionModal = () => {
           return;
         }
 
-        await executeConnect(request);
+        await executeConnect(request, undefined, pendingConnectUpstreamProxy);
         return;
       }
 

@@ -389,7 +389,11 @@ export const SessionManagerPanel = () => {
       return;
     }
 
-    const preflight = await api.sshPreflight({ host: request.host, port: request.port });
+    const preflight = await api.sshPreflight({
+      host: request.host,
+      port: request.port,
+      upstreamProxy: request.upstream_proxy,
+    });
 
     if (preflight.status === 'verified') {
       await runTestConnection(label, request);
@@ -508,6 +512,7 @@ export const SessionManagerPanel = () => {
       const preflight = await api.sshPreflight({
         host: pendingTestConnection.request.host,
         port: pendingTestConnection.request.port,
+        upstreamProxy: pendingTestConnection.request.upstream_proxy,
       });
 
       setTestHostKeyStatus(preflight);

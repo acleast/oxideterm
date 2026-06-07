@@ -238,6 +238,7 @@ export interface ConnectionPoolStats {
 export interface SshPreflightRequest {
   host: string;
   port: number;
+  upstreamProxy?: UpstreamProxyForConnect;
 }
 
 /**

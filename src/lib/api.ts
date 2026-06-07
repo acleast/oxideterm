@@ -54,6 +54,7 @@ import {
   SearchOptions,
   ArchiveHealthSnapshot,
   ConnectPresetChainRequest,
+  SavedUpstreamProxyPolicy,
   UpstreamProxyForConnect,
   StartTerminalHistorySearchResponse,
   TerminalHistorySearchResultsResponse,
@@ -175,6 +176,7 @@ type TestConnectionRequestOptions = {
   trust_host_key?: boolean;
   expected_host_key_fingerprint?: string;
   proxy_chain?: TestConnectionProxyHop[];
+  upstream_proxy?: UpstreamProxyForConnect;
 };
 
 export type TestConnectionProxyHop =
@@ -2249,6 +2251,13 @@ export const api = {
   ): Promise<import('../types').HostKeyStatus> => {
     if (USE_MOCK) return { status: 'verified' };
     return invoke('test_upstream_proxy_route', { request });
+  },
+
+  resolveUpstreamProxyForConnect: async (
+    policy: SavedUpstreamProxyPolicy,
+  ): Promise<UpstreamProxyForConnect | null> => {
+    if (USE_MOCK) return null;
+    return invoke('resolve_upstream_proxy_for_connect', { policy });
   },
 
   /**
