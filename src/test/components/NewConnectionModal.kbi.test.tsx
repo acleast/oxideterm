@@ -7,6 +7,8 @@ const apiMocks = vi.hoisted(() => ({
   isAgentAvailable: vi.fn().mockResolvedValue(true),
   saveConnection: vi.fn(),
   sshPreflight: vi.fn(),
+  // These modal tests exercise direct connects unless a case explicitly supplies a proxy chain.
+  resolveUpstreamProxyForConnect: vi.fn().mockResolvedValue(null),
   serialListPorts: vi.fn(),
   saveSerialProfile: vi.fn(),
 }));
@@ -78,6 +80,7 @@ describe('NewConnectionModal terminal creation flow', () => {
     apiMocks.getGroups.mockResolvedValue([]);
     apiMocks.isAgentAvailable.mockResolvedValue(true);
     apiMocks.sshPreflight.mockResolvedValue({ status: 'verified' });
+    apiMocks.resolveUpstreamProxyForConnect.mockResolvedValue(null);
     apiMocks.serialListPorts.mockResolvedValue([]);
     apiMocks.saveSerialProfile.mockResolvedValue({ id: 'profile-1' });
     sessionTreeState.addRootNode.mockResolvedValue('node-kbi');
@@ -125,7 +128,7 @@ describe('NewConnectionModal terminal creation flow', () => {
       }));
     });
     await waitFor(() => {
-      expect(sessionTreeState.connectNode).toHaveBeenCalledWith('node-kbi', undefined);
+      expect(sessionTreeState.connectNode).toHaveBeenCalledWith('node-kbi', { upstreamProxy: undefined });
       expect(sessionTreeState.createTerminalForNode).toHaveBeenCalledWith('node-kbi', 120, 40);
       expect(appStoreState.createTab).toHaveBeenCalledWith('terminal', 'term-kbi');
       expect(appStoreState.toggleModal).toHaveBeenCalledWith('newConnection', false);
@@ -159,7 +162,7 @@ describe('NewConnectionModal terminal creation flow', () => {
         authType: 'password',
         password: 'secret',
       }));
-      expect(sessionTreeState.connectNode).toHaveBeenCalledWith('node-password', undefined);
+      expect(sessionTreeState.connectNode).toHaveBeenCalledWith('node-password', { upstreamProxy: undefined });
       expect(sessionTreeState.createTerminalForNode).toHaveBeenCalledWith('node-password', 120, 40);
       expect(appStoreState.createTab).toHaveBeenCalledWith('terminal', 'term-password');
     });

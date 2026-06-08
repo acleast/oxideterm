@@ -543,7 +543,7 @@ describe('sessionTreeStore', () => {
       stepIndex: 1,
       totalSteps: 1,
       label: 'Example',
-    }));
+    }), undefined);
     expect(apiMocks.updateTreeNodeState).toHaveBeenCalledWith('leaf', 'failed', 'boom');
     expect(fetchTree).toHaveBeenCalled();
     expect(useSessionTreeStore.getState().isConnectingChain).toBe(false);

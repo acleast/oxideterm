@@ -8,6 +8,8 @@ const apiMocks = vi.hoisted(() => ({
   isAgentAvailable: vi.fn().mockResolvedValue(true),
   sshPreflight: vi.fn(),
   preflightTreeNode: vi.fn(),
+  // These modal tests exercise direct connects unless a case explicitly supplies a proxy chain.
+  resolveUpstreamProxyForConnect: vi.fn().mockResolvedValue(null),
   sshRemoveHostKey: vi.fn().mockResolvedValue(undefined),
   testConnection: vi.fn(),
 }));
@@ -117,6 +119,7 @@ describe('NewConnectionModal host key flows', () => {
     appStoreState.quickConnectData = null;
     apiMocks.getGroups.mockResolvedValue([]);
     apiMocks.isAgentAvailable.mockResolvedValue(true);
+    apiMocks.resolveUpstreamProxyForConnect.mockResolvedValue(null);
     apiMocks.preflightTreeNode.mockResolvedValue({ status: 'verified' });
     sessionTreeState.addRootNode.mockResolvedValue('node-1');
     sessionTreeState.connectNode.mockResolvedValue(undefined);
