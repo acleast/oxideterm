@@ -53,7 +53,8 @@
     },
     "macOS": {
       "infoPlist": "Info.plist",
-      "minimumSystemVersion": "10.13"
+      "minimumSystemVersion": "10.13",
+      "signingIdentity": "-"
     },
     "createUpdaterArtifacts": true,
     "resources": [
