@@ -8,11 +8,12 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { Activity, ArrowDownToLine, ArrowRight, BookOpen, CheckCircle2, ExternalLink, FolderOpen, Github, HelpCircle, Keyboard, Loader2, RefreshCw, RotateCw, Shield, SkipForward, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { getFontFamilyCSS } from '@/components/fileManager/fontUtils';
 import { useUpdateStore } from '@/store/updateStore';
-import { useSettingsStore, type UpdateChannel } from '@/store/settingsStore';
+import { useSettingsStore, type UpdateChannel, type UpdateProxyMode, type UpdateProxyProtocol } from '@/store/settingsStore';
 import { api } from '@/lib/api';
 import { platform } from '@/lib/platform';
 import { getShortcutCategories } from '@/lib/shortcuts';
@@ -65,6 +66,7 @@ export const HelpAboutSection = ({ isPortableMode = null }: HelpAboutSectionProp
     const [memoryDiagnosticsOpen, setMemoryDiagnosticsOpen] = useState(false);
     const updater = useUpdateStore();
     const updateChannel = useSettingsStore((state) => state.settings.general.updateChannel);
+    const updateProxy = useSettingsStore((state) => state.settings.general.updateProxy);
     const updateGeneral = useSettingsStore((state) => state.updateGeneral);
 
     useEffect(() => {
@@ -77,6 +79,9 @@ export const HelpAboutSection = ({ isPortableMode = null }: HelpAboutSectionProp
     const terminalFontCSS = fontFamily === 'custom' && customFontFamily
         ? customFontFamily
         : getFontFamilyCSS(fontFamily);
+    const patchUpdateProxy = (patch: Partial<typeof updateProxy>) => {
+        updateGeneral('updateProxy', { ...updateProxy, ...patch });
+    };
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -145,6 +150,77 @@ export const HelpAboutSection = ({ isPortableMode = null }: HelpAboutSectionProp
                             <p className="mt-2 text-sm leading-6 text-theme-text-muted">
                                 {t('settings_view.help.gpui_preview_hint')}
                             </p>
+                        </div>
+                    )}
+                    {isPortableMode === false && (
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <span className="text-theme-text-muted">{t('settings_view.help.update_proxy')}</span>
+                                <p className="text-xs text-theme-text-muted/60 mt-0.5">{t('settings_view.help.update_proxy_hint')}</p>
+                                <p className="text-xs text-theme-text-muted/60 mt-0.5">{t('settings_view.help.update_proxy_legal_hint')}</p>
+                            </div>
+                            <Select
+                                value={updateProxy.mode}
+                                onValueChange={(value) => patchUpdateProxy({ mode: value as UpdateProxyMode })}
+                            >
+                                <SelectTrigger className="w-[148px]">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="direct">{t('settings_view.help.update_proxy_mode_direct')}</SelectItem>
+                                    <SelectItem value="system">{t('settings_view.help.update_proxy_mode_system')}</SelectItem>
+                                    <SelectItem value="custom">{t('settings_view.help.update_proxy_mode_custom')}</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    )}
+                    {isPortableMode === false && updateProxy.mode === 'custom' && (
+                        <div className="grid gap-3 rounded-md border border-theme-border/50 bg-theme-bg/35 p-3 sm:grid-cols-2">
+                            <div className="grid gap-1.5">
+                                <span className="text-xs text-theme-text-muted">{t('settings_view.help.update_proxy_protocol')}</span>
+                                <Select
+                                    value={updateProxy.protocol}
+                                    onValueChange={(value) => patchUpdateProxy({ protocol: value as UpdateProxyProtocol })}
+                                >
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="http">{t('settings_view.help.update_proxy_protocol_http')}</SelectItem>
+                                        <SelectItem value="https">{t('settings_view.help.update_proxy_protocol_https')}</SelectItem>
+                                        <SelectItem value="socks5">{t('settings_view.help.update_proxy_protocol_socks5')}</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="grid gap-1.5">
+                                <span className="text-xs text-theme-text-muted">{t('settings_view.help.update_proxy_port')}</span>
+                                <Input
+                                    type="number"
+                                    min={1}
+                                    max={65535}
+                                    value={updateProxy.port}
+                                    onChange={(event) => {
+                                        const value = Number.parseInt(event.target.value, 10);
+                                        patchUpdateProxy({ port: Number.isFinite(value) ? Math.min(65535, Math.max(1, value)) : 7890 });
+                                    }}
+                                />
+                            </div>
+                            <div className="grid gap-1.5">
+                                <span className="text-xs text-theme-text-muted">{t('settings_view.help.update_proxy_host')}</span>
+                                <Input
+                                    value={updateProxy.host}
+                                    onChange={(event) => patchUpdateProxy({ host: event.target.value })}
+                                    placeholder="127.0.0.1"
+                                />
+                            </div>
+                            <div className="grid gap-1.5">
+                                <span className="text-xs text-theme-text-muted">{t('settings_view.help.update_proxy_no_proxy')}</span>
+                                <Input
+                                    value={updateProxy.noProxy}
+                                    onChange={(event) => patchUpdateProxy({ noProxy: event.target.value })}
+                                    placeholder="localhost,127.0.0.1"
+                                />
+                            </div>
                         </div>
                     )}
                 </div>

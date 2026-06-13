@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 import { invoke } from '@tauri-apps/api/core';
+import type { UpdateProxySettings } from '../store/settingsStore';
 import {
   createUnavailableTrzszCapabilities,
   type TrzszCapabilitiesDto,
@@ -2876,15 +2877,15 @@ export const api = {
   // ── Update (Resumable Install) ──────────────────────────────────────
 
   /** Check for update with channel-aware endpoint */
-  updateCheckWithChannel: async (channel?: string): Promise<{ version: string; currentVersion: string; body: string | null; date: string | null } | null> => {
+  updateCheckWithChannel: async (channel?: string, updateProxy?: UpdateProxySettings): Promise<{ version: string; currentVersion: string; body: string | null; date: string | null } | null> => {
     if (USE_MOCK) return null;
-    return invoke<{ version: string; currentVersion: string; body: string | null; date: string | null } | null>('update_check_with_channel', { channel });
+    return invoke<{ version: string; currentVersion: string; body: string | null; date: string | null } | null>('update_check_with_channel', { channel, updateProxy });
   },
 
   /** Start a resumable update install */
-  updateStartResumableInstall: async (expectedVersion: string, channel?: string): Promise<string> => {
+  updateStartResumableInstall: async (expectedVersion: string, channel?: string, updateProxy?: UpdateProxySettings): Promise<string> => {
     if (USE_MOCK) return 'mock-task-id';
-    return invoke<string>('update_start_resumable_install', { expectedVersion, channel });
+    return invoke<string>('update_start_resumable_install', { expectedVersion, channel, updateProxy });
   },
 
   /** Cancel a resumable update install */

@@ -213,10 +213,21 @@ export type Language = 'zh-CN' | 'en' | 'fr-FR' | 'ja' | 'es-ES' | 'pt-BR' | 'vi
 
 /** General settings */
 export type UpdateChannel = 'stable' | 'beta' | 'gpui-preview';
+export type UpdateProxyMode = 'direct' | 'system' | 'custom';
+export type UpdateProxyProtocol = 'http' | 'https' | 'socks5';
+
+export interface UpdateProxySettings {
+  mode: UpdateProxyMode;
+  protocol: UpdateProxyProtocol;
+  host: string;
+  port: number;
+  noProxy: string;
+}
 
 export interface GeneralSettings {
   language: Language;
   updateChannel: UpdateChannel;
+  updateProxy: UpdateProxySettings;
 }
 
 /** Terminal background image fit mode */
@@ -539,6 +550,13 @@ const isWindows = platform.isWindows;
 const defaultGeneralSettings: GeneralSettings = {
   language: 'zh-CN',  // Default to Chinese
   updateChannel: getDefaultUpdateChannel(),
+  updateProxy: {
+    mode: 'direct',
+    protocol: 'http',
+    host: '127.0.0.1',
+    port: 7890,
+    noProxy: '',
+  },
 };
 
 const defaultTerminalSettings: TerminalSettings = {
@@ -809,6 +827,24 @@ function normalizeTerminalSettings(settings: TerminalSettings): TerminalSettings
   };
 }
 
+function normalizeUpdateProxySettings(value: Partial<UpdateProxySettings> | undefined): UpdateProxySettings {
+  const mode = value?.mode === 'system' || value?.mode === 'custom' || value?.mode === 'direct'
+    ? value.mode
+    : defaultGeneralSettings.updateProxy.mode;
+  const protocol = value?.protocol === 'https' || value?.protocol === 'socks5' || value?.protocol === 'http'
+    ? value.protocol
+    : defaultGeneralSettings.updateProxy.protocol;
+  return {
+    ...defaultGeneralSettings.updateProxy,
+    ...value,
+    mode,
+    protocol,
+    port: clampFiniteInteger(value?.port, defaultGeneralSettings.updateProxy.port, 1, 65_535),
+    host: typeof value?.host === 'string' ? value.host : defaultGeneralSettings.updateProxy.host,
+    noProxy: typeof value?.noProxy === 'string' ? value.noProxy : '',
+  };
+}
+
 function normalizeBufferSettings(settings: BufferSettings): BufferSettings {
   return {
     ...settings,
@@ -994,6 +1030,7 @@ export function mergeWithDefaults(saved: OxidePartialSettingsSnapshot | Partial<
       ...saved.general,
       updateChannel: normalizeUpdateChannel(saved.general?.updateChannel)
         ?? defaults.general.updateChannel,
+      updateProxy: normalizeUpdateProxySettings(saved.general?.updateProxy),
     },
     terminal: {
       ...defaults.terminal,
@@ -2067,7 +2104,7 @@ const TERMINAL_BEHAVIOR_KEYS: Array<keyof TerminalSettings> = [
   'inBandTransfer',
 ];
 
-const GENERAL_KEYS: Array<keyof GeneralSettings> = ['language', 'updateChannel'];
+const GENERAL_KEYS: Array<keyof GeneralSettings> = ['language', 'updateChannel', 'updateProxy'];
 const APPEARANCE_KEYS: Array<keyof AppearanceSettings> = ['sidebarCollapsedDefault', 'uiDensity', 'borderRadius', 'uiFontFamily', 'animationSpeed', 'frostedGlass'];
 const CONNECTION_DEFAULT_KEYS: Array<keyof ConnectionDefaults> = ['username', 'port'];
 const AI_KEYS: Array<keyof AiSettings> = [

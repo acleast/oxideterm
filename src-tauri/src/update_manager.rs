@@ -10,11 +10,11 @@ use crate::config::{is_portable_mode, portable_aware_app_data_dir};
 use base64::Engine as _;
 use futures_util::StreamExt;
 use minisign_verify::{PublicKey, Signature};
-use reqwest::StatusCode;
 use reqwest::header::{
     ACCEPT, ACCEPT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, ETAG, HeaderValue, IF_RANGE,
     IF_UNMODIFIED_SINCE, LAST_MODIFIED, RANGE,
 };
+use reqwest::{NoProxy, Proxy, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -207,6 +207,32 @@ const BETA_ENDPOINT: &str =
     "https://github.com/AnalyseDeCircuit/oxideterm/releases/download/updater-beta/latest.json";
 const GPUI_PREVIEW_ENDPOINT: &str = "https://github.com/AnalyseDeCircuit/oxideterm/releases/download/updater-gpui-preview/latest.json";
 
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpdateProxyMode {
+    Direct,
+    System,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpdateProxyProtocol {
+    Http,
+    Https,
+    Socks5,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProxySettings {
+    pub mode: UpdateProxyMode,
+    pub protocol: UpdateProxyProtocol,
+    pub host: String,
+    pub port: u16,
+    pub no_proxy: String,
+}
+
 /// Build an `Updater` for the given channel.
 /// `"stable"` uses the config-default endpoint; `"beta"` and `"gpui-preview"`
 /// override to channel-specific release assets. Keep GPUI preview separate so
@@ -214,6 +240,7 @@ const GPUI_PREVIEW_ENDPOINT: &str = "https://github.com/AnalyseDeCircuit/oxidete
 fn build_updater_for_channel(
     app: &AppHandle,
     channel: Option<&str>,
+    update_proxy: Option<&UpdateProxySettings>,
 ) -> Result<tauri_plugin_updater::Updater, UpdateError> {
     if is_portable_mode().map_err(|e| UpdateError::General(e.to_string()))? {
         return Err(UpdateError::General(
@@ -239,9 +266,98 @@ fn build_updater_for_channel(
             ])
             .map_err(|e| UpdateError::General(format!("set update endpoint failed: {e}")))?;
     }
+    builder = apply_update_proxy_to_updater_builder(builder, update_proxy)?;
     builder
         .build()
         .map_err(|e| UpdateError::General(format!("build updater failed: {e}")))
+}
+
+fn apply_update_proxy_to_updater_builder(
+    builder: tauri_plugin_updater::UpdaterBuilder,
+    update_proxy: Option<&UpdateProxySettings>,
+) -> Result<tauri_plugin_updater::UpdaterBuilder, UpdateError> {
+    let Some(update_proxy) = update_proxy else {
+        return Ok(builder.no_proxy());
+    };
+
+    match update_proxy.mode {
+        UpdateProxyMode::Direct => Ok(builder.no_proxy()),
+        UpdateProxyMode::System => Ok(builder),
+        UpdateProxyMode::Custom => {
+            let proxy = build_tauri_update_proxy(update_proxy)?;
+            Ok(builder.configure_client(move |client| {
+                // Custom update proxy must not be mixed with environment proxy
+                // variables, otherwise the visible setting is not authoritative.
+                client.no_proxy().proxy(proxy.clone())
+            }))
+        }
+    }
+}
+
+fn build_tauri_update_proxy(
+    update_proxy: &UpdateProxySettings,
+) -> Result<reqwest13::Proxy, UpdateError> {
+    let proxy_url = update_proxy_url(update_proxy)?;
+    let mut proxy = reqwest13::Proxy::all(proxy_url.as_str())
+        .map_err(|err| UpdateError::General(format!("build update proxy failed: {err}")))?;
+    if !update_proxy.no_proxy.trim().is_empty() {
+        proxy = proxy.no_proxy(reqwest13::NoProxy::from_string(&update_proxy.no_proxy));
+    }
+    Ok(proxy)
+}
+
+fn build_update_http_client(
+    update_proxy: Option<&UpdateProxySettings>,
+) -> Result<reqwest::Client, UpdateError> {
+    let mut builder =
+        reqwest::Client::builder().timeout(Duration::from_millis(DOWNLOAD_TIMEOUT_MS));
+
+    match update_proxy.map(|settings| settings.mode) {
+        None | Some(UpdateProxyMode::Direct) => {
+            builder = builder.no_proxy();
+        }
+        Some(UpdateProxyMode::System) => {}
+        Some(UpdateProxyMode::Custom) => {
+            let proxy =
+                build_update_proxy(update_proxy.expect("custom update proxy mode has settings"))?;
+            builder = builder.no_proxy().proxy(proxy);
+        }
+    }
+
+    builder
+        .build()
+        .map_err(|err| UpdateError::Network(format!("build http client failed: {err}")))
+}
+
+fn build_update_proxy(update_proxy: &UpdateProxySettings) -> Result<Proxy, UpdateError> {
+    let proxy_url = update_proxy_url(update_proxy)?;
+    let mut proxy = Proxy::all(proxy_url.as_str())
+        .map_err(|err| UpdateError::General(format!("build update proxy failed: {err}")))?;
+    if !update_proxy.no_proxy.trim().is_empty() {
+        proxy = proxy.no_proxy(NoProxy::from_string(&update_proxy.no_proxy));
+    }
+    Ok(proxy)
+}
+
+fn update_proxy_url(update_proxy: &UpdateProxySettings) -> Result<String, UpdateError> {
+    let host = update_proxy.host.trim();
+    if host.is_empty() {
+        return Err(UpdateError::General(
+            "update proxy host is empty".to_string(),
+        ));
+    }
+    if update_proxy.port == 0 {
+        return Err(UpdateError::General(
+            "update proxy port is invalid".to_string(),
+        ));
+    }
+    let scheme = match update_proxy.protocol {
+        UpdateProxyProtocol::Http => "http",
+        UpdateProxyProtocol::Https => "https",
+        // Use socks5h so update hostnames are resolved by the proxy.
+        UpdateProxyProtocol::Socks5 => "socks5h",
+    };
+    Ok(format!("{scheme}://{host}:{}", update_proxy.port))
 }
 
 // ── Commands ────────────────────────────────────────────────
@@ -260,8 +376,9 @@ pub struct UpdateCheckResult {
 pub async fn update_check_with_channel(
     app: AppHandle,
     channel: Option<String>,
+    update_proxy: Option<UpdateProxySettings>,
 ) -> Result<Option<UpdateCheckResult>, UpdateError> {
-    let updater = build_updater_for_channel(&app, channel.as_deref())?;
+    let updater = build_updater_for_channel(&app, channel.as_deref(), update_proxy.as_ref())?;
     let update = updater
         .check()
         .await
@@ -281,8 +398,9 @@ pub async fn update_start_resumable_install(
     manager_state: State<'_, UpdateManagerState>,
     expected_version: Option<String>,
     channel: Option<String>,
+    update_proxy: Option<UpdateProxySettings>,
 ) -> Result<String, UpdateError> {
-    let updater = build_updater_for_channel(&app, channel.as_deref())?;
+    let updater = build_updater_for_channel(&app, channel.as_deref(), update_proxy.as_ref())?;
     let update = updater
         .check()
         .await
@@ -356,6 +474,7 @@ pub async fn update_start_resumable_install(
     let app_handle = app.clone();
     let runtime_state = manager_state.inner.clone();
     let task_id_for_task = task_id.clone();
+    let update_proxy_for_task = update_proxy.clone();
     tauri::async_runtime::spawn(async move {
         let result = run_update_task(
             app_handle.clone(),
@@ -364,6 +483,7 @@ pub async fn update_start_resumable_install(
             persisted_state,
             update,
             is_resumed,
+            update_proxy_for_task,
         )
         .await;
 
@@ -527,6 +647,7 @@ async fn run_update_task(
     mut persisted: PersistedUpdateState,
     update: Update,
     is_resumed: bool,
+    update_proxy: Option<UpdateProxySettings>,
 ) -> Result<(), UpdateError> {
     persisted.status.stage = UpdateStage::Downloading;
     persisted.status.status = UpdateStage::Downloading;
@@ -546,8 +667,14 @@ async fn run_update_task(
     )
     .await?;
 
-    let package_bytes =
-        download_with_retries(&app, runtime_state.clone(), &version_dir, &mut persisted).await?;
+    let package_bytes = download_with_retries(
+        &app,
+        runtime_state.clone(),
+        &version_dir,
+        &mut persisted,
+        update_proxy.as_ref(),
+    )
+    .await?;
 
     ensure_task_not_cancelled(runtime_state.clone(), &persisted.status.task_id).await?;
 
@@ -630,6 +757,7 @@ async fn download_with_retries(
     runtime_state: Arc<Mutex<UpdateManagerRuntime>>,
     version_dir: &Path,
     persisted: &mut PersistedUpdateState,
+    update_proxy: Option<&UpdateProxySettings>,
 ) -> Result<Vec<u8>, UpdateError> {
     let part_path = version_dir.join(PART_FILE_NAME);
     let mut next_attempt = persisted.status.attempt.max(1);
@@ -660,6 +788,7 @@ async fn download_with_retries(
             persisted,
             &part_path,
             version_dir,
+            update_proxy,
         )
         .await;
         match result {
@@ -696,11 +825,9 @@ async fn download_once(
     persisted: &mut PersistedUpdateState,
     part_path: &Path,
     version_dir: &Path,
+    update_proxy: Option<&UpdateProxySettings>,
 ) -> Result<(), UpdateError> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(DOWNLOAD_TIMEOUT_MS))
-        .build()
-        .map_err(|err| UpdateError::Network(format!("build http client failed: {err}")))?;
+    let client = build_update_http_client(update_proxy)?;
 
     let existing_len = tokio::fs::metadata(part_path)
         .await

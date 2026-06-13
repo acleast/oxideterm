@@ -5,13 +5,12 @@
  * Update Store — Zustand store with persist for resumable updater.
  *
  * Manages the full update lifecycle: check → download → verify → install → restart.
- * Supports resumable downloads via Rust backend, with graceful fallback to legacy plugin.
+ * Supports resumable downloads via Rust backend.
  */
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { api } from '@/lib/api';
-import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { retryWithExponentialBackoff } from '@/lib/retry';
@@ -115,7 +114,6 @@ type UpdateState = PersistedState & {
 
 // ── Store ───────────────────────────────────────────────────
 
-let _updateRef: Update | null = null;
 let _autoCheckTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Sliding window for download speed calculation (3-second window)
@@ -152,54 +150,6 @@ function resetSpeedMetrics() {
   _speedSamples = [];
 }
 
-type SetFn = (partial: Partial<UpdateState>) => void;
-type GetFn = () => UpdateState;
-
-/** Legacy fallback: download via plugin-updater when resumable backend is unavailable */
-async function legacyDownload(set: SetFn, get: GetFn) {
-  const update = _updateRef;
-  if (!update) {
-    set({ stage: 'error', errorMessage: 'No update reference available' });
-    return;
-  }
-
-  resetSpeedMetrics();
-  set({ stage: 'downloading', downloadedBytes: 0, totalBytes: null, downloadSpeed: 0, etaSeconds: null });
-  try {
-    let totalLen = 0;
-    let downloaded = 0;
-    await update.downloadAndInstall((event) => {
-      if (event.event === 'Started') {
-        totalLen = event.data.contentLength ?? 0;
-        set({ totalBytes: totalLen || null });
-      } else if (event.event === 'Progress') {
-        downloaded += event.data.chunkLength;
-        const metrics = updateSpeedMetrics(downloaded, totalLen || null);
-        set({ downloadedBytes: downloaded, ...metrics });
-      } else if (event.event === 'Finished') {
-        set({ downloadedBytes: totalLen, stage: 'ready', downloadSpeed: 0, etaSeconds: null });
-      }
-    });
-    // Fallback if Finished event didn't fire
-    if (get().stage !== 'ready') {
-      set({ stage: 'ready', downloadedBytes: totalLen });
-    }
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    set({
-      stage: 'error',
-      errorMessage,
-    });
-    pushNotification({
-      kind: 'update',
-      severity: 'error',
-      title: i18n.t('settings_view.help.update_error'),
-      body: errorMessage,
-      dedupeKey: `update-error:${get().newVersion ?? 'unknown'}`,
-    });
-  }
-}
-
 export const useUpdateStore = create<UpdateState>()(
   persist(
     (set, get) => ({
@@ -229,77 +179,40 @@ export const useUpdateStore = create<UpdateState>()(
         const silent = opts?.silent ?? false;
         set({ stage: 'checking', errorMessage: null });
 
-        const channel = useSettingsStore.getState().settings.general.updateChannel;
+        const { updateChannel: channel, updateProxy } = useSettingsStore.getState().settings.general;
 
         try {
-          // Non-stable channels use Rust-side endpoint selection so Tauri beta
-          // and GPUI preview manifests remain separate release lanes.
-          if (channel !== 'stable') {
-            const result = await retryWithExponentialBackoff(
-              () => api.updateCheckWithChannel(channel),
-              { maxRetries: 2, baseDelayMs: 2000 },
-            );
-            _updateRef = null; // No plugin Update object for channel override.
-            if (result) {
-              const { skippedVersion } = get();
-              if (silent && skippedVersion === result.version) {
-                set({ stage: 'idle', lastCheckedAt: Date.now() });
-                return;
-              }
-              set({
-                stage: 'available',
-                newVersion: result.version,
-                currentVersion: result.currentVersion,
-                releaseBody: result.body ?? null,
-                releaseDate: result.date ?? null,
-                lastCheckedAt: Date.now(),
-              });
-              pushNotification({
-                kind: 'update',
-                severity: 'info',
-                title: i18n.t('settings_view.help.update_available'),
-                body: `v${result.version}`,
-                dedupeKey: `update-available:${result.version}`,
-                preserveReadStatusOnDedupe: true,
-                actions: [makeDownloadAction()],
-              });
-            } else {
-              set({ stage: 'up-to-date', lastCheckedAt: Date.now() });
+          // Use the Rust-side updater for every channel so the update proxy
+          // setting applies consistently to stable, beta, and GPUI preview.
+          const result = await retryWithExponentialBackoff(
+            () => api.updateCheckWithChannel(channel, updateProxy),
+            { maxRetries: 2, baseDelayMs: 2000 },
+          );
+          if (result) {
+            const { skippedVersion } = get();
+            if (silent && skippedVersion === result.version) {
+              set({ stage: 'idle', lastCheckedAt: Date.now() });
+              return;
             }
+            set({
+              stage: 'available',
+              newVersion: result.version,
+              currentVersion: result.currentVersion,
+              releaseBody: result.body ?? null,
+              releaseDate: result.date ?? null,
+              lastCheckedAt: Date.now(),
+            });
+            pushNotification({
+              kind: 'update',
+              severity: 'info',
+              title: i18n.t('settings_view.help.update_available'),
+              body: `v${result.version}`,
+              dedupeKey: `update-available:${result.version}`,
+              preserveReadStatusOnDedupe: true,
+              actions: [makeDownloadAction()],
+            });
           } else {
-            const update = await retryWithExponentialBackoff(
-              () => check(),
-              { maxRetries: 2, baseDelayMs: 2000 },
-            );
-
-            if (update) {
-              _updateRef = update;
-              const { skippedVersion } = get();
-              if (silent && skippedVersion === update.version) {
-                set({ stage: 'idle', lastCheckedAt: Date.now() });
-                return;
-              }
-              set({
-                stage: 'available',
-                newVersion: update.version,
-                currentVersion: update.currentVersion,
-                releaseBody: update.body ?? null,
-                releaseDate: update.date ?? null,
-                lastCheckedAt: Date.now(),
-              });
-              pushNotification({
-                kind: 'update',
-                severity: 'info',
-                title: i18n.t('settings_view.help.update_available'),
-                body: `v${update.version}`,
-                dedupeKey: `update-available:${update.version}`,
-                preserveReadStatusOnDedupe: true,
-                actions: [makeDownloadAction()],
-              });
-            } else {
-              _updateRef = null;
-              set({ stage: 'up-to-date', lastCheckedAt: Date.now() });
-            }
+            set({ stage: 'up-to-date', lastCheckedAt: Date.now() });
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -350,22 +263,15 @@ export const useUpdateStore = create<UpdateState>()(
         });
 
         try {
-          const channel = useSettingsStore.getState().settings.general.updateChannel;
-          const taskId = await api.updateStartResumableInstall(newVersion, channel !== 'stable' ? channel : undefined);
+          const { updateChannel: channel, updateProxy } = useSettingsStore.getState().settings.general;
+          const taskId = await api.updateStartResumableInstall(newVersion, channel, updateProxy);
           set({ resumableTaskId: taskId });
           // Progress will be tracked via event listener
         } catch (err) {
-          // Beta channel has no legacy fallback (no plugin Update reference)
-          if (!_updateRef) {
-            set({
-              stage: 'error',
-              errorMessage: err instanceof Error ? err.message : String(err),
-            });
-            return;
-          }
-          // Resumable backend not available — fallback to legacy plugin
-          console.warn('[update] Resumable install failed, falling back to legacy:', err);
-          await legacyDownload(set, get);
+          set({
+            stage: 'error',
+            errorMessage: err instanceof Error ? err.message : String(err),
+          });
         }
       },
 
