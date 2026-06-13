@@ -18,6 +18,7 @@ serde_json = "1"
 dirs = "6"
 termimad = "0.30"
 tungstenite = { version = "0.24", features = ["handshake"] }
+zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

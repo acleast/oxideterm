@@ -27,7 +27,7 @@ use crate::sftp::session::SftpRegistry;
 use crate::ssh::{ExtendedSessionHandle, SessionCommand, SshConnectionRegistry};
 use crate::state::{AiChatStore, ConversationMeta, PersistedMessage};
 
-const CLI_API_CURRENT_VERSION: u64 = 2;
+const CLI_API_CURRENT_VERSION: u64 = 3;
 const CLI_API_MIN_SUPPORTED_VERSION: u64 = 1;
 
 /// Dispatch a JSON-RPC method call to the appropriate handler.
@@ -50,6 +50,7 @@ pub async fn dispatch(
         "create_forward" => create_forward(app, params).await,
         "delete_forward" => delete_forward(app, params).await,
         "connect" => connect(app, params).await,
+        "ssh" => ssh(app, params).await,
         "open_tab" => open_tab(app, params).await,
         "focus_tab" => focus_tab(app, params).await,
         "list_local_terminals" => list_local_terminals(app).await,
@@ -685,6 +686,48 @@ async fn connect(app: &tauri::AppHandle, params: Value) -> Result<Value, (i32, S
         "success": true,
         "connection_id": conn.id,
         "name": conn.name,
+    }))
+}
+
+/// Trigger the GUI to open a temporary SSH connection.
+async fn ssh(app: &tauri::AppHandle, params: Value) -> Result<Value, (i32, String)> {
+    let username = params.get("username").and_then(|v| v.as_str()).ok_or((
+        protocol::ERR_INVALID_PARAMS,
+        "Missing required parameter: username".to_string(),
+    ))?;
+    let host = params.get("host").and_then(|v| v.as_str()).ok_or((
+        protocol::ERR_INVALID_PARAMS,
+        "Missing required parameter: host".to_string(),
+    ))?;
+    let port = params.get("port").and_then(|v| v.as_u64()).ok_or((
+        protocol::ERR_INVALID_PARAMS,
+        "Missing required parameter: port".to_string(),
+    ))?;
+    if port == 0 || port > u16::MAX as u64 {
+        return Err((
+            protocol::ERR_INVALID_PARAMS,
+            "Port must be between 1 and 65535".to_string(),
+        ));
+    }
+    let password = params.get("password").and_then(|v| v.as_str());
+
+    use tauri::Emitter;
+    app.emit(
+        "cli:ssh",
+        json!({
+            "username": username,
+            "host": host,
+            "port": port,
+            "password": password,
+        }),
+    )
+    .map_err(|e| (protocol::ERR_INTERNAL, format!("Failed to emit event: {e}")))?;
+
+    Ok(json!({
+        "success": true,
+        "username": username,
+        "host": host,
+        "port": port,
     }))
 }
 

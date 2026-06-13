@@ -13,6 +13,7 @@ Commands:
   ask          Ask AI a question (pipe context via stdin)
   exec         Generate code/commands with AI (code-only output)
   connect      Connect to a saved connection (opens in GUI)
+  ssh          Open a temporary SSH connection in the GUI
   open         Open a new local terminal tab
   focus        Focus an existing session tab
   attach       Attach to a running session (mirror terminal I/O)

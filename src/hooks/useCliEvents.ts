@@ -14,6 +14,7 @@ import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useAppStore } from '../store/appStore';
 import { useLocalTerminalStore } from '../store/localTerminalStore';
+import { useSessionTreeStore } from '../store/sessionTreeStore';
 import { connectToSaved } from '../lib/connectToSaved';
 import { useToastStore } from './useToast';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +28,13 @@ interface CliConnectPayload {
 
 interface CliOpenTabPayload {
   path: string | null;
+}
+
+interface CliSshPayload {
+  username: string;
+  host: string;
+  port: number;
+  password?: string | null;
 }
 
 interface CliFocusTabPayload {
@@ -64,6 +72,39 @@ export function useCliEvents(): void {
         });
       });
       listeners.push(unlistenConnect);
+
+      // cli:ssh — open a temporary direct SSH connection without saving it.
+      const unlistenSsh = await listen<CliSshPayload>('cli:ssh', async (event) => {
+        const { username, host, port, password } = event.payload;
+        console.info('[CLI] cli:ssh received', `${username}@${host}:${port}`);
+
+        const { createTab } = useAppStore.getState();
+        const { addToast } = useToastStore.getState();
+        const tree = useSessionTreeStore.getState();
+
+        try {
+          const hasPassword = password !== undefined && password !== null;
+          const nodeId = await tree.addRootNode({
+            username,
+            host,
+            port,
+            authType: hasPassword ? 'password' : 'agent',
+            password: hasPassword ? password : undefined,
+            displayName: `${username}@${host}`,
+          });
+          await useSessionTreeStore.getState().connectNodeWithAncestors(nodeId);
+          const terminalId = await useSessionTreeStore.getState().createTerminalForNode(nodeId);
+          createTab('terminal', terminalId);
+        } catch (err) {
+          console.error('[CLI] cli:ssh failed', `${username}@${host}:${port}`, err);
+          addToast({
+            title: t('toast.connect_failed', { ns: 'connections' }),
+            description: String(err),
+            variant: 'error',
+          });
+        }
+      });
+      listeners.push(unlistenSsh);
 
       // cli:open-tab — open a new local terminal
       const unlistenOpen = await listen<CliOpenTabPayload>('cli:open-tab', async (event) => {

@@ -10,13 +10,14 @@ mod connect;
 mod escape;
 mod output;
 mod protocol;
+mod ssh_launch;
 mod terminal;
 mod wire;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
-const CLI_API_CURRENT_VERSION: u64 = 2;
+const CLI_API_CURRENT_VERSION: u64 = 3;
 const CLI_API_MIN_SUPPORTED_VERSION: u64 = 2;
 const DEFAULT_WATCH_INTERVAL_MS: u64 = 2000;
 const DEFAULT_WAIT_INTERVAL_MS: u64 = 500;
@@ -357,6 +358,20 @@ enum Commands {
         /// Maximum time to wait for the session to appear, in milliseconds
         #[arg(long = "wait-timeout", default_value_t = DEFAULT_WAIT_TIMEOUT_MS, value_parser = clap::value_parser!(u64).range(1..))]
         wait_timeout: u64,
+    },
+
+    /// Open a temporary SSH connection in the GUI
+    Ssh {
+        /// SSH target in user@host form
+        target: String,
+
+        /// SSH port
+        #[arg(short = 'p', long, default_value_t = 22, value_parser = clap::value_parser!(u16).range(1..))]
+        port: u16,
+
+        /// Read the SSH password from stdin
+        #[arg(long)]
+        password_stdin: bool,
     },
 
     /// Open a new local terminal tab
@@ -1169,6 +1184,30 @@ fn run(cli: &Cli, out: &output::OutputMode) -> Result<ExitCode, CliError> {
                 final_resp["focus_result"] = focus_resp;
             }
             out.print_connect_result(&final_resp);
+        }
+        Commands::Ssh {
+            target,
+            port,
+            password_stdin,
+        } => {
+            return_if_incompatible(&compatibility)?;
+            emit_compatibility_notice(out, cli.quiet, compatibility.warning.as_deref());
+            let password = if *password_stdin {
+                Some(ssh_launch::read_password_from_stdin()?)
+            } else {
+                None
+            };
+            let launch = ssh_launch::build_launch(target, *port, password.as_ref())?;
+            let resp = conn.call(
+                "ssh",
+                serde_json::to_value(&launch).map_err(|error| {
+                    CliError::runtime(format!("Failed to serialize SSH launch request: {error}"))
+                })?,
+            )?;
+            if should_emit_human_guidance(out, cli.quiet) {
+                eprintln!("Opening temporary SSH terminal: {}", launch.title());
+            }
+            out.print_json(&resp);
         }
         Commands::Sftp { action } => match action {
             SftpAction::Ls { session, path } => {
