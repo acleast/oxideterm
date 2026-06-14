@@ -1,7 +1,7 @@
 // Copyright (C) 2026 AnalyseDeCircuit
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog';
@@ -10,10 +10,15 @@ import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { Checkbox } from '../ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
-import { Loader2, ArrowDownRight, Info } from 'lucide-react';
+import { Loader2, ArrowDownRight, Info, Server } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { api } from '../../lib/api';
+import type { SavedConnectionForConnect, SavedConnectionProxyHopForConnect } from '../../lib/api';
+import { findUnsupportedProxyHopAuth } from '../../lib/proxyHopSupport';
+import { requiresSavedConnectionPasswordPrompt } from '../../lib/testConnectionRequest';
+import { useAppStore } from '../../store/appStore';
 import { useSessionTreeStore } from '../../store/sessionTreeStore';
+import type { ConnectionInfo, HopInfo } from '../../types';
 
 interface DrillDownDialogProps {
   /** 父节点 ID */
@@ -50,7 +55,15 @@ export const DrillDownDialog: React.FC<DrillDownDialogProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  const { fetchTree } = useSessionTreeStore();
+  const savedConnections = useAppStore(state => state.savedConnections);
+  const loadSavedConnections = useAppStore(state => state.loadSavedConnections);
+  const { fetchTree, expandManualPresetUnderParent, connectNodeWithAncestors } = useSessionTreeStore();
+
+  useEffect(() => {
+    if (open) {
+      void loadSavedConnections();
+    }
+  }, [loadSavedConnections, open]);
 
   const handleAuthTypeChange = (value: string) => {
     if (value === 'password' || value === 'key' || value === 'agent') {
@@ -137,6 +150,53 @@ export const DrillDownDialog: React.FC<DrillDownDialogProps> = ({
     }
   };
 
+  const handleSavedNextHop = async (connectionId: string) => {
+    setIsConnecting(true);
+    setError(null);
+
+    try {
+      const savedConnection = await api.getSavedConnectionForConnect(connectionId);
+      if (requiresSavedConnectionPasswordPrompt(savedConnection)) {
+        throw new Error(t('modals.drill_down.saved_next_hop_missing_credentials'));
+      }
+
+      const unsupportedProxyHop = findUnsupportedProxyHopAuth(savedConnection.proxy_chain);
+      if (unsupportedProxyHop) {
+        throw new Error(t('modals.drill_down.saved_next_hop_unsupported_proxy_auth', {
+          hop: unsupportedProxyHop.hopIndex,
+          authType: unsupportedProxyHop.authType,
+        }));
+      }
+
+      const target = savedConnectionToHopInfo(savedConnection);
+      const hops = savedConnection.proxy_chain.map(savedProxyHopToHopInfo);
+      const expansion = await expandManualPresetUnderParent({
+        parentNodeId,
+        savedConnectionId: connectionId,
+        hops,
+        target,
+      });
+
+      await connectNodeWithAncestors(expansion.targetNodeId);
+      await fetchTree();
+      const targetNode = useSessionTreeStore.getState().getRawNode(expansion.targetNodeId);
+      const sshConnectionId = targetNode?.sshConnectionId;
+      if (!sshConnectionId) {
+        throw new Error(t('modals.drill_down.saved_next_hop_materialize_failed'));
+      }
+
+      await api.markConnectionUsed(connectionId);
+      onSuccess?.(expansion.targetNodeId, sshConnectionId);
+      handleClose();
+    } catch (err) {
+      console.error('Saved next hop failed:', err);
+      setError(err instanceof Error ? err.message : String(err));
+      await fetchTree();
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-[480px]">
@@ -159,6 +219,14 @@ export const DrillDownDialog: React.FC<DrillDownDialogProps> = ({
               {error}
             </div>
           )}
+
+          <SavedNextHopPicker
+            connections={savedConnections}
+            disabled={isConnecting}
+            parentHost={parentHost}
+            onSelect={handleSavedNextHop}
+            t={t}
+          />
 
           {/* Host & Port */}
           <div className="grid grid-cols-4 gap-4">
@@ -315,3 +383,109 @@ export const DrillDownDialog: React.FC<DrillDownDialogProps> = ({
     </Dialog>
   );
 };
+
+type SavedConnectionEndpoint = Pick<
+  SavedConnectionForConnect,
+  'host' | 'port' | 'username' | 'password' | 'key_path' | 'cert_path' | 'managed_key_id' | 'passphrase' | 'agent_forwarding'
+> & {
+  auth_type: string;
+};
+
+function mapPresetAuthType(authType: string): NonNullable<HopInfo['authType']> {
+  if (
+    authType === 'password' ||
+    authType === 'key' ||
+    authType === 'default_key' ||
+    authType === 'managed_key' ||
+    authType === 'agent' ||
+    authType === 'certificate'
+  ) {
+    return authType;
+  }
+  return 'key';
+}
+
+function savedEndpointToHopInfo(endpoint: SavedConnectionEndpoint): HopInfo {
+  return {
+    host: endpoint.host,
+    port: endpoint.port,
+    username: endpoint.username,
+    authType: mapPresetAuthType(endpoint.auth_type),
+    password: endpoint.password,
+    keyPath: endpoint.key_path,
+    certPath: endpoint.cert_path,
+    managedKeyId: endpoint.managed_key_id,
+    passphrase: endpoint.passphrase,
+    agentForwarding: endpoint.agent_forwarding,
+  };
+}
+
+function savedConnectionToHopInfo(connection: SavedConnectionForConnect): HopInfo {
+  return savedEndpointToHopInfo(connection);
+}
+
+function savedProxyHopToHopInfo(hop: SavedConnectionProxyHopForConnect): HopInfo {
+  return savedEndpointToHopInfo(hop);
+}
+
+function SavedNextHopPicker({
+  connections,
+  disabled,
+  parentHost,
+  onSelect,
+  t,
+}: {
+  connections: ConnectionInfo[];
+  disabled: boolean;
+  parentHost: string;
+  onSelect: (connectionId: string) => void;
+  t: (key: string, options?: Record<string, unknown>) => string;
+}) {
+  return (
+    <div className="space-y-2 rounded-md border border-theme-border/80 bg-theme-bg-card/60 p-3">
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-theme-text">
+          {t('modals.drill_down.saved_next_hop_title')}
+        </p>
+        <p className="text-xs text-theme-text-muted">
+          {t('modals.drill_down.saved_next_hop_description', { host: parentHost })}
+        </p>
+      </div>
+
+      {connections.length === 0 ? (
+        <p className="text-xs text-theme-text-muted">
+          {t('modals.drill_down.saved_next_hop_empty')}
+        </p>
+      ) : (
+        <div className="max-h-44 space-y-1 overflow-y-auto">
+          {connections.map(connection => (
+            <button
+              key={connection.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => onSelect(connection.id)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-theme-bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Server className="h-3.5 w-3.5 shrink-0 text-theme-text-muted" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium text-theme-text">
+                  {connection.name}
+                </span>
+                <span className="block truncate text-[10px] text-theme-text-muted">
+                  {connection.username}@{connection.host}:{connection.port}
+                </span>
+              </span>
+              {!!connection.proxy_chain?.length && (
+                <span className="shrink-0 rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-400">
+                  {t('modals.drill_down.saved_next_hop_proxy_chain_badge', {
+                    count: connection.proxy_chain.length,
+                  })}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

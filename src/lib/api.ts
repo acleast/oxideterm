@@ -55,6 +55,7 @@ import {
   SearchOptions,
   ArchiveHealthSnapshot,
   ConnectPresetChainRequest,
+  ConnectPresetChainUnderParentRequest,
   SavedUpstreamProxyPolicy,
   UpstreamProxyForConnect,
   StartTerminalHistorySearchResponse,
@@ -2287,6 +2288,23 @@ export const api = {
       };
     }
     return invoke('expand_manual_preset', { request });
+  },
+
+  /**
+   * Expand a saved manual preset chain below an existing parent node.
+   */
+  expandManualPresetUnderParent: async (
+    request: ConnectPresetChainUnderParentRequest,
+  ): Promise<{ targetNodeId: string; pathNodeIds: string[]; chainDepth: number }> => {
+    if (USE_MOCK) {
+      const mockId = crypto.randomUUID();
+      return {
+        targetNodeId: mockId,
+        pathNodeIds: [request.parentNodeId, mockId],
+        chainDepth: request.hops.length + 2,
+      };
+    }
+    return invoke('expand_manual_preset_under_parent', { request });
   },
 
   /**

@@ -377,7 +377,14 @@
       "password": "Mật khẩu",
       "cancel": "Hủy",
       "connect": "Kết nối",
-      "connecting": "Đang kết nối..."
+      "connecting": "Đang kết nối...",
+      "saved_next_hop_title": "Dùng kết nối đã lưu làm bước nhảy tiếp theo",
+      "saved_next_hop_description": "Chọn một kết nối đã lưu để gắn dưới {{host}}.",
+      "saved_next_hop_empty": "Không có kết nối đã lưu nào.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} bước nhảy",
+      "saved_next_hop_missing_credentials": "Kết nối đã lưu này thiếu thông tin xác thực cần thiết để kết nối.",
+      "saved_next_hop_unsupported_proxy_auth": "Bước nhảy proxy {{hop}} dùng phương thức xác thực không được hỗ trợ: {{authType}}.",
+      "saved_next_hop_materialize_failed": "Không thể thêm kết nối đã lưu vào cây phiên."
     },
     "edit_connection": {
       "title": "Kết nối đến {{name}}",

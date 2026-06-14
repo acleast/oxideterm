@@ -377,7 +377,14 @@
       "password": "Senha",
       "cancel": "Cancelar",
       "connect": "Conectar",
-      "connecting": "Conectando..."
+      "connecting": "Conectando...",
+      "saved_next_hop_title": "Usar conexão salva como próximo salto",
+      "saved_next_hop_description": "Escolha uma conexão salva para anexar abaixo de {{host}}.",
+      "saved_next_hop_empty": "Nenhuma conexão salva disponível.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} saltos",
+      "saved_next_hop_missing_credentials": "Esta conexão salva não tem as credenciais necessárias para conectar.",
+      "saved_next_hop_unsupported_proxy_auth": "O salto de proxy {{hop}} usa uma autenticação sem suporte: {{authType}}.",
+      "saved_next_hop_materialize_failed": "Não foi possível adicionar a conexão salva à árvore de sessões."
     },
     "edit_connection": {
       "title": "Conectar a {{name}}",

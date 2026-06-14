@@ -377,7 +377,14 @@
       "password": "Password",
       "cancel": "Annulla",
       "connect": "Connetti",
-      "connecting": "Connessione..."
+      "connecting": "Connessione...",
+      "saved_next_hop_title": "Usa connessione salvata come hop successivo",
+      "saved_next_hop_description": "Scegli una connessione salvata da agganciare sotto {{host}}.",
+      "saved_next_hop_empty": "Nessuna connessione salvata disponibile.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} hop",
+      "saved_next_hop_missing_credentials": "A questa connessione salvata mancano le credenziali necessarie per connettersi.",
+      "saved_next_hop_unsupported_proxy_auth": "L'hop proxy {{hop}} usa un'autenticazione non supportata: {{authType}}.",
+      "saved_next_hop_materialize_failed": "Impossibile aggiungere la connessione salvata all'albero delle sessioni."
     },
     "edit_connection": {
       "title": "Connetti a {{name}}",

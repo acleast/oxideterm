@@ -868,6 +868,12 @@ function normalizeHistorySettings(settings: PersistedSettingsV2): PersistedSetti
   return {
     ...settings,
     version: SETTINGS_VERSION,
+    general: {
+      ...settings.general,
+      updateChannel: normalizeUpdateChannel(settings.general.updateChannel)
+        ?? defaultGeneralSettings.updateChannel,
+      updateProxy: normalizeUpdateProxySettings(settings.general.updateProxy),
+    },
     terminal: normalizeTerminalSettings(settings.terminal),
     buffer: normalizeBufferSettings(settings.buffer),
   };
@@ -1244,8 +1250,9 @@ function persistSettings(settings: PersistedSettingsV2): void {
       logSettingsWarnings('Validation warnings while saving settings', result.validationWarnings);
       if (generation !== settingsSaveGeneration) return;
       const current = useSettingsStore.getState().settings;
-      if (JSON.stringify(current) !== JSON.stringify(result.settings)) {
-        useSettingsStore.setState({ settings: result.settings });
+      const normalized = normalizeHistorySettings(result.settings);
+      if (JSON.stringify(current) !== JSON.stringify(normalized)) {
+        useSettingsStore.setState({ settings: normalized });
       }
     })
     .catch((error) => {
@@ -1976,7 +1983,7 @@ export const useSettingsStore = create<SettingsStore>()(
     resetToDefaults: () => {
       api.resetAppSettings<PersistedSettingsV2>()
         .then((result) => {
-          const newSettings = result.settings;
+          const newSettings = normalizeHistorySettings(result.settings);
           syncSftpToBackend(newSettings.sftp || defaultSftpSettings);
           syncConnectionPoolToBackend(
             newSettings.connectionPool || defaultConnectionPoolSettings,

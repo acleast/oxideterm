@@ -377,7 +377,14 @@
       "password": "パスワード",
       "cancel": "キャンセル",
       "connect": "接続",
-      "connecting": "接続中..."
+      "connecting": "接続中...",
+      "saved_next_hop_title": "保存済み接続を次のホップとして使用",
+      "saved_next_hop_description": "{{host}} の下に追加する保存済み接続を選択します。",
+      "saved_next_hop_empty": "利用できる保存済み接続がありません。",
+      "saved_next_hop_proxy_chain_badge": "{{count}} ホップ",
+      "saved_next_hop_missing_credentials": "この保存済み接続には接続に必要な認証情報が不足しています。",
+      "saved_next_hop_unsupported_proxy_auth": "プロキシホップ {{hop}} は未対応の認証方式を使用しています: {{authType}}。",
+      "saved_next_hop_materialize_failed": "保存済み接続をセッションツリーに追加できませんでした。"
     },
     "edit_connection": {
       "title": "{{name}}に接続",

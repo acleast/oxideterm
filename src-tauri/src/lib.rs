@@ -608,6 +608,7 @@ pub fn run() {
         commands::config::test_upstream_proxy_route,
         commands::config::resolve_upstream_proxy_for_connect,
         commands::expand_manual_preset,
+        commands::expand_manual_preset_under_parent,
         // Auto-route commands (auto-generated from saved connections)
         commands::get_topology_nodes,
         commands::get_topology_edges,
@@ -1019,6 +1020,7 @@ pub fn run() {
         commands::config::resolve_upstream_proxy_for_connect,
         commands::tree_drill_down,
         commands::expand_manual_preset,
+        commands::expand_manual_preset_under_parent,
         // Auto-route commands (auto-generated from saved connections)
         commands::get_topology_nodes,
         commands::get_topology_edges,

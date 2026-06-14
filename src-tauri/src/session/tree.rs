@@ -395,6 +395,83 @@ impl SessionTree {
         })
     }
 
+    /// Expand a saved manual preset chain below an already-connected parent node.
+    pub fn expand_manual_preset_under_parent(
+        &mut self,
+        parent_id: &str,
+        saved_connection_id: &str,
+        hops: Vec<NodeConnection>,
+        target: NodeConnection,
+    ) -> Result<String, TreeError> {
+        let parent = self
+            .nodes
+            .get(parent_id)
+            .ok_or_else(|| TreeError::NodeNotFound(parent_id.to_string()))?;
+
+        if !parent.state.is_connected() {
+            return Err(TreeError::ParentNotConnected(parent_id.to_string()));
+        }
+
+        let target_depth = parent.depth + hops.len() as u32 + 1;
+        if target_depth > MAX_CHAIN_DEPTH {
+            return Err(TreeError::MaxDepthExceeded(MAX_CHAIN_DEPTH));
+        }
+
+        let mut current_id = parent_id.to_string();
+        let mut current_depth = parent.depth;
+        for (hop_index, hop) in hops.iter().enumerate() {
+            current_depth += 1;
+            let node_id = Uuid::new_v4().to_string();
+            let node = SessionNode {
+                id: node_id.clone(),
+                parent_id: Some(current_id.clone()),
+                children_ids: Vec::new(),
+                depth: current_depth,
+                connection: hop.clone(),
+                state: NodeState::Pending,
+                origin: NodeOrigin::ManualPreset {
+                    saved_connection_id: saved_connection_id.to_string(),
+                    hop_index: hop_index as u32,
+                },
+                terminal_session_id: None,
+                sftp_session_id: None,
+                ssh_connection_id: None,
+                created_at: Utc::now(),
+            };
+
+            if let Some(parent) = self.nodes.get_mut(&current_id) {
+                parent.children_ids.push(node_id.clone());
+            }
+            self.nodes.insert(node_id.clone(), node);
+            current_id = node_id;
+        }
+
+        let target_id = Uuid::new_v4().to_string();
+        let target_node = SessionNode {
+            id: target_id.clone(),
+            parent_id: Some(current_id.clone()),
+            children_ids: Vec::new(),
+            depth: current_depth + 1,
+            connection: target,
+            state: NodeState::Pending,
+            origin: NodeOrigin::ManualPreset {
+                saved_connection_id: saved_connection_id.to_string(),
+                hop_index: hops.len() as u32,
+            },
+            terminal_session_id: None,
+            sftp_session_id: None,
+            ssh_connection_id: None,
+            created_at: Utc::now(),
+        };
+
+        if let Some(parent) = self.nodes.get_mut(&current_id) {
+            parent.children_ids.push(target_id.clone());
+        }
+        self.nodes.insert(target_id.clone(), target_node);
+
+        Ok(target_id)
+    }
+
     /// 展开自动计算路径为树节点（模式2）
     pub fn expand_auto_route(
         &mut self,
@@ -905,6 +982,52 @@ mod tests {
         assert!(!path[1].connection.agent_forwarding);
         assert_eq!(path[2].connection.host, "internal-db");
         assert!(path[2].connection.agent_forwarding);
+    }
+
+    #[test]
+    fn test_expand_manual_preset_under_parent() {
+        let mut tree = SessionTree::new();
+        let root_id = tree.add_root_node(make_connection("server-a"), NodeOrigin::Direct);
+        let idle_root_id = tree.add_root_node(make_connection("server-idle"), NodeOrigin::Direct);
+        tree.update_state(&root_id, NodeState::Connected).unwrap();
+
+        let target = make_connection_with_forwarding("internal-db", false);
+        let missing_parent_error = tree
+            .expand_manual_preset_under_parent(
+                "missing",
+                "saved-conn-123",
+                Vec::new(),
+                target.clone(),
+            )
+            .unwrap_err();
+        assert!(matches!(missing_parent_error, TreeError::NodeNotFound(_)));
+
+        let disconnected_parent_error = tree
+            .expand_manual_preset_under_parent(
+                &idle_root_id,
+                "saved-conn-123",
+                Vec::new(),
+                target.clone(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            disconnected_parent_error,
+            TreeError::ParentNotConnected(_)
+        ));
+
+        let hops = vec![make_connection_with_forwarding("jump-01", true)];
+        let target_id = tree
+            .expand_manual_preset_under_parent(&root_id, "saved-conn-123", hops, target)
+            .unwrap();
+
+        let path = tree.get_path_to_node(&target_id);
+        assert_eq!(path.len(), 3);
+        assert_eq!(path[0].connection.host, "server-a");
+        assert_eq!(path[1].connection.host, "jump-01");
+        assert_eq!(path[1].parent_id.as_deref(), Some(root_id.as_str()));
+        assert_eq!(path[2].connection.host, "internal-db");
+        assert_eq!(path[2].depth, 2);
+        assert_eq!(path[2].origin.saved_connection_id(), Some("saved-conn-123"));
     }
 
     #[test]

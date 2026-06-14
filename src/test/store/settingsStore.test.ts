@@ -216,6 +216,27 @@ describe('settingsStore', () => {
     expect(persisted.ai.toolUse.maxRounds).toBe(10);
   });
 
+  it('fills default update proxy settings when hydrated settings are missing them', async () => {
+    const mod = await import('@/store/settingsStore');
+    installSettingsApiMocks(mod);
+    const legacySettings = mod.mergeWithDefaults({});
+    const { updateProxy: _updateProxy, ...legacyGeneral } = legacySettings.general;
+    apiMocks.loadAppSettings.mockResolvedValueOnce(settingsLoadResult({
+      ...legacySettings,
+      general: legacyGeneral,
+    }));
+
+    await mod.initializeSettings();
+
+    expect(mod.useSettingsStore.getState().settings.general.updateProxy).toMatchObject({
+      mode: 'direct',
+      protocol: 'http',
+      host: '127.0.0.1',
+      port: 7890,
+      noProxy: '',
+    });
+  });
+
   it('normalizes persisted AI tool round limits on load', async () => {
     localStorage.setItem('oxide-settings-v2', JSON.stringify(buildSavedSettings({
       ai: {
@@ -971,7 +992,11 @@ describe('settingsStore', () => {
       version: 1,
       sectionIds: ['general', 'localTerminal'],
     });
-    expect(snapshot.settings.general).toEqual({ language: 'fr-FR', updateChannel: 'beta' });
+    expect(snapshot.settings.general).toMatchObject({
+      language: 'fr-FR',
+      updateChannel: 'beta',
+      updateProxy: expect.objectContaining({ mode: 'direct' }),
+    });
     expect(snapshot.settings.localTerminal.defaultShellId).toBe('zsh');
     expect(snapshot.settings.localTerminal.customEnvVars).toBeUndefined();
     expect(snapshot.settings.terminal).toBeUndefined();

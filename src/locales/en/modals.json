@@ -377,7 +377,14 @@
       "password": "Password",
       "cancel": "Cancel",
       "connect": "Connect",
-      "connecting": "Connecting..."
+      "connecting": "Connecting...",
+      "saved_next_hop_title": "Use Saved Connection as Next Hop",
+      "saved_next_hop_description": "Choose a saved connection to attach under {{host}}.",
+      "saved_next_hop_empty": "No saved connections available.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} hops",
+      "saved_next_hop_missing_credentials": "This saved connection is missing credentials needed to connect.",
+      "saved_next_hop_unsupported_proxy_auth": "Proxy hop {{hop}} uses unsupported authentication: {{authType}}.",
+      "saved_next_hop_materialize_failed": "Could not add the saved connection to the session tree."
     },
     "edit_connection": {
       "title": "Connect to {{name}}",

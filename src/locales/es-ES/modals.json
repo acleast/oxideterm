@@ -377,7 +377,14 @@
       "password": "Contraseña",
       "cancel": "Cancelar",
       "connect": "Conectar",
-      "connecting": "Conectando..."
+      "connecting": "Conectando...",
+      "saved_next_hop_title": "Usar conexión guardada como siguiente salto",
+      "saved_next_hop_description": "Elige una conexión guardada para adjuntarla bajo {{host}}.",
+      "saved_next_hop_empty": "No hay conexiones guardadas disponibles.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} saltos",
+      "saved_next_hop_missing_credentials": "A esta conexión guardada le faltan credenciales necesarias para conectarse.",
+      "saved_next_hop_unsupported_proxy_auth": "El salto proxy {{hop}} usa una autenticación no compatible: {{authType}}.",
+      "saved_next_hop_materialize_failed": "No se pudo agregar la conexión guardada al árbol de sesiones."
     },
     "edit_connection": {
       "title": "Conectar a {{name}}",

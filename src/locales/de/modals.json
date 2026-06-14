@@ -377,7 +377,14 @@
       "password": "Passwort",
       "cancel": "Abbrechen",
       "connect": "Verbinden",
-      "connecting": "Verbindung wird hergestellt..."
+      "connecting": "Verbindung wird hergestellt...",
+      "saved_next_hop_title": "Gespeicherte Verbindung als nächsten Hop verwenden",
+      "saved_next_hop_description": "Wählen Sie eine gespeicherte Verbindung aus, die unter {{host}} angehängt wird.",
+      "saved_next_hop_empty": "Keine gespeicherten Verbindungen verfügbar.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} Hops",
+      "saved_next_hop_missing_credentials": "Für diese gespeicherte Verbindung fehlen die benötigten Anmeldedaten.",
+      "saved_next_hop_unsupported_proxy_auth": "Proxy-Hop {{hop}} verwendet eine nicht unterstützte Authentifizierung: {{authType}}.",
+      "saved_next_hop_materialize_failed": "Die gespeicherte Verbindung konnte nicht zum Sitzungsbaum hinzugefügt werden."
     },
     "edit_connection": {
       "title": "Verbinden mit {{name}}",

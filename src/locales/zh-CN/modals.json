@@ -377,7 +377,14 @@
       "password": "密码",
       "cancel": "取消",
       "connect": "连接",
-      "connecting": "连接中..."
+      "connecting": "连接中...",
+      "saved_next_hop_title": "使用已保存连接作为下一跳",
+      "saved_next_hop_description": "选择一个已保存连接挂到 {{host}} 下。",
+      "saved_next_hop_empty": "没有可用的已保存连接。",
+      "saved_next_hop_proxy_chain_badge": "{{count}} 跳",
+      "saved_next_hop_missing_credentials": "此已保存连接缺少连接所需的凭据。",
+      "saved_next_hop_unsupported_proxy_auth": "代理跳点 {{hop}} 使用了不支持的认证方式：{{authType}}。",
+      "saved_next_hop_materialize_failed": "无法将此已保存连接添加到会话树。"
     },
     "edit_connection": {
       "title": "连接到 {{name}}",

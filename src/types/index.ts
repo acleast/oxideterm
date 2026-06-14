@@ -1810,6 +1810,13 @@ export interface ConnectPresetChainRequest {
 }
 
 /**
+ * Preset-chain request scoped under an existing parent node.
+ */
+export interface ConnectPresetChainUnderParentRequest extends ConnectPresetChainRequest {
+  parentNodeId: string;
+}
+
+/**
  * 连接树节点请求
  */
 export interface ConnectTreeNodeRequest {

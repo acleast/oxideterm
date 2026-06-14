@@ -137,6 +137,15 @@ pub struct ConnectPresetChainRequest {
     pub upstream_proxy: Option<UpstreamProxyForConnect>,
 }
 
+/// Preset-chain request scoped under an existing parent node.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectPresetChainUnderParentRequest {
+    pub parent_node_id: String,
+    #[serde(flatten)]
+    pub chain: ConnectPresetChainRequest,
+}
+
 /// 跳板机信息
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -481,6 +490,81 @@ pub async fn expand_manual_preset(
         target_node_id,
         path_node_ids,
         chain_depth,
+    })
+}
+
+/// Expand a saved manual preset chain below an existing connected parent node.
+#[tauri::command]
+pub async fn expand_manual_preset_under_parent(
+    state: State<'_, Arc<SessionTreeState>>,
+    request: ConnectPresetChainUnderParentRequest,
+) -> Result<ExpandManualPresetResponse, String> {
+    tracing::info!(
+        "[expand_manual_preset_under_parent] Expanding saved next hop {} below {}",
+        request.chain.saved_connection_id,
+        request.parent_node_id
+    );
+
+    let mut hops = Vec::new();
+    for hop in &request.chain.hops {
+        let auth = build_auth(
+            &hop.auth_type,
+            hop.password.clone(),
+            hop.key_path.clone(),
+            hop.managed_key_id.clone(),
+            hop.cert_path.clone(),
+            hop.passphrase.clone(),
+        )?;
+        hops.push(build_connection(
+            hop.host.clone(),
+            hop.port,
+            hop.username.clone(),
+            auth,
+            None,
+            hop.agent_forwarding,
+        ));
+    }
+
+    let target_auth = build_auth(
+        &request.chain.target.auth_type,
+        request.chain.target.password.clone(),
+        request.chain.target.key_path.clone(),
+        request.chain.target.managed_key_id.clone(),
+        request.chain.target.cert_path.clone(),
+        request.chain.target.passphrase.clone(),
+    )?;
+    let target = build_connection(
+        request.chain.target.host.clone(),
+        request.chain.target.port,
+        request.chain.target.username.clone(),
+        target_auth,
+        None,
+        request.chain.target.agent_forwarding,
+    );
+
+    let target_node_id = {
+        let mut tree = state.tree.write().await;
+        tree.expand_manual_preset_under_parent(
+            &request.parent_node_id,
+            &request.chain.saved_connection_id,
+            hops,
+            target,
+        )
+        .map_err(|error| error.to_string())?
+    };
+
+    let path_node_ids: Vec<String> = {
+        let tree = state.tree.read().await;
+        tree.get_path_to_node(&target_node_id)
+            .iter()
+            .map(|node| node.id.clone())
+            .collect()
+    };
+
+    Ok(ExpandManualPresetResponse {
+        target_node_id,
+        chain_depth: path_node_ids.len() as u32,
+        path_node_ids,
     })
 }
 

@@ -377,7 +377,14 @@
       "password": "Mot de passe",
       "cancel": "Annuler",
       "connect": "Connecter",
-      "connecting": "Connexion en cours..."
+      "connecting": "Connexion en cours...",
+      "saved_next_hop_title": "Utiliser une connexion enregistrée comme saut suivant",
+      "saved_next_hop_description": "Choisissez une connexion enregistrée à rattacher sous {{host}}.",
+      "saved_next_hop_empty": "Aucune connexion enregistrée disponible.",
+      "saved_next_hop_proxy_chain_badge": "{{count}} sauts",
+      "saved_next_hop_missing_credentials": "Il manque les identifiants nécessaires pour cette connexion enregistrée.",
+      "saved_next_hop_unsupported_proxy_auth": "Le saut proxy {{hop}} utilise une authentification non prise en charge : {{authType}}.",
+      "saved_next_hop_materialize_failed": "Impossible d’ajouter la connexion enregistrée à l’arbre des sessions."
     },
     "edit_connection": {
       "title": "Connecter à {{name}}",

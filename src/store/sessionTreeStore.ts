@@ -32,6 +32,7 @@ import type {
   ConnectServerRequest,
   DrillDownRequest,
   ConnectPresetChainRequest,
+  ConnectPresetChainUnderParentRequest,
   UnifiedFlatNode,
   UnifiedNodeStatus,
   NodeRuntimeState,
@@ -251,6 +252,8 @@ interface SessionTreeStore {
   drillDown: (request: DrillDownRequest) => Promise<string>;
   /** 展开手工预设链，返回目标节点ID和路径（Phase 2.2: 只展开不连接） */
   expandManualPreset: (request: ConnectPresetChainRequest) => Promise<{ targetNodeId: string; pathNodeIds: string[]; chainDepth: number }>;
+  /** Expand a saved manual preset chain below an existing parent node. */
+  expandManualPresetUnderParent: (request: ConnectPresetChainUnderParentRequest) => Promise<{ targetNodeId: string; pathNodeIds: string[]; chainDepth: number }>;
   expandAutoRoute: (request: import('../types').ExpandAutoRouteRequest) => Promise<import('../types').ExpandAutoRouteResponse>;
   removeNode: (nodeId: string) => Promise<string[]>;
   clearTree: () => Promise<void>;
@@ -551,6 +554,24 @@ export const useSessionTreeStore = create<SessionTreeStore>()(
       try {
         const response = await api.expandManualPreset(request);
         await get().fetchTree();
+        set({ selectedNodeId: response.targetNodeId, isLoading: false });
+        return response;
+      } catch (e) {
+        set({ error: String(e), isLoading: false });
+        throw e;
+      }
+    },
+
+    expandManualPresetUnderParent: async (request: ConnectPresetChainUnderParentRequest) => {
+      set({ isLoading: true, error: null });
+      try {
+        const response = await api.expandManualPresetUnderParent(request);
+        await get().fetchTree();
+        const settingsStore = useSettingsStore.getState();
+        const currentExpanded = settingsStore.settings.treeUI.expandedIds;
+        if (!currentExpanded.includes(request.parentNodeId)) {
+          settingsStore.setTreeExpanded([...currentExpanded, request.parentNodeId]);
+        }
         set({ selectedNodeId: response.targetNodeId, isLoading: false });
         return response;
       } catch (e) {
