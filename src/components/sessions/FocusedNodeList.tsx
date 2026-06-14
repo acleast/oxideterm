@@ -34,6 +34,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import { canSaveNodeAsPreset } from './nodeActions';
 import type { UnifiedFlatNode, UnifiedNodeStatus } from '@/types';
 
 // ============================================================================
@@ -360,7 +361,7 @@ const NodeItem: React.FC<NodeItemProps> = ({
               <ArrowDownRight className="w-4 h-4 mr-2" />
               {t('sessions.actions.drill_down')}
             </ContextMenuItem>
-            {onSaveAsPreset && !node.sshConnectionId && (
+            {onSaveAsPreset && canSaveNodeAsPreset(node) && (
               <ContextMenuItem onClick={onSaveAsPreset}>
                 <Save className="w-4 h-4 mr-2" />
                 {t('sessions.actions.save_as_connection')}
