@@ -5,11 +5,9 @@
 <h1 align="center">⚡ OxideTerm</h1>
 
 <p align="center">
-  <strong>面向遠端伺服器的 AI-native 工作區。</strong>
+  <strong>AI 驅動的 SSH 客戶端 · SFTP 瀏覽器 · 終端管理器 —— 一站式工作區 </strong>
   <br>
-  透過 SSH 連接你的伺服器，然後在一個本地優先應用裡使用終端、檔案、連接埠、傳輸、輕量編輯和 OxideSens AI。
-  <br>
-  原生 Tauri 應用 · 純 Rust SSH · BYOK OxideSens AI · 核心 SSH 工作流無需帳號
+  基於 Tauri & React，純 Rust SSH 協定棧驅動。免費，無需註冊。
   <br>
   <strong>零 Electron。零 OpenSSL。零遙測。零訂閱。BYOK 優先。純 Rust SSH。</strong>
 </p>
@@ -152,7 +150,7 @@ OxideTerm 將終端資料與控制命令分離為兩個獨立平面：
 
 整個 SSH 協定棧使用 **russh 0.59**，基於 **`ring`** 加密後端編譯：
 
-- **零 C/OpenSSL 依賴**——完整的加密棧由 Rust 實作，告別「哪個 OpenSSL 版本？」的除錯噩夢。
+- **零 OpenSSL 依賴**——完整的加密棧由 Rust 實作，告別「哪個 OpenSSL 版本？」的除錯噩夢。
 - 完整的 SSH2 協定：金鑰交換、通道、SFTP 子系統、連接埠轉發
 - ChaCha20-Poly1305 和 AES-GCM 加密套件，Ed25519/RSA/ECDSA 金鑰
 - 自訂 **`AgentSigner`**：封裝系統 SSH Agent 並實作 russh 的 `Signer` trait，透過在 `.await` 前將 `&AgentIdentity` 複製為 owned 值，解決 RPITIT `Send` 約束問題

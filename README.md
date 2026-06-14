@@ -5,11 +5,9 @@
 <h1 align="center">⚡ OxideTerm</h1>
 
 <p align="center">
-  <strong>AI-native workspace for remote servers.</strong>
+  <strong>AI-Powered SSH Client · SFTP Browser · Terminal Manager — All in One </strong>
   <br>
-  Connect to your servers over SSH, then work with terminals, files, ports, transfers, lightweight editing, and OxideSens AI in one local-first app.
-  <br>
-  Native Tauri app · Pure Rust SSH · BYOK OxideSens AI · No account required for core SSH workflows
+  Built with Tauri & React, powered by Pure Rust SSH. Free. No account needed.
   <br>
   <strong>Zero Electron. Zero OpenSSL. Zero Telemetry. Zero Subscription. BYOK-first. Pure Rust SSH.</strong>
 </p>
@@ -52,11 +50,17 @@
 
 ---
 
-## What You Can Do
+## What OxideTerm Is
+
+OxideTerm is a **local-first AI workspace for remote servers** — an open-source alternative to Termius, SecureCRT & Tabby.
+
+**What you can do:**
 
 - Manage SSH terminals, SFTP, port forwards, in-terminal transfers, and local shells side by side
 - Keep working through network hiccups with Grace Period reconnect
 - Ask OxideSens AI to inspect live sessions and perform approved workspace actions through your own AI provider
+
+It is **not** a hosted cloud agent platform or a benchmark-only terminal renderer. The product direction is narrower: make remote work feel like one local workspace, without requiring an OxideTerm account.
 
 ---
 
@@ -70,12 +74,6 @@
 | Reconnect stability | Grace Period probes the old connection for 30s before replacing it, so vim/htop/yazi can survive short network drops |
 | Pure Rust, native app | Tauri 2.0 native app, russh 0.59 compiled against `ring`, no Electron, no OpenSSL/libssh2 dependency |
 | Credential safety | Passwords and API keys stay in OS keychain, saved connection metadata is sealed locally, and `.oxide` files use ChaCha20-Poly1305 + Argon2id encryption |
-
-## What It Is / Is Not
-
-OxideTerm focuses on a **local-first AI workspace for remote servers**. It is built for users who want terminals, files, ports, transfers, lightweight editing, and OxideSens AI centered around their own machines and remote nodes.
-
-It is not trying to be a hosted cloud agent platform or a benchmark-only terminal renderer. The product direction is narrower: make remote work feel like one local workspace, without requiring an OxideTerm account.
 
 ---
 
@@ -152,7 +150,7 @@ OxideTerm separates terminal data from control commands into two independent pla
 
 The entire SSH stack is **russh 0.59** compiled against the **`ring`** crypto backend:
 
-- **Zero C/OpenSSL dependencies** — the full crypto stack is Rust. No more "which OpenSSL version?" debugging.
+- **Zero OpenSSL dependencies** — the full crypto stack is Rust. No more "which OpenSSL version?" debugging.
 - Full SSH2 protocol: key exchange, channels, SFTP subsystem, port forwarding
 - ChaCha20-Poly1305 and AES-GCM cipher suites, Ed25519/RSA/ECDSA keys
 - Custom **`AgentSigner`**: wraps system SSH Agent and satisfies russh's `Signer` trait, solving RPITIT `Send` bound issues by cloning `&AgentIdentity` to an owned value before crossing `.await`

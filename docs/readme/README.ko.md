@@ -5,13 +5,11 @@
 <h1 align="center">⚡ OxideTerm</h1>
 
 <p align="center">
-  <strong>원격 서버를 위한 AI-native 워크스페이스입니다.</strong>
+  <strong>AI 기반 SSH 클라이언트 · SFTP 브라우저 · 터미널 매니저 —— 올인원 </strong>
   <br>
-  SSH로 서버에 연결한 뒤 terminal, 파일, 포트, 전송, 가벼운 편집, OxideSens AI를 하나의 local-first 앱에서 다룹니다.
+  Tauri & React 기반, 순수 Rust SSH 스택. 무료, 계정 불필요.
   <br>
-  네이티브 Tauri 앱 · 순수 Rust SSH · BYOK OxideSens AI · 핵심 SSH 워크플로에는 계정 불필요
-  <br>
-  <strong>Electron 없음. OpenSSL 없음. 텔레메트리 없음. 구독 없음. BYOK-first. 순수 Rust SSH.</strong>
+  <strong>제로 Electron. 제로 OpenSSL. 제로 텔레메트리. 제로 구독. BYOK 우선. 순수 Rust SSH.</strong>
 </p>
 
 <p align="center">
@@ -152,7 +150,7 @@ OxideTerm은 터미널 데이터와 제어 명령을 두 개의 독립적인 평
 
 전체 SSH 스택이 **`ring`** 암호화 백엔드로 컴파일된 **russh 0.59**로 구성됩니다:
 
-- **C/OpenSSL 의존성 제로** — 전체 암호화 스택이 Rust 구현. "어떤 버전의 OpenSSL인가?" 디버깅 불필요.
+- **OpenSSL 의존성 제로** — 전체 암호화 스택이 Rust 구현. "어떤 버전의 OpenSSL인가?" 디버깅 불필요.
 - 완전한 SSH2 프로토콜: 키 교환, 채널, SFTP 서브시스템, 포트 포워딩
 - ChaCha20-Poly1305 및 AES-GCM 암호 스위트, Ed25519/RSA/ECDSA 키
 - 커스텀 **`AgentSigner`**: 시스템 SSH Agent를 래핑하고 russh의 `Signer` 트레이트를 구현. `.await`를 넘을 때의 RPITIT `Send` 바운드 문제를 `&AgentIdentity`를 소유 값으로 클론하여 해결

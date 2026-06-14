@@ -5,11 +5,9 @@
 <h1 align="center">⚡ OxideTerm</h1>
 
 <p align="center">
-  <strong>面向远程服务器的 AI-native 工作区。</strong>
+  <strong>AI 驱动的 SSH 客户端 · SFTP 浏览器 · 终端管理器 —— 一站式工作区 </strong>
   <br>
-  通过 SSH 连接你的服务器，然后在一个本地优先应用里使用终端、文件、端口、传输、轻量编辑和 OxideSens AI。
-  <br>
-  原生 Tauri 应用 · 纯 Rust SSH · BYOK OxideSens AI · 核心 SSH 工作流无需账号
+  基于 Tauri & React，纯 Rust SSH 协议栈驱动。免费，无需注册。
   <br>
   <strong>零 Electron。零 OpenSSL。零遥测。零订阅。BYOK 优先。纯 Rust SSH。</strong>
 </p>
@@ -52,11 +50,17 @@
 
 ---
 
-## 你可以做什么
+## OxideTerm 是什么
+
+OxideTerm 是一个**面向远程服务器的本地优先 AI 工作区**——Termius、SecureCRT 与 Tabby 的开源替代。
+
+**你可以做什么：**
 
 - 并排管理 SSH 终端、SFTP、端口转发、终端内传输和本地 Shell
 - 通过宽限期重连，在网络抖动后继续工作
-- 让 OxideSens AI通过你自己的 AI 提供商检查实时会话，并执行已批准的工作区操作
+- 让 OxideSens AI 通过你自己的 AI 提供商检查实时会话，并执行已批准的工作区操作
+
+它**不是**托管云端 Agent 平台，也不是只追求终端渲染跑分的项目。产品方向更窄：让远程工作像一个本地工作区，同时不要求 OxideTerm 账号。
 
 ---
 
@@ -64,18 +68,12 @@
 
 | 如果你在意... | OxideTerm 提供... |
 |---|---|
-| 一个远程节点，多种工具 | 终端、SFTP、端口转发、trzsz、轻量 IDE、监控和 OxideSens AI都挂在同一个 SSH 工作区上 |
+| 一个远程节点，多种工具 | 终端、SFTP、端口转发、trzsz、轻量 IDE、监控和 OxideSens AI 都挂在同一个 SSH 工作区上 |
 | 本地优先 SSH 工作流 | SSH、SFTP、端口转发、本地 Shell 和配置管理都无需注册；云同步通过[官方插件](#官方插件)按需启用 |
 | BYOK OxideSens AI，而不是平台点数 | OxideSens 使用你自己的 OpenAI/Ollama/DeepSeek/OpenAI-compatible 端点，支持 MCP、RAG 和已批准的工作区操作 |
 | 重连稳定性 | 宽限期会先探测旧连接 30 秒再替换它，短暂网络中断时 vim/htop/yazi 仍有机会存活 |
 | 纯 Rust 原生应用 | Tauri 2.0 原生应用，russh 0.59 基于 `ring` 编译，无 Electron，无 OpenSSL/libssh2 依赖 |
 | 凭证安全 | 密码和 API 密钥保存在 OS 密钥链中，已保存连接的元数据在本地密封存储，`.oxide` 文件使用 ChaCha20-Poly1305 + Argon2id 加密 |
-
-## 它是什么 / 不是什么
-
-OxideTerm 专注于**面向远程服务器的本地优先 AI 工作区**。它面向希望终端、文件、端口、传输、轻量编辑和 BYOK OxideSens AI围绕自己的机器与远程节点展开的用户。
-
-它不是托管云端 Agent 平台，也不是只追求终端渲染跑分的项目。产品方向更窄：让远程工作像一个本地工作区，同时不要求 OxideTerm 账号。
 
 ---
 
@@ -152,7 +150,7 @@ OxideTerm 将终端数据与控制命令分离为两个独立平面：
 
 整个 SSH 协议栈使用 **russh 0.59**，基于 **`ring`** 加密后端编译：
 
-- **零 C/OpenSSL 依赖**——完整的加密栈由 Rust 实现，告别"哪个 OpenSSL 版本？"的调试噩梦。
+- **零 OpenSSL 依赖**——完整的加密栈由 Rust 实现，告别"哪个 OpenSSL 版本？"的调试噩梦。
 - 完整的 SSH2 协议：密钥交换、通道、SFTP 子系统、端口转发
 - ChaCha20-Poly1305 和 AES-GCM 加密套件，Ed25519/RSA/ECDSA 密钥
 - 自定义 **`AgentSigner`**：封装系统 SSH Agent 并实现 russh 的 `Signer` trait，通过在 `.await` 前将 `&AgentIdentity` 克隆为 owned 值，解决 RPITIT `Send` 约束问题

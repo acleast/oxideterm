@@ -5,11 +5,9 @@
 <h1 align="center">⚡ OxideTerm</h1>
 
 <p align="center">
-  <strong>Workspace AI-native para servidores remotos.</strong>
+  <strong>Cliente SSH com IA · Navegador SFTP · Gerenciador de terminais —— Tudo em um </strong>
   <br>
-  Conecte-se aos seus servidores por SSH e trabalhe com terminais, arquivos, portas, transferências, edição leve e OxideSens AI em um app local-first.
-  <br>
-  App Tauri nativo · SSH puro em Rust · OxideSens AI BYOK · sem conta para os workflows SSH principais
+  Construído com Tauri & React, alimentado por SSH Pure Rust. Grátis. Sem necessidade de conta.
   <br>
   <strong>Zero Electron. Zero OpenSSL. Zero telemetria. Zero assinatura. BYOK-first. SSH puro em Rust.</strong>
 </p>
@@ -152,7 +150,7 @@ OxideTerm separa dados do terminal dos comandos de controle em dois planos indep
 
 Toda a pilha SSH é **russh 0.59** compilada com o backend criptográfico **`ring`**:
 
-- **Zero dependências C/OpenSSL** — toda a pilha criptográfica é Rust. Sem mais debug de "qual versão do OpenSSL?".
+- **Zero dependências OpenSSL** — toda a pilha criptográfica é Rust. Sem mais debug de "qual versão do OpenSSL?".
 - Protocolo SSH2 completo: troca de chaves, canais, subsistema SFTP, encaminhamento de portas
 - Suítes de cifragem ChaCha20-Poly1305 e AES-GCM, chaves Ed25519/RSA/ECDSA
 - **`AgentSigner`** personalizado: encapsula o SSH Agent do sistema e implementa o trait `Signer` do russh, resolvendo problemas de bounds `Send` RPITIT ao clonar `&AgentIdentity` para um valor owned antes de cruzar `.await`
