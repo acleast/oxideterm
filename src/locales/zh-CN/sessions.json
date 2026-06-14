@@ -38,7 +38,8 @@
       "remove": "移除",
       "remove_node": "移除节点",
       "save_as_preset": "保存为预设...",
-      "parent_disconnected": "父节点已断开"
+      "parent_disconnected": "父节点已断开",
+      "save_as_connection": "保存为连接..."
     },
     "tree": {
       "no_sessions": "暂无会话",

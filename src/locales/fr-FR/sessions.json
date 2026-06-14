@@ -38,7 +38,8 @@
       "remove": "Supprimer",
       "remove_node": "Supprimer le nœud",
       "save_as_preset": "Enregistrer comme préréglage...",
-      "parent_disconnected": "Parent déconnecté"
+      "parent_disconnected": "Parent déconnecté",
+      "save_as_connection": "Enregistrer comme connexion..."
     },
     "tree": {
       "no_sessions": "Aucune session",

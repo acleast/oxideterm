@@ -14,6 +14,30 @@ import { X, Save, Server, ArrowRight, Loader2, AlertCircle } from 'lucide-react'
 import { api } from '../../lib/api';
 import type { FlatNode, SaveConnectionRequest, ProxyHopInfo } from '@/types';
 
+const CONNECTION_COPY_MARKER = 'Copy';
+
+const uniqueConnectionName = (baseName: string, existingNames: string[]) => {
+  const normalizedExistingNames = new Set(
+    existingNames.map(existingName => existingName.trim().toLocaleLowerCase()),
+  );
+  const trimmedBaseName = baseName.trim();
+
+  if (!normalizedExistingNames.has(trimmedBaseName.toLocaleLowerCase())) {
+    return trimmedBaseName;
+  }
+
+  // Runtime save-as creates a fresh saved connection, so generate a copy name
+  // before persisting instead of creating ambiguous duplicate rows.
+  for (let index = 1; ; index += 1) {
+    const candidate = index === 1
+      ? `${trimmedBaseName} (${CONNECTION_COPY_MARKER})`
+      : `${trimmedBaseName} (${CONNECTION_COPY_MARKER} ${index})`;
+    if (!normalizedExistingNames.has(candidate.toLocaleLowerCase())) {
+      return candidate;
+    }
+  }
+};
+
 interface SavePathAsPresetDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -33,6 +57,7 @@ export const SavePathAsPresetDialog: React.FC<SavePathAsPresetDialogProps> = ({
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [existingConnectionNames, setExistingConnectionNames] = useState<string[]>([]);
 
   // Build path from root to target node
   const pathNodes = useMemo(() => {
@@ -63,6 +88,9 @@ export const SavePathAsPresetDialog: React.FC<SavePathAsPresetDialogProps> = ({
       setName(defaultName);
       setError(null);
       setSaving(false);
+      api.getConnections()
+        .then(connections => setExistingConnectionNames(connections.map(connection => connection.name)))
+        .catch(() => setExistingConnectionNames([]));
     }
   }, [isOpen, defaultName]);
 
@@ -90,18 +118,23 @@ export const SavePathAsPresetDialog: React.FC<SavePathAsPresetDialogProps> = ({
 
       // 构建连接配置（含跳板机链路）
       const request: SaveConnectionRequest = {
-        name: name.trim(),
+        name: uniqueConnectionName(name, existingConnectionNames),
         group: null,
         host: targetNode.host,
         port: targetNode.port,
         username: targetNode.username,
         auth_type: 'agent', // 默认使用 agent
-        tags: ['从钻入路径保存'],
+        tags: [],
         proxy_chain: proxyChain.length > 0 ? proxyChain : undefined,
       };
 
       // 保存连接
-      await api.saveConnection(request);
+      const saved = await api.saveConnection(request);
+      setExistingConnectionNames((currentNames) => (
+        currentNames.some(existingName => existingName.trim().toLocaleLowerCase() === saved.name.trim().toLocaleLowerCase())
+          ? currentNames
+          : [...currentNames, saved.name]
+      ));
 
       onSaved?.();
       onClose();

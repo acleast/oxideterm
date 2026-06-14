@@ -1097,6 +1097,7 @@ export const Sidebar = () => {
                     onOpenForwards={handleTreeOpenForwards}
                     onDrillDown={handleTreeDrillDown}
                     onRemove={handleTreeRemove}
+                    onSaveAsPreset={handleTreeSaveAsPreset}
                   />
                 </div>
               ) : (

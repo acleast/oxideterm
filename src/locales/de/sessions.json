@@ -38,7 +38,8 @@
       "remove": "Entfernen",
       "remove_node": "Knoten entfernen",
       "save_as_preset": "Als Vorlage speichern...",
-      "parent_disconnected": "Übergeordneter Knoten getrennt"
+      "parent_disconnected": "Übergeordneter Knoten getrennt",
+      "save_as_connection": "Als Verbindung speichern..."
     },
     "tree": {
       "no_sessions": "Keine Sitzungen",

@@ -38,7 +38,8 @@
       "remove": "Xóa",
       "remove_node": "Xóa nút",
       "save_as_preset": "Lưu làm mẫu...",
-      "parent_disconnected": "Nút cha đã ngắt kết nối"
+      "parent_disconnected": "Nút cha đã ngắt kết nối",
+      "save_as_connection": "Lưu thành kết nối..."
     },
     "tree": {
       "no_sessions": "Không có phiên",

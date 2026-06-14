@@ -343,13 +343,13 @@
       }
     },
     "save_preset": {
-      "title": "儲存為預設連線",
+      "title": "儲存為連線",
       "connection_path": "連線路徑",
       "connection_name": "連線名稱",
       "name_placeholder": "輸入連線名稱",
       "notes_title": "⚠️ 注意事項：",
-      "notes_1": "驗證將使用 SSH Agent。",
-      "notes_2": "若要使用其他驗證方式，請在儲存後編輯連線。",
+      "notes_1": "執行中的會話預設儲存為 SSH Agent 認證。",
+      "notes_2": "如需密碼、口令或其他認證方式，請在儲存後編輯連線。",
       "notes_3": "儲存後，此連線將出現在連線清單中。",
       "error_name_required": "請輸入連線名稱",
       "cancel": "取消",
@@ -514,7 +514,9 @@
       "serial_profile_name": "設定檔名稱",
       "serial_profile_name_placeholder": "實驗室主控台",
       "serial_save_failed": "儲存序列埠設定檔失敗",
-      "serial_invalid_baud_rate": "鮑率必須大於 0"
+      "serial_invalid_baud_rate": "鮑率必須大於 0",
+      "save": "儲存",
+      "save_and_connect": "儲存並連線"
     },
     "settings": {
       "title": "設定",

@@ -38,7 +38,8 @@
       "remove": "削除",
       "remove_node": "ノードを削除",
       "save_as_preset": "プリセットとして保存...",
-      "parent_disconnected": "親が切断されました"
+      "parent_disconnected": "親が切断されました",
+      "save_as_connection": "接続として保存..."
     },
     "tree": {
       "no_sessions": "セッションがありません",

@@ -343,13 +343,13 @@
       }
     },
     "save_preset": {
-      "title": "Enregistrer comme connexion prédéfinie",
+      "title": "Enregistrer comme connexion",
       "connection_path": "Chemin de connexion",
       "connection_name": "Nom de la connexion",
       "name_placeholder": "Entrez le nom de la connexion",
       "notes_title": "⚠️ Notes :",
-      "notes_1": "L'authentification utilisera l'agent SSH.",
-      "notes_2": "Pour d'autres méthodes d'authentification, modifiez la connexion après l'enregistrement.",
+      "notes_1": "Les sessions en cours sont enregistrées par défaut avec l’authentification SSH Agent.",
+      "notes_2": "Modifiez la connexion enregistrée après coup pour ajouter mots de passe, phrases secrètes ou une autre méthode d’authentification.",
       "notes_3": "Cette connexion sera disponible dans la liste des connexions après l'enregistrement.",
       "error_name_required": "Veuillez entrer le nom de la connexion",
       "cancel": "Annuler",
@@ -514,7 +514,9 @@
       "serial_profile_name": "Nom du profil",
       "serial_profile_name_placeholder": "Console de labo",
       "serial_save_failed": "Échec de l’enregistrement du profil série",
-      "serial_invalid_baud_rate": "Le débit en bauds doit être supérieur à zéro"
+      "serial_invalid_baud_rate": "Le débit en bauds doit être supérieur à zéro",
+      "save": "Enregistrer",
+      "save_and_connect": "Enregistrer et connecter"
     },
     "settings": {
       "title": "Paramètres",

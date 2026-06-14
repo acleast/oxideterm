@@ -38,7 +38,8 @@
       "remove": "제거",
       "remove_node": "노드 제거",
       "save_as_preset": "프리셋으로 저장...",
-      "parent_disconnected": "상위 노드 연결 해제됨"
+      "parent_disconnected": "상위 노드 연결 해제됨",
+      "save_as_connection": "연결로 저장..."
     },
     "tree": {
       "no_sessions": "세션 없음",

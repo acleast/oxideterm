@@ -684,10 +684,10 @@ const SessionNode = React.memo<SessionNodeProps>(({
                 <ArrowDownRight className="w-4 h-4 mr-2" />
                 {t('sessions.actions.drill_in')}
               </ContextMenuItem>
-              {onSaveAsPreset && node.originType === 'drill_down' && node.depth > 0 && (
+              {onSaveAsPreset && !node.sshConnectionId && (
                 <ContextMenuItem onClick={onSaveAsPreset}>
                   <Save className="w-4 h-4 mr-2" />
-                  {t('sessions.actions.save_as_preset')}
+                  {t('sessions.actions.save_as_connection')}
                 </ContextMenuItem>
               )}
               <ContextMenuSeparator />

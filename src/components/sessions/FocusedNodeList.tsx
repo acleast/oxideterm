@@ -24,6 +24,7 @@ import {
   Plug,
   ArrowRightLeft,
   ArrowDownRight,
+  Save,
   X,
 } from 'lucide-react';
 import {
@@ -62,6 +63,7 @@ export interface FocusedNodeListProps {
   onOpenForwards?: (nodeId: string) => void;
   onDrillDown: (nodeId: string) => void;
   onRemove: (nodeId: string) => void;
+  onSaveAsPreset?: (nodeId: string) => void;
 }
 
 // ============================================================================
@@ -175,6 +177,7 @@ interface NodeItemProps {
   onOpenForwards?: () => void;
   onDrillDown: () => void;
   onRemove: () => void;
+  onSaveAsPreset?: () => void;
 }
 
 const NodeItem: React.FC<NodeItemProps> = ({
@@ -193,6 +196,7 @@ const NodeItem: React.FC<NodeItemProps> = ({
   onOpenForwards,
   onDrillDown,
   onRemove,
+  onSaveAsPreset,
 }) => {
   const { t } = useTranslation();
   const status = node.runtime.status;
@@ -356,6 +360,12 @@ const NodeItem: React.FC<NodeItemProps> = ({
               <ArrowDownRight className="w-4 h-4 mr-2" />
               {t('sessions.actions.drill_down')}
             </ContextMenuItem>
+            {onSaveAsPreset && !node.sshConnectionId && (
+              <ContextMenuItem onClick={onSaveAsPreset}>
+                <Save className="w-4 h-4 mr-2" />
+                {t('sessions.actions.save_as_connection')}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
             <ContextMenuItem onClick={onDisconnect} className="text-red-400">
               <Unplug className="w-4 h-4 mr-2" />
@@ -400,6 +410,7 @@ export const FocusedNodeList: React.FC<FocusedNodeListProps> = ({
   onOpenForwards,
   onDrillDown,
   onRemove,
+  onSaveAsPreset,
 }) => {
   const { t } = useTranslation();
   
@@ -459,6 +470,7 @@ export const FocusedNodeList: React.FC<FocusedNodeListProps> = ({
               onOpenForwards={onOpenForwards ? () => onOpenForwards(node.id) : undefined}
               onDrillDown={() => onDrillDown(node.id)}
               onRemove={() => onRemove(node.id)}
+              onSaveAsPreset={onSaveAsPreset ? () => onSaveAsPreset(node.id) : undefined}
             />
           ))
         )}

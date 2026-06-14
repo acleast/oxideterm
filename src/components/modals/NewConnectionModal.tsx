@@ -31,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '../ui/select';
-import { ProxyHopConfig, type SerialPortInfo } from '../../types';
+import { ProxyHopConfig, type SaveConnectionRequest, type SerialPortInfo } from '../../types';
 import { api } from '../../lib/api';
 import type { HostKeyStatus } from '../../types';
 import type { TestConnectionRequest, TestConnectionResponse } from '../../lib/api';
@@ -59,11 +59,33 @@ import {
   TooltipTrigger,
 } from '../ui/tooltip';
 
-const SAVE_CONNECTION_KEY = 'oxideterm.saveConnection';
-
 type ConnectionTransport = 'ssh' | 'serial';
 type SerialDataBits = 5 | 6 | 7 | 8;
 type SerialStopBits = 1 | 2;
+type NewConnectionAction = 'save' | 'connect' | 'save_and_connect';
+const CONNECTION_COPY_MARKER = 'Copy';
+
+const uniqueConnectionName = (baseName: string, existingNames: string[]) => {
+  const normalizedExistingNames = new Set(
+    existingNames.map(existingName => existingName.trim().toLocaleLowerCase()),
+  );
+  const trimmedBaseName = baseName.trim();
+
+  if (!normalizedExistingNames.has(trimmedBaseName.toLocaleLowerCase())) {
+    return trimmedBaseName;
+  }
+
+  // New/save-as flows create a fresh saved connection, so mirror the duplicate
+  // editor's copy-suffix convention instead of creating indistinguishable rows.
+  for (let index = 1; ; index += 1) {
+    const candidate = index === 1
+      ? `${trimmedBaseName} (${CONNECTION_COPY_MARKER})`
+      : `${trimmedBaseName} (${CONNECTION_COPY_MARKER} ${index})`;
+    if (!normalizedExistingNames.has(candidate.toLocaleLowerCase())) {
+      return candidate;
+    }
+  }
+};
 
 type ConnectFormRequest = {
   displayName?: string;
@@ -111,16 +133,10 @@ export const NewConnectionModal = () => {
   const [certPath, setCertPath] = useState('');  // Certificate path
   const [managedKeyId, setManagedKeyId] = useState('');
   const [passphrase, setPassphrase] = useState('');  // Key passphrase for certificate
-  const [saveConnection, setSaveConnection] = useState(() => {
-    try {
-      return localStorage.getItem(SAVE_CONNECTION_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
   const [savePassword, setSavePassword] = useState(false);
   const [group, setGroup] = useState('Ungrouped');
   const [groups, setGroups] = useState<string[]>([]);
+  const [existingConnectionNames, setExistingConnectionNames] = useState<string[]>([]);
 
   const [proxyServers, setProxyServers] = useState<ProxyHopConfig[]>([]);
   const [upstreamProxyPolicy, setUpstreamProxyPolicy] = useState<SavedUpstreamProxyPolicy>(
@@ -190,6 +206,57 @@ export const NewConnectionModal = () => {
     );
   }, [formatTestFailure, t, toastError, toastSuccess]);
 
+  const buildSaveConnectionRequest = useCallback((request: ConnectFormRequest): SaveConnectionRequest => {
+    const normalizedPostConnectCommand = request.postConnectCommand?.trim();
+    const draftName = name.trim() || `${request.username}@${request.host}`;
+    return {
+      name: uniqueConnectionName(draftName, existingConnectionNames),
+      group: group === 'Ungrouped' ? null : (group || null),
+      host: request.host,
+      port: request.port,
+      username: request.username,
+      auth_type: request.authType as 'password' | 'key' | 'default_key' | 'managed_key' | 'agent' | 'certificate',
+      password: (authType === 'password' && savePassword) ? password : undefined,
+      key_path: (authType === 'key' || authType === 'certificate') ? keyPath : undefined,
+      cert_path: authType === 'certificate' ? certPath : undefined,
+      managed_key_id: authType === 'managed_key' ? managedKeyId : undefined,
+      passphrase: (authType === 'key' || authType === 'certificate' || authType === 'default_key' || authType === 'managed_key') && passphrase
+        ? passphrase
+        : undefined,
+      tags: [],
+      agent_forwarding: request.agentForwarding,
+      post_connect_command: normalizedPostConnectCommand || null,
+      proxy_chain: proxyServers.length > 0 ? proxyServers : undefined,
+      upstream_proxy: upstreamProxyPolicy,
+    };
+  }, [
+    authType,
+    certPath,
+    existingConnectionNames,
+    group,
+    keyPath,
+    managedKeyId,
+    name,
+    passphrase,
+    password,
+    proxyServers,
+    savePassword,
+    upstreamProxyPolicy,
+  ]);
+
+  const saveConnectionDraft = useCallback(async (request: ConnectFormRequest) => {
+    const saveRequest = buildSaveConnectionRequest(request);
+    const saved = await api.saveConnection(saveRequest);
+    setName(saved.name);
+    setExistingConnectionNames((currentNames) => (
+      currentNames.some(existingName => existingName.trim().toLocaleLowerCase() === saved.name.trim().toLocaleLowerCase())
+        ? currentNames
+        : [...currentNames, saved.name]
+    ));
+    window.dispatchEvent(new CustomEvent('saved-connections-changed'));
+    return saved.name;
+  }, [buildSaveConnectionRequest]);
+
   const finalizeConnectedNode = useCallback(async (request: ConnectFormRequest, nodeId: string) => {
     const normalizedPostConnectCommand = request.postConnectCommand?.trim();
     const terminalId = normalizedPostConnectCommand
@@ -205,58 +272,12 @@ export const NewConnectionModal = () => {
     setPendingProxyConnectPlan(null);
     toggleModal('newConnection', false);
 
-    if (saveConnection) {
-      try {
-        await api.saveConnection({
-          name: name || `${request.username}@${request.host}`,
-          group: group === 'Ungrouped' ? null : (group || null),
-          host: request.host,
-          port: request.port,
-          username: request.username,
-          auth_type: request.authType as 'password' | 'key' | 'default_key' | 'managed_key' | 'agent' | 'certificate',
-          password: (authType === 'password' && savePassword) ? password : undefined,
-          key_path: (authType === 'key' || authType === 'certificate') ? keyPath : undefined,
-          cert_path: authType === 'certificate' ? certPath : undefined,
-          managed_key_id: authType === 'managed_key' ? managedKeyId : undefined,
-          passphrase: (authType === 'key' || authType === 'certificate' || authType === 'default_key' || authType === 'managed_key') && passphrase
-            ? passphrase
-            : undefined,
-          tags: [],
-          agent_forwarding: request.agentForwarding,
-          post_connect_command: normalizedPostConnectCommand || null,
-          proxy_chain: proxyServers.length > 0 ? proxyServers : undefined,
-          upstream_proxy: upstreamProxyPolicy,
-        });
-        window.dispatchEvent(new CustomEvent('saved-connections-changed'));
-      } catch (saveErr) {
-        console.error('Failed to save connection:', saveErr);
-        toastError(
-          t('modals.new_connection.save_failed'),
-          String(saveErr),
-        );
-      }
-    }
-
     setPassword('');
     setPassphrase('');
   }, [
-    authType,
     createTab,
     createTerminalForNode,
-    group,
-    keyPath,
-    managedKeyId,
-    name,
-    password,
-    postConnectCommand,
-    proxyServers,
-    saveConnection,
-    savePassword,
-    t,
-    toastError,
     toggleModal,
-    certPath,
-    upstreamProxyPolicy,
   ]);
 
   const resolveUpstreamProxyForManualConnect = useCallback(async (): Promise<UpstreamProxyForConnect | undefined> => {
@@ -318,7 +339,7 @@ export const NewConnectionModal = () => {
       const role = (e.target as HTMLElement).getAttribute('role');
       if (tag === 'BUTTON' || role === 'combobox' || role === 'checkbox') return;
       e.preventDefault();
-      handleConnect();
+      handleConnect('save_and_connect');
     }
   }, [loading]);
 
@@ -333,6 +354,9 @@ export const NewConnectionModal = () => {
   useEffect(() => {
     if (modals.newConnection) {
       api.getGroups().then(setGroups).catch(() => setGroups([]));
+      api.getConnections()
+        .then(connections => setExistingConnectionNames(connections.map(connection => connection.name)))
+        .catch(() => setExistingConnectionNames([]));
       api.isAgentAvailable().then(setAgentAvailable).catch(() => setAgentAvailable(false));
 
       // Pre-fill from Quick Connect data (⌘K user@host:port)
@@ -469,7 +493,7 @@ export const NewConnectionModal = () => {
     && serialBaudRate.trim().length > 0
     && !getSerialBaudRate();
 
-  const handleConnect = async () => {
+  const handleConnect = async (action: NewConnectionAction = 'connect') => {
     if (transport === 'serial') {
       const baudRate = getSerialBaudRate();
       const portPath = serialPortPath.trim();
@@ -545,6 +569,23 @@ export const NewConnectionModal = () => {
         agentForwarding,
         postConnectCommand,
       };
+
+      if (action === 'save' || action === 'save_and_connect') {
+        try {
+          const savedName = await saveConnectionDraft(request);
+          request.displayName = savedName;
+        } catch (saveError) {
+          toastError(t('modals.new_connection.save_failed'), String(saveError));
+          return;
+        }
+        if (action === 'save') {
+          toggleModal('newConnection', false);
+          setPassword('');
+          setPassphrase('');
+          return;
+        }
+      }
+
       const upstreamProxy = await resolveUpstreamProxyForManualConnect();
 
       if (proxyServers.length > 0) {
@@ -1230,19 +1271,6 @@ export const NewConnectionModal = () => {
               </p>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <Checkbox 
-                id="save-conn" 
-                checked={saveConnection}
-                onCheckedChange={(c) => {
-                  const val = !!c;
-                  setSaveConnection(val);
-                  try { localStorage.setItem(SAVE_CONNECTION_KEY, String(val)); } catch { /* noop */ }
-                }}
-              />
-              <Label htmlFor="save-conn">{t('modals.new_connection.save_connection')}</Label>
-            </div>
-            <p className="text-xs text-muted-foreground -mt-1 ml-6">{t('modals.new_connection.save_connection_hint')}</p>
           </div>
 
           <UpstreamProxyPolicyFields
@@ -1536,23 +1564,40 @@ export const NewConnectionModal = () => {
         </div>
    
         <DialogFooter className="shrink-0">
-           <Button variant="ghost" onClick={() => toggleModal('newConnection', false)}>{t('modals.new_connection.cancel')}</Button>
-           {transport === 'ssh' && (
-             <Button
+          <Button variant="ghost" onClick={() => toggleModal('newConnection', false)}>{t('modals.new_connection.cancel')}</Button>
+          {transport === 'ssh' && (
+            <>
+              <Button
                 variant="outline"
                 onClick={handleTestConnection}
                 disabled={loading || testing || !canConnect()}
-             >
+              >
                 {testing ? t('modals.new_connection.testing') : t('modals.new_connection.test')}
-             </Button>
-           )}
-           <Button onClick={handleConnect} disabled={loading || testing || !canConnect()}>
-              {loading
-                ? t('modals.new_connection.connecting')
-                : transport === 'serial'
-                  ? t('modals.new_connection.serial_open')
-                  : t('modals.new_connection.connect')}
-           </Button>
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleConnect('save')}
+                disabled={loading || testing || !canConnect()}
+              >
+                {t('modals.new_connection.save')}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => handleConnect('connect')}
+                disabled={loading || testing || !canConnect()}
+              >
+                {t('modals.new_connection.connect')}
+              </Button>
+              <Button onClick={() => handleConnect('save_and_connect')} disabled={loading || testing || !canConnect()}>
+                {loading ? t('modals.new_connection.connecting') : t('modals.new_connection.save_and_connect')}
+              </Button>
+            </>
+          )}
+          {transport === 'serial' && (
+            <Button onClick={() => handleConnect('connect')} disabled={loading || testing || !canConnect()}>
+              {loading ? t('modals.new_connection.connecting') : t('modals.new_connection.serial_open')}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
    

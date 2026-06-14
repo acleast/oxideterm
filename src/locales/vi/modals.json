@@ -343,13 +343,13 @@
       }
     },
     "save_preset": {
-      "title": "Lưu làm kết nối mẫu",
+      "title": "Lưu thành kết nối",
       "connection_path": "Đường dẫn kết nối",
       "connection_name": "Tên kết nối",
       "name_placeholder": "Nhập tên kết nối",
       "notes_title": "⚠️ Ghi chú:",
-      "notes_1": "Xác thực sẽ sử dụng SSH Agent.",
-      "notes_2": "Cho các phương thức xác thực khác, chỉnh sửa kết nối sau khi lưu.",
+      "notes_1": "Phiên đang chạy được lưu mặc định bằng xác thực SSH Agent.",
+      "notes_2": "Chỉnh sửa kết nối đã lưu sau đó để thêm mật khẩu, cụm mật khẩu hoặc phương thức xác thực khác.",
       "notes_3": "Kết nối này sẽ có sẵn trong danh sách kết nối sau khi lưu.",
       "error_name_required": "Vui lòng nhập tên kết nối",
       "cancel": "Hủy",
@@ -514,7 +514,9 @@
       "serial_profile_name": "Tên cấu hình",
       "serial_profile_name_placeholder": "Console phòng lab",
       "serial_save_failed": "Không lưu được cấu hình serial",
-      "serial_invalid_baud_rate": "Tốc độ baud phải lớn hơn 0"
+      "serial_invalid_baud_rate": "Tốc độ baud phải lớn hơn 0",
+      "save": "Lưu",
+      "save_and_connect": "Lưu và kết nối"
     },
     "settings": {
       "title": "Cài đặt",

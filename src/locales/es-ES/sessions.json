@@ -38,7 +38,8 @@
       "remove": "Eliminar",
       "remove_node": "Eliminar nodo",
       "save_as_preset": "Guardar como preset...",
-      "parent_disconnected": "Padre desconectado"
+      "parent_disconnected": "Padre desconectado",
+      "save_as_connection": "Guardar como conexión..."
     },
     "tree": {
       "no_sessions": "Sin sesiones",

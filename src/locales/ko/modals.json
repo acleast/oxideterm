@@ -343,13 +343,13 @@
       }
     },
     "save_preset": {
-      "title": "프리셋 연결로 저장",
+      "title": "연결로 저장",
       "connection_path": "연결 경로",
       "connection_name": "연결 이름",
       "name_placeholder": "연결 이름 입력",
       "notes_title": "⚠️ 참고:",
-      "notes_1": "인증은 SSH Agent를 사용합니다.",
-      "notes_2": "다른 인증 방법을 사용하려면 저장 후 연결을 편집하세요.",
+      "notes_1": "실행 중인 세션은 기본적으로 SSH Agent 인증으로 저장됩니다.",
+      "notes_2": "비밀번호, 암호문 또는 다른 인증 방식이 필요하면 저장 후 연결을 편집하세요.",
       "notes_3": "이 연결은 저장 후 연결 목록에서 사용할 수 있습니다.",
       "error_name_required": "연결 이름을 입력하세요",
       "cancel": "취소",
@@ -514,7 +514,9 @@
       "serial_profile_name": "프로필 이름",
       "serial_profile_name_placeholder": "랩 콘솔",
       "serial_save_failed": "시리얼 프로필 저장 실패",
-      "serial_invalid_baud_rate": "전송 속도는 0보다 커야 합니다"
+      "serial_invalid_baud_rate": "전송 속도는 0보다 커야 합니다",
+      "save": "저장",
+      "save_and_connect": "저장 후 연결"
     },
     "settings": {
       "title": "설정",
