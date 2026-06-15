@@ -5935,6 +5935,7 @@ pub async fn set_data_directory(new_path: String) -> Result<bool, String> {
         tracing::warn!("Failed to remove write test file {:?}: {}", test_file, e);
     }
 
+    let canonical = crate::config::storage::user_visible_data_dir_path(canonical);
     let canonical_str = canonical.to_string_lossy().to_string();
     let bootstrap = crate::config::storage::BootstrapConfig::new_with_data_dir(canonical_str);
     tokio::task::spawn_blocking(move || crate::config::storage::save_bootstrap_config(&bootstrap))

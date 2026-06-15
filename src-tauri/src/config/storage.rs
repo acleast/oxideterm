@@ -215,13 +215,14 @@ fn resolve_data_dir() -> Result<PathBuf, StorageError> {
     if let Some(data_dir) =
         portable_data_dir().map_err(|e| StorageError::Portable(e.to_string()))?
     {
+        let data_dir = user_visible_data_dir_path(data_dir);
         tracing::info!("Using portable data directory: {:?}", data_dir);
         return Ok(data_dir);
     }
 
     if let Some(bootstrap) = read_bootstrap_config() {
         if let Some(custom_dir) = bootstrap.data_dir {
-            let path = PathBuf::from(&custom_dir);
+            let path = user_visible_data_dir_path(PathBuf::from(&custom_dir));
             if path.is_absolute() {
                 tracing::info!("Using custom data directory: {:?}", path);
                 return Ok(path);
@@ -237,8 +238,8 @@ fn resolve_data_dir() -> Result<PathBuf, StorageError> {
 
 /// Get the current effective data directory path and whether it's custom
 pub fn get_data_dir_info() -> Result<ResolvedDataDirInfo, StorageError> {
-    let effective = config_dir()?;
-    let default = default_dir()?;
+    let effective = user_visible_data_dir_path(config_dir()?);
+    let default = user_visible_data_dir_path(default_dir()?);
     let is_portable = is_portable_mode().map_err(|e| StorageError::Portable(e.to_string()))?;
     let is_custom = !is_portable && effective != default;
     Ok(ResolvedDataDirInfo {
@@ -248,6 +249,19 @@ pub fn get_data_dir_info() -> Result<ResolvedDataDirInfo, StorageError> {
         is_portable,
         can_change: !is_portable,
     })
+}
+
+pub fn user_visible_data_dir_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    // Windows canonicalize() returns verbatim paths such as `\\?\D:\...`.
+    // Persisted bootstrap data and settings UI should use the normal user path.
+    if let Some(stripped) = text.strip_prefix("\\\\?\\UNC\\") {
+        return PathBuf::from(format!("\\\\{stripped}"));
+    }
+    if let Some(stripped) = text.strip_prefix("\\\\?\\") {
+        return PathBuf::from(stripped);
+    }
+    path
 }
 
 /// Get the log directory for storing application logs
@@ -580,6 +594,19 @@ mod tests {
         assert!(info.is_portable);
         assert!(!info.is_custom);
         assert!(!info.can_change);
+    }
+
+    #[test]
+    fn user_visible_data_dir_path_strips_windows_verbatim_prefixes() {
+        let disk =
+            user_visible_data_dir_path(PathBuf::from(r"\\?\D:\DevSoftWare\Remote\OxideTerm\data"));
+        assert_eq!(
+            disk.to_string_lossy(),
+            r"D:\DevSoftWare\Remote\OxideTerm\data"
+        );
+
+        let unc = user_visible_data_dir_path(PathBuf::from(r"\\?\UNC\server\share\OxideTerm"));
+        assert_eq!(unc.to_string_lossy(), r"\\server\share\OxideTerm");
     }
 
     #[test]
