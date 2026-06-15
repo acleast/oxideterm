@@ -115,9 +115,10 @@ sysinfo = { version = "0.33", default-features = false, features = ["disk", "sys
 # Window vibrancy (native frosted glass effect)
 window-vibrancy = "0.6"
 
-# HTTP client (plugin registry, resumable updates)
-reqwest = { version = "0.12", features = ["rustls-tls", "socks", "stream", "json"], default-features = false }
-reqwest13 = { package = "reqwest", version = "0.13", features = ["rustls-no-provider", "socks"], default-features = false }
+# HTTP client (plugin registry, resumable updates). `system-proxy` lets the
+# updater's explicit System proxy mode read OS proxy settings.
+reqwest = { version = "0.12", features = ["rustls-tls", "socks", "stream", "json", "system-proxy"], default-features = false }
+reqwest13 = { package = "reqwest", version = "0.13", features = ["rustls-no-provider", "socks", "system-proxy"], default-features = false }
 
 # Signature verification (resumable updater)
 minisign-verify = "0.2"

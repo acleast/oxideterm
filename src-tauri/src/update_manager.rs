@@ -1445,3 +1445,48 @@ fn cancel_not_allowed_error(stage: UpdateStage) -> UpdateError {
 fn now_millis() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_proxy_url_uses_remote_dns_for_socks5() {
+        let proxy = UpdateProxySettings {
+            mode: UpdateProxyMode::Custom,
+            protocol: UpdateProxyProtocol::Socks5,
+            host: "127.0.0.1".to_string(),
+            port: 7890,
+            no_proxy: String::new(),
+        };
+
+        assert_eq!(
+            update_proxy_url(&proxy).expect("proxy URL should be valid"),
+            "socks5h://127.0.0.1:7890"
+        );
+    }
+
+    #[test]
+    fn update_proxy_url_rejects_empty_host() {
+        let proxy = UpdateProxySettings {
+            mode: UpdateProxyMode::Custom,
+            protocol: UpdateProxyProtocol::Http,
+            host: "  ".to_string(),
+            port: 7890,
+            no_proxy: String::new(),
+        };
+
+        assert!(update_proxy_url(&proxy).is_err());
+    }
+
+    #[test]
+    fn retry_delay_and_content_range_match_resumable_policy() {
+        // Keep these lightweight tests near the updater proxy tests so the
+        // resumable HTTP helper behavior remains covered in this file.
+        assert_eq!(compute_retry_delay(1), 1_500);
+        assert_eq!(compute_retry_delay(2), 3_000);
+        assert_eq!(compute_retry_delay(8), 12_000);
+        assert_eq!(parse_content_range_total("bytes 10-19/42"), Some(42));
+        assert_eq!(parse_content_range_total("bytes 10-19/*"), None);
+    }
+}
