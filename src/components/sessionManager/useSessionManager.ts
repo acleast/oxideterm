@@ -7,6 +7,7 @@ import type { ConnectionInfo, SerialProfile } from '../../types';
 
 export type SortField = 'name' | 'host' | 'port' | 'username' | 'auth_type' | 'group' | 'last_used_at';
 export type SortDirection = 'asc' | 'desc';
+export type SessionManagerViewMode = 'grid' | 'list' | 'tree';
 
 export type FolderNode = {
   name: string;
@@ -33,6 +34,7 @@ export function useSessionManager() {
   const [sortField, setSortField] = useState<SortField>('last_used_at');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [viewMode, setViewMode] = useState<SessionManagerViewMode>('grid');
 
   // Load data
   const loadData = useCallback(async () => {
@@ -319,6 +321,22 @@ export function useSessionManager() {
     });
   }, []);
 
+  const expandAllGroups = useCallback(() => {
+    const collectPaths = (nodes: FolderNode[], paths: Set<string>) => {
+      for (const node of nodes) {
+        paths.add(node.fullPath);
+        collectPaths(node.children, paths);
+      }
+    };
+    const next = new Set<string>();
+    collectPaths(folderTree, next);
+    setExpandedGroups(next);
+  }, [folderTree]);
+
+  const collapseAllGroups = useCallback(() => {
+    setExpandedGroups(new Set());
+  }, []);
+
   return {
     // Data
     connections: filteredConnections,
@@ -336,8 +354,12 @@ export function useSessionManager() {
     expandedGroups,
     toggleExpand,
     expandPath,
+    expandAllGroups,
+    collapseAllGroups,
 
-    // Table
+    // View and table
+    viewMode,
+    setViewMode,
     searchQuery,
     setSearchQuery,
     sortField,

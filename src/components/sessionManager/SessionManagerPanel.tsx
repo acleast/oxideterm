@@ -4,9 +4,8 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSessionManager } from './useSessionManager';
-import { FolderTree } from './FolderTree';
-import { ConnectionTable } from './ConnectionTable';
 import { ManagerToolbar } from './ManagerToolbar';
+import { SessionManagerViews } from './SessionManagerViews';
 import { OxideExportModal } from '../modals/OxideExportModal';
 import { OxideImportModal } from '../modals/OxideImportModal';
 import { EditConnectionModal } from '../modals/EditConnectionModal';
@@ -78,54 +77,6 @@ const buildDuplicateConnectionName = (sourceName: string, existingNames: string[
   }
 };
 
-type SerialProfileSectionProps = {
-  profiles: SerialProfile[];
-  onOpen: (profile: SerialProfile) => void;
-  onDelete: (profile: SerialProfile) => void;
-};
-
-const SerialProfileSection = ({ profiles, onOpen, onDelete }: SerialProfileSectionProps) => {
-  const { t } = useTranslation();
-
-  if (profiles.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="border-b border-theme-border bg-theme-bg-secondary/60 px-3 py-2">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted">
-          {t('sessionManager.serial_profiles.title')}
-        </div>
-        <div className="text-[11px] text-theme-text-muted">
-          {t('sessionManager.serial_profiles.count', { count: profiles.length })}
-        </div>
-      </div>
-      <div className="space-y-1">
-        {profiles.map((profile) => (
-          <div
-            key={profile.id}
-            className="flex items-center gap-2 rounded-md border border-theme-border/60 bg-theme-bg px-2 py-1.5 text-xs"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-medium text-theme-text">{profile.name}</div>
-              <div className="truncate font-mono text-[11px] text-theme-text-muted">
-                {profile.portPath} · {profile.baudRate}
-              </div>
-            </div>
-            <Button variant="ghost" size="sm" className="h-7" onClick={() => onOpen(profile)}>
-              {t('sessionManager.serial_profiles.open')}
-            </Button>
-            <Button variant="ghost" size="sm" className="h-7 text-red-400" onClick={() => onDelete(profile)}>
-              {t('sessionManager.serial_profiles.delete')}
-            </Button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 export const SessionManagerPanel = () => {
   const { t } = useTranslation();
   const bgActive = useTabBgActive('session_manager');
@@ -135,19 +86,19 @@ export const SessionManagerPanel = () => {
   const createSerialTerminal = useLocalTerminalStore(s => s.createSerialTerminal);
 
   const {
-    connections,
     allConnections,
-    serialProfiles,
     allSerialProfiles,
     groups,
     loading,
     folderTree,
-    ungroupedCount,
-    selectedGroup,
     setSelectedGroup,
     expandedGroups,
     toggleExpand,
     expandPath,
+    expandAllGroups,
+    collapseAllGroups,
+    viewMode,
+    setViewMode,
     searchQuery,
     setSearchQuery,
     sortField,
@@ -155,7 +106,6 @@ export const SessionManagerPanel = () => {
     toggleSort,
     selectedIds,
     toggleSelect,
-    toggleSelectAll,
     clearSelection,
     refresh,
   } = useSessionManager();
@@ -651,56 +601,39 @@ export const SessionManagerPanel = () => {
         onClearSelection={clearSelection}
         onShowImport={() => setShowImport(true)}
         onShowExport={() => setShowExport(true)}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        sortField={sortField}
+        sortDirection={sortDirection}
+        onToggleSort={toggleSort}
       />
 
       {/* Content area */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left: Folder Tree */}
-        <div className="w-[180px] min-w-[140px] border-r border-theme-border shrink-0 overflow-hidden">
-          <FolderTree
-            folderTree={folderTree}
-            selectedGroup={selectedGroup}
-            expandedGroups={expandedGroups}
-            totalCount={allConnections.length + allSerialProfiles.length}
-            ungroupedCount={ungroupedCount}
-            onSelectGroup={setSelectedGroup}
-            onToggleExpand={toggleExpand}
-            onRequestCreateGroup={handleOpenCreateGroupDialog}
-          />
-        </div>
-
-        {/* Right: Connection Table */}
-        <div className="flex-1 min-w-0 overflow-hidden flex flex-col">
-          {loading ? (
-            <div className="flex items-center justify-center h-full text-theme-text-muted">
-              <div className="animate-pulse">{t('common.loading', { defaultValue: 'Loading...' })}</div>
-            </div>
-          ) : (
-            <>
-              <SerialProfileSection
-                profiles={serialProfiles}
-                onOpen={handleOpenSerialProfile}
-                onDelete={handleDeleteSerialProfile}
-              />
-              <div className="min-h-0 flex-1">
-                <ConnectionTable
-                  connections={connections}
-                  selectedIds={selectedIds}
-                  sortField={sortField}
-                  sortDirection={sortDirection}
-                  onToggleSort={toggleSort}
-                  onToggleSelect={toggleSelect}
-                  onToggleSelectAll={toggleSelectAll}
-                  onConnect={handleConnect}
-                  onEdit={handleEdit}
-                  onDuplicate={handleDuplicate}
-                  onDelete={handleDelete}
-                  onTestConnection={handleTestConnection}
-                />
-              </div>
-            </>
-          )}
-        </div>
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <SessionManagerViews
+          viewMode={viewMode}
+          loading={loading}
+          connections={allConnections}
+          serialProfiles={allSerialProfiles}
+          searchQuery={searchQuery}
+          sortField={sortField}
+          sortDirection={sortDirection}
+          selectedIds={selectedIds}
+          folderTree={folderTree}
+          expandedGroups={expandedGroups}
+          onToggleSelect={toggleSelect}
+          onConnect={handleConnect}
+          onEdit={handleEdit}
+          onDuplicate={handleDuplicate}
+          onDelete={handleDelete}
+          onTestConnection={handleTestConnection}
+          onOpenSerialProfile={handleOpenSerialProfile}
+          onDeleteSerialProfile={handleDeleteSerialProfile}
+          onToggleExpand={toggleExpand}
+          onExpandAll={expandAllGroups}
+          onCollapseAll={collapseAllGroups}
+          onRequestCreateGroup={handleOpenCreateGroupDialog}
+        />
       </div>
 
       {/* Modals */}
