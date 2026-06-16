@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "确定要断开连接 \"{{name}}\" 及其所有子节点吗？",
       "remove_node": "确定要移除节点 \"{{name}}\" 及其所有子节点吗？",
-      "delete_batch": "确定要删除 {{count}} 个连接吗？"
+      "delete_batch": "确定要删除 {{count}} 个连接吗？",
+      "close_window_title": "退出 OxideTerm？",
+      "close_window_desc": "活动终端和传输将被关闭，未保存的工作可能会丢失。",
+      "close_window_confirm": "退出"
     },
     "actions": {
       "cancel": "取消",

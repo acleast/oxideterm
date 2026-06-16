@@ -14,6 +14,7 @@
     "license:generate:frontend": "node scripts/generate-third-party-notices.cjs",
     "i18n:check": "node scripts/check-i18n.cjs",
     "i18n:check:all": "node scripts/check-i18n.cjs",
+    "build:linux": "./scripts/build-linux.sh",
     "project:stats": "node scripts/project-stats.cjs",
     "docs:sync-plugin": "node scripts/sync-plugin-development-docs.cjs",
     "docs:check-plugin": "node scripts/sync-plugin-development-docs.cjs --check",

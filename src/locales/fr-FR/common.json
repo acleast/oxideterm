@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "Êtes-vous sûr de vouloir déconnecter \"{{name}}\" et tous ses nœuds enfants ?",
       "remove_node": "Êtes-vous sûr de vouloir supprimer le nœud \"{{name}}\" et tous ses nœuds enfants ?",
-      "delete_batch": "Êtes-vous sûr de vouloir supprimer {{count}} connexion(s) ?"
+      "delete_batch": "Êtes-vous sûr de vouloir supprimer {{count}} connexion(s) ?",
+      "close_window_title": "Quitter OxideTerm ?",
+      "close_window_desc": "Les terminaux et transferts actifs seront fermés. Le travail non enregistré peut être perdu.",
+      "close_window_confirm": "Quitter"
     },
     "actions": {
       "cancel": "Annuler",

@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "Sei sicuro di voler disconnettere \"{{name}}\" e tutti i suoi nodi figlio?",
       "remove_node": "Sei sicuro di voler rimuovere il nodo \"{{name}}\" e tutti i suoi nodi figlio?",
-      "delete_batch": "Sei sicuro di voler eliminare {{count}} connessione/i?"
+      "delete_batch": "Sei sicuro di voler eliminare {{count}} connessione/i?",
+      "close_window_title": "Uscire da OxideTerm?",
+      "close_window_desc": "I terminali e i trasferimenti attivi verranno chiusi. Il lavoro non salvato potrebbe andare perso.",
+      "close_window_confirm": "Esci"
     },
     "actions": {
       "cancel": "Annulla",

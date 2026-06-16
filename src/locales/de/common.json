@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "Möchten Sie wirklich \"{{name}}\" und alle untergeordneten Knoten trennen?",
       "remove_node": "Möchten Sie wirklich den Knoten \"{{name}}\" und alle untergeordneten Knoten entfernen?",
-      "delete_batch": "Möchten Sie wirklich {{count}} Verbindung(en) löschen?"
+      "delete_batch": "Möchten Sie wirklich {{count}} Verbindung(en) löschen?",
+      "close_window_title": "OxideTerm beenden?",
+      "close_window_desc": "Aktive Terminals und Übertragungen werden geschlossen. Nicht gespeicherte Arbeit kann verloren gehen.",
+      "close_window_confirm": "Beenden"
     },
     "actions": {
       "cancel": "Abbrechen",

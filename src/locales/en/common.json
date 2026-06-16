@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "Are you sure you want to disconnect \"{{name}}\" and all of its child nodes?",
       "remove_node": "Are you sure you want to remove the node \"{{name}}\" and all of its child nodes?",
-      "delete_batch": "Are you sure you want to delete {{count}} connection(s)?"
+      "delete_batch": "Are you sure you want to delete {{count}} connection(s)?",
+      "close_window_title": "Exit OxideTerm?",
+      "close_window_desc": "Active terminals and transfers will be closed. Unsaved work may be lost.",
+      "close_window_confirm": "Exit"
     },
     "actions": {
       "cancel": "Cancel",

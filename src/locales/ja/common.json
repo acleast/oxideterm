@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "\"{{name}}\" とそのすべての子ノードを切断してもよろしいですか？",
       "remove_node": "ノード \"{{name}}\" とそのすべての子ノードを削除してもよろしいですか？",
-      "delete_batch": "{{count}}件の接続を削除してもよろしいですか？"
+      "delete_batch": "{{count}}件の接続を削除してもよろしいですか？",
+      "close_window_title": "OxideTerm を終了しますか？",
+      "close_window_desc": "アクティブなターミナルと転送は閉じられます。未保存の作業は失われる可能性があります。",
+      "close_window_confirm": "終了"
     },
     "actions": {
       "cancel": "キャンセル",

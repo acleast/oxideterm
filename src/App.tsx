@@ -1,7 +1,8 @@
 // Copyright (C) 2026 AnalyseDeCircuit
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AppLayout } from './components/layout/AppLayout';
 import { Toaster } from './components/ui/toaster';
 import { UpdateNotification } from './components/layout/UpdateNotification';
@@ -13,6 +14,7 @@ import { useConnectionEvents } from './hooks/useConnectionEvents';
 import { useCliEvents } from './hooks/useCliEvents';
 import { useEventLogCapture } from './hooks/useEventLogCapture';
 import { useNativeContextMenuGuard } from './hooks/useNativeContextMenuGuard';
+import { useConfirm } from './hooks/useConfirm';
 import { setupTreeStoreSubscriptions, cleanupTreeStoreSubscriptions } from './store/sessionTreeStore';
 import { useSessionTreeStore } from './store/sessionTreeStore';
 import { useLocalTerminalStore } from './store/localTerminalStore';
@@ -52,6 +54,10 @@ type AppContentProps = {
 };
 
 function AppContent({ updatesEnabled }: AppContentProps) {
+  const { t } = useTranslation();
+  const { confirm, ConfirmDialog } = useConfirm();
+  const closeConfirmInFlightRef = useRef(false);
+
   // Initialize global event listeners
   // useReconnectEvents 已废弃，由 useConnectionEvents 统一处理连接事件
   useNetworkStatus();
@@ -59,6 +65,77 @@ function AppContent({ updatesEnabled }: AppContentProps) {
   useCliEvents();
   useEventLogCapture();
   useNativeContextMenuGuard();
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    const setupWindowCloseConfirmation = async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        const appWindow = getCurrentWindow();
+
+        unlisten = await appWindow.onCloseRequested(async (event) => {
+          event.preventDefault();
+
+          if (closeConfirmInFlightRef.current) {
+            return;
+          }
+
+          closeConfirmInFlightRef.current = true;
+          try {
+            const shouldClose = await confirm({
+              title: t('common.confirm.close_window_title', 'Exit OxideTerm?'),
+              description: t(
+                'common.confirm.close_window_desc',
+                'Active terminals and transfers will be closed. Unsaved work may be lost.',
+              ),
+              confirmLabel: t('common.confirm.close_window_confirm', 'Exit'),
+              cancelLabel: t('common.actions.cancel', 'Cancel'),
+              variant: 'danger',
+            });
+
+            if (!shouldClose) {
+              return;
+            }
+
+            window.setTimeout(() => {
+              void (async () => {
+                try {
+                  const { exit } = await import('@tauri-apps/plugin-process');
+                  await exit(0);
+                } catch (exitErr) {
+                  console.error('Failed to exit app process:', exitErr);
+                  try {
+                    await appWindow.destroy();
+                  } catch (destroyErr) {
+                    console.error('Failed to destroy app window:', destroyErr);
+                  }
+                }
+              })();
+            }, 0);
+          } catch (err) {
+            console.error('Failed to confirm window close:', err);
+          } finally {
+            closeConfirmInFlightRef.current = false;
+          }
+        });
+
+        if (disposed) {
+          unlisten();
+        }
+      } catch (err) {
+        console.warn('Failed to register window close confirmation:', err);
+      }
+    };
+
+    void setupWindowCloseConfirmation();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [confirm, t]);
 
   useEffect(() => {
     return initializeConnectionTraceToastManager();
@@ -430,6 +507,7 @@ function AppContent({ updatesEnabled }: AppContentProps) {
         <OnboardingModal />
         <GlobalKbiDialog />
         <PluginConfirmDialog />
+        {ConfirmDialog}
         <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} onOpenShortcuts={() => setShortcutsModalOpen(true)} />
         <KeyboardShortcutsModal open={shortcutsModalOpen} onOpenChange={setShortcutsModalOpen} />
         <LocalShellLauncher 

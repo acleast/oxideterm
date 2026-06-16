@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "Tem certeza de que deseja desconectar \"{{name}}\" e todos os seus nós filhos?",
       "remove_node": "Tem certeza de que deseja remover o nó \"{{name}}\" e todos os seus nós filhos?",
-      "delete_batch": "Excluir {{count}} conexões?"
+      "delete_batch": "Excluir {{count}} conexões?",
+      "close_window_title": "Sair do OxideTerm?",
+      "close_window_desc": "Terminais e transferências ativos serão fechados. Trabalho não salvo pode ser perdido.",
+      "close_window_confirm": "Sair"
     },
     "actions": {
       "cancel": "Cancelar",

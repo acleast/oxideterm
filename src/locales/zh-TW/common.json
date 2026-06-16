@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "確定要中斷連線「{{name}}」及其所有子節點嗎？",
       "remove_node": "確定要移除節點「{{name}}」及其所有子節點嗎？",
-      "delete_batch": "確定要刪除 {{count}} 個連線嗎？"
+      "delete_batch": "確定要刪除 {{count}} 個連線嗎？",
+      "close_window_title": "要結束 OxideTerm 嗎？",
+      "close_window_desc": "使用中的終端機和傳輸將會關閉，未儲存的工作可能會遺失。",
+      "close_window_confirm": "結束"
     },
     "actions": {
       "cancel": "取消",

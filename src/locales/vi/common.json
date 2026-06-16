@@ -3,7 +3,10 @@
     "confirm": {
       "disconnect_node": "Bạn có chắc chắn muốn ngắt kết nối \"{{name}}\" và tất cả các nút con không?",
       "remove_node": "Bạn có chắc chắn muốn xóa nút \"{{name}}\" và tất cả các nút con không?",
-      "delete_batch": "Bạn có chắc chắn muốn xóa {{count}} kết nối không?"
+      "delete_batch": "Bạn có chắc chắn muốn xóa {{count}} kết nối không?",
+      "close_window_title": "Thoát OxideTerm?",
+      "close_window_desc": "Các terminal và phiên truyền đang hoạt động sẽ bị đóng. Công việc chưa lưu có thể bị mất.",
+      "close_window_confirm": "Thoát"
     },
     "actions": {
       "cancel": "Hủy",
