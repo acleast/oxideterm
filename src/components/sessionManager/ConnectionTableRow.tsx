@@ -123,12 +123,12 @@ export const ConnectionTableRow = ({
       </div>
 
       {/* Host */}
-      <div className="w-[130px] shrink-0 truncate text-theme-text-muted font-mono text-xs">
+      <div className="w-[130px] shrink-0 truncate text-theme-text-muted text-xs">
         {conn.host}
       </div>
 
       {/* Port */}
-      <div className="w-[50px] shrink-0 text-theme-text-muted font-mono text-xs">
+      <div className="w-[50px] shrink-0 text-theme-text-muted text-xs">
         {conn.port}
       </div>
 

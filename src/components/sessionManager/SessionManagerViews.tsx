@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Copy,
   Folder,
+  FolderInput,
   FolderOpen,
   MoreHorizontal,
   Pencil,
@@ -59,6 +60,7 @@ type SessionManagerViewsProps = {
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onRequestCreateGroup: () => void;
+  onRequestImportSshConfig: () => void;
 };
 
 type SessionManagerItem =
@@ -355,7 +357,7 @@ const ItemRow = ({
       <ItemIcon item={item} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-theme-text">{item.name}</div>
-        <div className="truncate font-mono text-xs text-theme-text-muted">{item.subtitle}</div>
+        <div className="truncate text-xs text-theme-text-muted">{item.subtitle}</div>
       </div>
       <div className="hidden min-w-[120px] shrink-0 truncate text-xs text-theme-text-muted md:block">
         {formatRelativeLastUsed(item.lastUsed, t)}
@@ -398,6 +400,49 @@ const ViewSection = ({
   </section>
 );
 
+// Discovery actions belong to every Session Manager view; tree-only controls
+// are opt-in so grid/list do not lose the SSH config import affordance.
+const SessionViewActionBar = ({
+  commonProps,
+  includeTreeControls = false,
+}: {
+  commonProps: SessionManagerViewsProps;
+  includeTreeControls?: boolean;
+}) => {
+  const { t } = useTranslation();
+  const sshConfigLabel = t('settings_view.connections.ssh_config.title');
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-theme-border bg-theme-bg-secondary px-3 py-2 text-xs text-theme-text-muted">
+      {includeTreeControls && (
+        <>
+          <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5" onClick={commonProps.onExpandAll}>
+            <ChevronDown className="h-3.5 w-3.5" />
+            {t('sessionManager.views.expand_all')}
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5" onClick={commonProps.onCollapseAll}>
+            <ChevronRight className="h-3.5 w-3.5" />
+            {t('sessionManager.views.collapse_all')}
+          </Button>
+          <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5" onClick={commonProps.onRequestCreateGroup}>
+            <Plus className="h-3.5 w-3.5" />
+            {t('sessionManager.folder_tree.new_group')}
+          </Button>
+        </>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 shrink-0 gap-1.5"
+        title={sshConfigLabel}
+        onClick={commonProps.onRequestImportSshConfig}
+      >
+        <FolderInput className="h-3.5 w-3.5" />
+        {sshConfigLabel}
+      </Button>
+    </div>
+  );
+};
+
 const SessionGridView = ({
   items,
   folderTree,
@@ -422,8 +467,9 @@ const SessionGridView = ({
   const hostItems = folderTree.length > 0 ? ungroupedItems : items;
 
   return (
-    <div className="h-full overflow-auto px-4 py-4">
-      <div className="space-y-8">
+    <div className="h-full overflow-auto">
+      <SessionViewActionBar commonProps={commonProps} />
+      <div className="space-y-8 px-4 py-4">
         {recentItems.length > 0 && (
           <ViewSection title={t('sessionManager.views.recent')} count={recentItems.length}>
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
@@ -481,7 +527,7 @@ const SessionCard = ({
     <ItemIcon item={item} />
     <div className="min-w-0 flex-1">
       <div className="truncate text-sm font-semibold text-theme-text">{item.name}</div>
-      <div className="truncate font-mono text-xs text-theme-text-muted">{item.subtitle}</div>
+      <div className="truncate text-xs text-theme-text-muted">{item.subtitle}</div>
     </div>
     <ItemActions item={item} {...commonProps} />
   </div>
@@ -497,6 +543,7 @@ const SessionListView = ({
   const { t } = useTranslation();
   return (
     <div className="h-full overflow-auto">
+      <SessionViewActionBar commonProps={commonProps} />
       <div className="border-b border-theme-border bg-theme-bg-secondary px-3 py-2 text-xs font-semibold text-theme-text-muted">
         {t('sessionManager.views.list_header')}
       </div>
@@ -522,23 +569,9 @@ const SessionTreeView = ({
   folderTree: FolderNode[];
   commonProps: SessionManagerViewsProps;
 }) => {
-  const { t } = useTranslation();
   return (
     <div className="h-full overflow-auto">
-      <div className="flex items-center gap-2 border-b border-theme-border bg-theme-bg-secondary px-3 py-2 text-xs text-theme-text-muted">
-        <Button variant="ghost" size="sm" className="h-7 gap-1.5" onClick={commonProps.onExpandAll}>
-          <ChevronDown className="h-3.5 w-3.5" />
-          {t('sessionManager.views.expand_all')}
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 gap-1.5" onClick={commonProps.onCollapseAll}>
-          <ChevronRight className="h-3.5 w-3.5" />
-          {t('sessionManager.views.collapse_all')}
-        </Button>
-        <Button variant="ghost" size="sm" className="h-7 gap-1.5" onClick={commonProps.onRequestCreateGroup}>
-          <Plus className="h-3.5 w-3.5" />
-          {t('sessionManager.folder_tree.new_group')}
-        </Button>
-      </div>
+      <SessionViewActionBar commonProps={commonProps} includeTreeControls />
       <div>
         {folderTree.map((node) => (
           <TreeGroupRow

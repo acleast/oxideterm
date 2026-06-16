@@ -3,6 +3,7 @@
 
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { FolderInput } from 'lucide-react';
 import { useSessionManager } from './useSessionManager';
 import { ManagerToolbar } from './ManagerToolbar';
 import { SessionManagerViews } from './SessionManagerViews';
@@ -37,13 +38,14 @@ import {
   DialogTitle,
 } from '../ui/dialog';
 import { Button } from '../ui/button';
+import { Checkbox } from '../ui/checkbox';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import {
   buildSavedConnectionTestRequest,
   requiresSavedConnectionPasswordPrompt,
 } from '../../lib/testConnectionRequest';
-import type { ConnectionInfo, HostKeyStatus, SerialProfile } from '../../types';
+import type { ConnectionInfo, HostKeyStatus, SerialProfile, SshHostInfo } from '../../types';
 import type { EditConnectionSubmitPayload } from '../modals/EditConnectionModal';
 
 const DUPLICATE_NAME_MARKER = 'Copy';
@@ -128,6 +130,11 @@ export const SessionManagerPanel = () => {
   const [createGroupDialogOpen, setCreateGroupDialogOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [sshConfigImportOpen, setSshConfigImportOpen] = useState(false);
+  const [sshConfigHosts, setSshConfigHosts] = useState<SshHostInfo[]>([]);
+  const [selectedSshConfigAliases, setSelectedSshConfigAliases] = useState<Set<string>>(new Set());
+  const [sshConfigHostsLoading, setSshConfigHostsLoading] = useState(false);
+  const [sshConfigImporting, setSshConfigImporting] = useState(false);
 
   const notifySavedConnectionsChanged = useCallback(() => {
     window.dispatchEvent(new CustomEvent('saved-connections-changed', {
@@ -504,6 +511,107 @@ export const SessionManagerPanel = () => {
     await refresh();
   }, [refresh]);
 
+  const loadSshConfigImportHosts = useCallback(async () => {
+    setSshConfigHostsLoading(true);
+    try {
+      const hosts = await api.listSshConfigHosts();
+      setSshConfigHosts(hosts);
+      setSelectedSshConfigAliases(new Set(
+        hosts
+          .filter((host) => !host.already_imported)
+          .map((host) => host.alias),
+      ));
+    } catch (error) {
+      setSshConfigHosts([]);
+      setSelectedSshConfigAliases(new Set());
+      toast({
+        title: t('settings_view.connections.ssh_config.title'),
+        description: String(error),
+        variant: 'error',
+      });
+    } finally {
+      setSshConfigHostsLoading(false);
+    }
+  }, [t, toast]);
+
+  const handleOpenSshConfigImport = useCallback(() => {
+    setSshConfigImportOpen(true);
+    void loadSshConfigImportHosts();
+  }, [loadSshConfigImportHosts]);
+
+  const toggleSshConfigAlias = useCallback((alias: string) => {
+    setSelectedSshConfigAliases((previous) => {
+      const next = new Set(previous);
+      if (next.has(alias)) {
+        next.delete(alias);
+      } else {
+        next.add(alias);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleAllSshConfigAliases = useCallback(() => {
+    const importableAliases = sshConfigHosts
+      .filter((host) => !host.already_imported)
+      .map((host) => host.alias);
+    const allSelected = importableAliases.length > 0
+      && importableAliases.every((alias) => selectedSshConfigAliases.has(alias));
+
+    setSelectedSshConfigAliases(allSelected ? new Set() : new Set(importableAliases));
+  }, [selectedSshConfigAliases, sshConfigHosts]);
+
+  const handleImportSelectedSshConfigHosts = useCallback(async () => {
+    if (selectedSshConfigAliases.size === 0) {
+      return;
+    }
+
+    setSshConfigImporting(true);
+    try {
+      const result = await api.importSshHosts(Array.from(selectedSshConfigAliases));
+      const parts: string[] = [];
+      if (result.imported > 0) {
+        parts.push(t('settings_view.connections.ssh_config.batch_import_success', { count: result.imported }));
+      }
+      if (result.skipped > 0) {
+        parts.push(t('settings_view.connections.ssh_config.batch_import_skipped', { count: result.skipped }));
+      }
+      if (result.errors.length > 0) {
+        parts.push(result.errors.join(', '));
+      }
+
+      toast({
+        title: t('settings_view.connections.ssh_config.title'),
+        description: parts.join(' · '),
+        variant: result.errors.length > 0 && result.imported === 0 ? 'error' : 'success',
+      });
+
+      await Promise.all([
+        refresh(),
+        loadSshConfigImportHosts(),
+        useAppStore.getState().loadSavedConnections(),
+      ]);
+      notifySavedConnectionsChanged();
+      if (result.errors.length === 0) {
+        setSshConfigImportOpen(false);
+      }
+    } catch (error) {
+      toast({
+        title: t('settings_view.errors.import_failed', { error }),
+        variant: 'error',
+      });
+    } finally {
+      setSshConfigImporting(false);
+    }
+  }, [
+    loadSshConfigImportHosts,
+    notifySavedConnectionsChanged,
+    refresh,
+    selectedSshConfigAliases,
+    t,
+    toast,
+  ]);
+
   const handleOpenCreateGroupDialog = useCallback(() => {
     setNewGroupName('');
     setCreateGroupDialogOpen(true);
@@ -588,8 +696,12 @@ export const SessionManagerPanel = () => {
     }
   }, [confirm, notifySavedConnectionsChanged, refresh, t, toast]);
 
+  const importableSshConfigHosts = sshConfigHosts.filter((host) => !host.already_imported);
+  const allSshConfigHostsSelected = importableSshConfigHosts.length > 0
+    && importableSshConfigHosts.every((host) => selectedSshConfigAliases.has(host.alias));
+
   return (
-    <div className={`h-full w-full flex flex-col text-theme-text ${bgActive ? '' : 'bg-theme-bg'}`} data-bg-active={bgActive || undefined}>
+    <div className={`font-sans h-full w-full flex flex-col text-theme-text ${bgActive ? '' : 'bg-theme-bg'}`} data-bg-active={bgActive || undefined}>
       {/* Toolbar */}
       <ManagerToolbar
         searchQuery={searchQuery}
@@ -633,6 +745,7 @@ export const SessionManagerPanel = () => {
           onExpandAll={expandAllGroups}
           onCollapseAll={collapseAllGroups}
           onRequestCreateGroup={handleOpenCreateGroupDialog}
+          onRequestImportSshConfig={handleOpenSshConfigImport}
         />
       </div>
 
@@ -750,6 +863,117 @@ export const SessionManagerPanel = () => {
               disabled={!isValidGroupPath(newGroupName) || creatingGroup}
             >
               {creatingGroup ? t('common.loading', { defaultValue: 'Loading...' }) : t('common.create')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={sshConfigImportOpen}
+        onOpenChange={(open) => {
+          setSshConfigImportOpen(open);
+          if (open) {
+            void loadSshConfigImportHosts();
+          } else {
+            setSelectedSshConfigAliases(new Set());
+          }
+        }}
+      >
+        <DialogContent className="bg-theme-bg-elevated text-theme-text border-theme-border sm:max-w-[720px]">
+          <DialogHeader>
+            <DialogTitle>{t('settings_view.connections.ssh_config.title')}</DialogTitle>
+            <DialogDescription>
+              {t('settings_view.connections.ssh_config.description')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-4 py-3">
+            {sshConfigHosts.length > 0 && (
+              <div className="mb-2 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={toggleAllSshConfigAliases}
+                  className="text-xs text-theme-accent transition-colors hover:text-theme-accent-hover"
+                >
+                  {allSshConfigHostsSelected
+                    ? t('settings_view.connections.ssh_config.deselect_all')
+                    : t('settings_view.connections.ssh_config.select_all')}
+                </button>
+                <span className="text-xs text-theme-text-muted">
+                  {t('settings_view.connections.ssh_config.import_selected', { count: selectedSshConfigAliases.size })}
+                </span>
+              </div>
+            )}
+            <div className="max-h-80 overflow-y-auto rounded-md border border-theme-border bg-theme-bg-panel p-2">
+              {sshConfigHostsLoading ? (
+                <div className="py-12 text-center text-sm text-theme-text-muted">
+                  {t('common.loading', { defaultValue: 'Loading...' })}
+                </div>
+              ) : sshConfigHosts.length === 0 ? (
+                <div className="py-12 text-center text-sm text-theme-text-muted">
+                  {t('settings_view.connections.ssh_config.no_hosts')}
+                </div>
+              ) : (
+                sshConfigHosts.map((host) => (
+                  <div
+                    key={host.alias}
+                    className={`mb-1 flex min-h-[64px] items-start rounded-md border border-transparent p-3 ${
+                      host.already_imported
+                        ? 'opacity-50'
+                        : 'cursor-pointer hover:border-theme-border hover:bg-theme-bg-hover'
+                    }`}
+                    onClick={() => {
+                      if (!host.already_imported) {
+                        toggleSshConfigAlias(host.alias);
+                      }
+                    }}
+                  >
+                    <div className="flex min-w-0 flex-1 items-start gap-2">
+                      <Checkbox
+                        className="mt-0.5 shrink-0"
+                        checked={selectedSshConfigAliases.has(host.alias)}
+                        disabled={host.already_imported}
+                        onClick={(event) => event.stopPropagation()}
+                        onCheckedChange={() => {
+                          if (!host.already_imported) {
+                            toggleSshConfigAlias(host.alias);
+                          }
+                        }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="min-w-0 break-words text-sm font-medium text-theme-text">{host.alias}</span>
+                          {host.already_imported && (
+                            <span className="shrink-0 rounded bg-theme-accent/20 px-1.5 py-0.5 text-[10px] text-theme-accent">
+                              {t('settings_view.connections.ssh_config.already_imported')}
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 break-all text-xs text-theme-text-muted">
+                          {host.user ? `${host.user}@` : ''}{host.hostname}:{host.port}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setSshConfigImportOpen(false)}
+              disabled={sshConfigImporting}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              onClick={() => void handleImportSelectedSshConfigHosts()}
+              disabled={selectedSshConfigAliases.size === 0 || sshConfigImporting || sshConfigHostsLoading}
+            >
+              <FolderInput className="mr-1 h-4 w-4" />
+              {sshConfigImporting
+                ? t('settings_view.connections.ssh_config.importing')
+                : t('settings_view.connections.ssh_config.import_selected', { count: selectedSshConfigAliases.size })}
             </Button>
           </DialogFooter>
         </DialogContent>

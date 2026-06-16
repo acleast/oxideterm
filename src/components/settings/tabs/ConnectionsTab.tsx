@@ -269,32 +269,32 @@ export const ConnectionsTab = ({
                         <div
                             key={host.alias}
                             className={cn(
-                                'flex items-center justify-between p-3 rounded-md border mb-1',
+                                'flex min-h-[64px] flex-wrap items-start justify-between gap-3 p-3 rounded-md border mb-1',
                                 host.already_imported
                                     ? 'opacity-50 border-transparent'
                                     : 'hover:bg-theme-bg-hover border-transparent hover:border-theme-border',
                             )}
                         >
-                            <div className="flex items-center gap-2 flex-1 cursor-pointer" onClick={() => !host.already_imported && toggleSshHost(host.alias)}>
+                            <div className="flex min-w-0 flex-1 cursor-pointer items-start gap-2" onClick={() => !host.already_imported && toggleSshHost(host.alias)}>
                                 <Checkbox
                                     checked={selectedSshHosts.has(host.alias)}
                                     disabled={host.already_imported}
                                     onCheckedChange={() => !host.already_imported && toggleSshHost(host.alias)}
-                                    className="border-theme-text-muted data-[state=checked]:bg-theme-accent data-[state=checked]:border-theme-accent"
+                                    className="mt-0.5 shrink-0 border-theme-text-muted data-[state=checked]:bg-theme-accent data-[state=checked]:border-theme-accent"
                                 />
-                                <div className="flex flex-col">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-sm font-medium">{host.alias}</span>
+                                <div className="flex min-w-0 flex-1 flex-col">
+                                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                        <span className="min-w-0 break-words text-sm font-medium">{host.alias}</span>
                                         {host.already_imported && (
                                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-theme-accent/20 text-theme-accent">
                                                 {t('settings_view.connections.ssh_config.already_imported')}
                                             </span>
                                         )}
                                     </div>
-                                    <span className="text-xs text-theme-text-muted">{host.user}@{host.hostname}:{host.port}</span>
+                                    <span className="mt-1 break-all text-xs text-theme-text-muted">{host.user}@{host.hostname}:{host.port}</span>
                                 </div>
                             </div>
-                            <Button size="sm" variant="secondary" onClick={() => handleImportHost(host.alias)} disabled={host.already_imported}>
+                            <Button size="sm" variant="secondary" className="shrink-0" onClick={() => handleImportHost(host.alias)} disabled={host.already_imported}>
                                 <FolderInput className="h-4 w-4 mr-1" /> {t('settings_view.connections.ssh_config.import')}
                             </Button>
                         </div>
