@@ -317,6 +317,7 @@ export type FrostedGlassMode = 'off' | 'css' | 'native';
 /** Appearance settings */
 export interface AppearanceSettings {
   sidebarCollapsedDefault: boolean;
+  sidebarAutoCollapse: boolean;       // Auto-collapse sidebar after opening a terminal/session
   uiDensity: UiDensity;              // UI spacing density
   borderRadius: number;               // Global border-radius base (0-16 px)
   uiFontFamily: string;               // Custom UI font family (empty = system default)
@@ -621,6 +622,7 @@ const defaultBufferSettings: BufferSettings = {
 
 const defaultAppearanceSettings: AppearanceSettings = {
   sidebarCollapsedDefault: false,
+  sidebarAutoCollapse: true,
   uiDensity: 'comfortable',
   borderRadius: 6,
   uiFontFamily: '',
@@ -2112,7 +2114,7 @@ const TERMINAL_BEHAVIOR_KEYS: Array<keyof TerminalSettings> = [
 ];
 
 const GENERAL_KEYS: Array<keyof GeneralSettings> = ['language', 'updateChannel', 'updateProxy'];
-const APPEARANCE_KEYS: Array<keyof AppearanceSettings> = ['sidebarCollapsedDefault', 'uiDensity', 'borderRadius', 'uiFontFamily', 'animationSpeed', 'frostedGlass'];
+const APPEARANCE_KEYS: Array<keyof AppearanceSettings> = ['sidebarCollapsedDefault', 'sidebarAutoCollapse', 'uiDensity', 'borderRadius', 'uiFontFamily', 'animationSpeed', 'frostedGlass'];
 const CONNECTION_DEFAULT_KEYS: Array<keyof ConnectionDefaults> = ['username', 'port'];
 const AI_KEYS: Array<keyof AiSettings> = [
   'enabled',

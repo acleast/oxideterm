@@ -72,8 +72,9 @@ export const Sidebar = () => {
   const sidebarCollapsed = useSettingsStore((s) => s.settings.sidebarUI.collapsed);
   const sidebarActiveSection = useSettingsStore((s) => s.settings.sidebarUI.activeSection);
   const sidebarWidth = useSettingsStore((s) => s.settings.sidebarUI.width);
+  const sidebarAutoCollapse = useSettingsStore((s) => s.settings.appearance.sidebarAutoCollapse);
   const aiSidebarCollapsed = useSettingsStore((s) => s.settings.sidebarUI.aiSidebarCollapsed);
-  const { setSidebarWidth, toggleSidebar, toggleAiSidebar } = useSettingsStore();
+  const { setSidebarWidth, toggleSidebar, toggleAiSidebar, setSidebarCollapsed } = useSettingsStore();
 
   // Resize state
   const [isResizing, setIsResizing] = useState(false);
@@ -264,6 +265,16 @@ export const Sidebar = () => {
   useEffect(() => {
     fetchTree();
   }, [fetchTree]);
+
+  // Auto-collapse sidebar when a terminal/local_terminal tab is created (if enabled in settings)
+  const terminalTabCount = tabs.filter(t => t.type === 'terminal' || t.type === 'local_terminal').length;
+  useEffect(() => {
+    if (!sidebarAutoCollapse || sidebarCollapsed || terminalTabCount === 0) return;
+    const timer = setTimeout(() => {
+      setSidebarCollapsed(true);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [terminalTabCount, sidebarAutoCollapse, sidebarCollapsed, setSidebarCollapsed]);
 
   // ========== SessionTree 回调函数 ==========
   const handleTreeDrillDown = useCallback((parentId: string) => {
@@ -897,10 +908,21 @@ export const Sidebar = () => {
   const handleButtonClick = (def: SidebarButtonDef, collapsed: boolean) => {
     if (def.kind === 'section') {
       setSidebarSection(def.key as Parameters<typeof setSidebarSection>[0]);
-      if (collapsed) toggleSidebar();
-      if (def.key === 'saved') createTab('session_manager');
+      if (collapsed) {
+        toggleSidebar();
+      } else if (sidebarActiveSection === def.key) {
+        // Clicking the same active section collapses the sidebar (VS Code style)
+        setSidebarCollapsed(true);
+      }
+      // Removed: createTab('session_manager') — now a button inside the sidebar panel
     } else if (def.kind === 'tab') {
-      createTab(def.key as Parameters<typeof createTab>[0]);
+      // Check if this tab is already active — collapse sidebar (VS Code style)
+      const isActiveTab = tabs.find(tab => tab.id === activeTabId)?.type === def.key;
+      if (isActiveTab && !collapsed) {
+        setSidebarCollapsed(true);
+      } else {
+        createTab(def.key as Parameters<typeof createTab>[0]);
+      }
     } else if (def.kind === 'toggle' && def.key === 'ai') {
       if (!toggleAiSidebar()) {
         toast({
@@ -1132,6 +1154,19 @@ export const Sidebar = () => {
                 <span className="text-xs font-semibold text-theme-text-muted uppercase tracking-wider truncate">
                   {t('sidebar.panels.saved_title')}
                 </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => createTab('session_manager')}
+                    >
+                      <LayoutList className="h-3 w-3" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">{t('sidebar.panels.open_session_manager')}</TooltipContent>
+                </Tooltip>
               </div>
 
               {/* Quick search */}

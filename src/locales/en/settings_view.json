@@ -382,7 +382,9 @@
       "frosted_glass_off": "Off",
       "frosted_glass_css": "CSS Blur",
       "frosted_glass_native": "Native Vibrancy",
-      "frosted_glass_native_hint": "Native vibrancy (macOS/Windows only)"
+      "frosted_glass_native_hint": "Native vibrancy (macOS/Windows only)",
+      "sidebar_auto_collapse": "Auto-Collapse Sidebar",
+      "sidebar_auto_collapse_hint": "Automatically hide the sidebar after opening a terminal or connection"
     },
     "custom_theme": {
       "create": "New Theme",

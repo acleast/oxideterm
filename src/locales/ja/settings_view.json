@@ -382,7 +382,9 @@
       "frosted_glass_off": "オフ",
       "frosted_glass_css": "CSSぼかし",
       "frosted_glass_native": "ネイティブVibrancy",
-      "frosted_glass_native_hint": "ネイティブVibrancy（macOS/Windowsのみ）"
+      "frosted_glass_native_hint": "ネイティブVibrancy（macOS/Windowsのみ）",
+      "sidebar_auto_collapse": "サイドバーの自動折りたたみ",
+      "sidebar_auto_collapse_hint": "ターミナルや接続を開いた後にサイドバーを自動的に隠す"
     },
     "custom_theme": {
       "create": "新規テーマ",

@@ -382,7 +382,9 @@
       "frosted_glass_off": "Désactivé",
       "frosted_glass_css": "Flou CSS",
       "frosted_glass_native": "Vibrancy natif",
-      "frosted_glass_native_hint": "Vibrancy natif (macOS/Windows uniquement)"
+      "frosted_glass_native_hint": "Vibrancy natif (macOS/Windows uniquement)",
+      "sidebar_auto_collapse": "Réduction automatique de la barre latérale",
+      "sidebar_auto_collapse_hint": "Masquer automatiquement la barre latérale après l'ouverture d'un terminal ou d'une connexion"
     },
     "custom_theme": {
       "create": "Nouveau thème",

@@ -382,7 +382,9 @@
       "frosted_glass_off": "Aus",
       "frosted_glass_css": "CSS-Unschärfe",
       "frosted_glass_native": "Native Vibrancy",
-      "frosted_glass_native_hint": "Nativer Vibrancy-Effekt (nur macOS/Windows)"
+      "frosted_glass_native_hint": "Nativer Vibrancy-Effekt (nur macOS/Windows)",
+      "sidebar_auto_collapse": "Seitenleiste automatisch reduzieren",
+      "sidebar_auto_collapse_hint": "Seitenleiste nach Öffnen eines Terminals oder einer Verbindung automatisch ausblenden"
     },
     "custom_theme": {
       "create": "Neues Design",

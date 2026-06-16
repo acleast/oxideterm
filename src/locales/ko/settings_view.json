@@ -382,7 +382,9 @@
       "frosted_glass_off": "끄기",
       "frosted_glass_css": "CSS 흐림",
       "frosted_glass_native": "네이티브 Vibrancy",
-      "frosted_glass_native_hint": "네이티브 Vibrancy (macOS/Windows만)"
+      "frosted_glass_native_hint": "네이티브 Vibrancy (macOS/Windows만)",
+      "sidebar_auto_collapse": "사이드바 자동 축소",
+      "sidebar_auto_collapse_hint": "터미널이나 연결을 연 후에 사이드바를 자동으로 숨김"
     },
     "custom_theme": {
       "create": "새 테마",

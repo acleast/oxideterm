@@ -382,7 +382,9 @@
       "frosted_glass_off": "關閉",
       "frosted_glass_css": "CSS 模糊",
       "frosted_glass_native": "原生毛玻璃",
-      "frosted_glass_native_hint": "原生毛玻璃效果（僅 macOS/Windows）"
+      "frosted_glass_native_hint": "原生毛玻璃效果（僅 macOS/Windows）",
+      "sidebar_auto_collapse": "自動收起側邊欄",
+      "sidebar_auto_collapse_hint": "開啟終端或連接後自動隱藏側邊欄"
     },
     "custom_theme": {
       "create": "新增主題",

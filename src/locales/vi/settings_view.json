@@ -382,7 +382,9 @@
       "frosted_glass_off": "Tắt",
       "frosted_glass_css": "Làm mờ CSS",
       "frosted_glass_native": "Vibrancy gốc",
-      "frosted_glass_native_hint": "Vibrancy gốc (chỉ macOS/Windows)"
+      "frosted_glass_native_hint": "Vibrancy gốc (chỉ macOS/Windows)",
+      "sidebar_auto_collapse": "Tự động thu gọn thanh bên",
+      "sidebar_auto_collapse_hint": "Tự động ẩn thanh bên sau khi mở terminal hoặc kết nối"
     },
     "custom_theme": {
       "create": "Chủ đề mới",
