@@ -56,7 +56,7 @@
       "minimumSystemVersion": "10.13",
       "signingIdentity": "-"
     },
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "resources": [
       "agents/oxideterm-agent-*-linux-musl",
       "cli-bin"

@@ -15,23 +15,11 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin --bundles dmg'
             target: 'aarch64-apple-darwin'
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-            target: 'x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
-            target: 'x86_64-unknown-linux-gnu'
-          - platform: 'ubuntu-24.04-arm'
-            args: ''
-            target: 'aarch64-unknown-linux-gnu'
           - platform: 'windows-latest'
             args: '--bundles nsis'
             target: 'x86_64-pc-windows-msvc'
-          - platform: 'windows-latest'
-            args: '--target aarch64-pc-windows-msvc --bundles nsis'
-            target: 'aarch64-pc-windows-msvc'
 
     runs-on: ${{ matrix.platform }}
     
@@ -43,7 +31,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Add Rust cross-compilation target
-        if: matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-apple-darwin' || matrix.target == 'aarch64-pc-windows-msvc'
+        if: matrix.target == 'aarch64-pc-windows-msvc'
         run: rustup target add ${{ matrix.target }}
 
       - name: Rust cache
@@ -151,9 +139,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPIMAGE_EXTRACT_AND_RUN: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && '1' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'OxideTerm ${{ github.ref_name }}'
@@ -196,26 +181,9 @@ jobs:
                   keys.push('darwin-x86_64', 'darwin-x86_64-app');
                 else if (name.includes('aarch64') || name.includes('arm64'))
                   keys.push('darwin-aarch64', 'darwin-aarch64-app');
-              } else if (name.endsWith('.AppImage.sig')) {
-                if (name.includes('amd64') || name.includes('x86_64'))
-                  keys.push('linux-x86_64', 'linux-x86_64-appimage');
-                else if (name.includes('aarch64') || name.includes('arm64'))
-                  keys.push('linux-aarch64', 'linux-aarch64-appimage');
-              } else if (name.endsWith('.deb.sig')) {
-                if (name.includes('amd64') || name.includes('x86_64'))
-                  keys.push('linux-x86_64-deb');
-                else if (name.includes('aarch64') || name.includes('arm64'))
-                  keys.push('linux-aarch64-deb');
-              } else if (name.endsWith('.rpm.sig')) {
-                if (name.includes('x86_64'))
-                  keys.push('linux-x86_64-rpm');
-                else if (name.includes('aarch64'))
-                  keys.push('linux-aarch64-rpm');
               } else if (name.endsWith('-setup.exe.sig')) {
                 if (name.includes('x64') || name.includes('x86_64'))
                   keys.push('windows-x86_64', 'windows-x86_64-nsis');
-                else if (name.includes('arm64') || name.includes('aarch64'))
-                  keys.push('windows-aarch64', 'windows-aarch64-nsis');
               }
 
               return { keys, baseName };
@@ -337,27 +305,14 @@ jobs:
             // Unified naming: OxideTerm_{version}_{os}_{arch}.{ext}
             // Arch: x64 (Intel/AMD 64-bit), arm64 (ARM 64-bit)
             const renameRules = [
-              // macOS DMG
+              // macOS DMG (ARM64 only)
               { match: /^OxideTerm.*[_-](aarch64|arm64)\.dmg$/i, newName: `OxideTerm_${version}_macos_arm64.dmg` },
-              { match: /^OxideTerm.*[_-](x64|x86_64)\.dmg$/i, newName: `OxideTerm_${version}_macos_x64.dmg` },
               // macOS updater (.app.tar.gz)
               { match: /^OxideTerm.*[_-](aarch64|arm64)\.app\.tar\.gz$/i, newName: `OxideTerm_${version}_macos_arm64.app.tar.gz` },
-              { match: /^OxideTerm.*[_-](x64|x86_64)\.app\.tar\.gz$/i, newName: `OxideTerm_${version}_macos_x64.app.tar.gz` },
-              // Linux .deb
-              { match: /^OxideTerm.*[_-](amd64|x86_64|x64)\.deb$/i, newName: `OxideTerm_${version}_linux_x64.deb` },
-              { match: /^OxideTerm.*[_-](arm64|aarch64)\.deb$/i, newName: `OxideTerm_${version}_linux_arm64.deb` },
-              // Linux .rpm
-              { match: /^OxideTerm.*[._-](x86_64|amd64|x64)\.rpm$/i, newName: `OxideTerm_${version}_linux_x64.rpm` },
-              { match: /^OxideTerm.*[._-](aarch64|arm64)\.rpm$/i, newName: `OxideTerm_${version}_linux_arm64.rpm` },
-              // Linux .AppImage
-              { match: /^OxideTerm.*[_-](amd64|x86_64|x64)\.AppImage$/i, newName: `OxideTerm_${version}_linux_x64.AppImage` },
-              { match: /^OxideTerm.*[_-](aarch64|arm64)\.AppImage$/i, newName: `OxideTerm_${version}_linux_arm64.AppImage` },
               // Windows NSIS installer
               { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.exe$/i, newName: `OxideTerm_${version}_windows_x64-setup.exe` },
-              { match: /^OxideTerm.*[_-](arm64|aarch64)-setup\.exe$/i, newName: `OxideTerm_${version}_windows_arm64-setup.exe` },
               // Windows NSIS updater (.nsis.zip)
               { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.nsis\.zip$/i, newName: `OxideTerm_${version}_windows_x64-setup.nsis.zip` },
-              { match: /^OxideTerm.*[_-](arm64|aarch64)-setup\.nsis\.zip$/i, newName: `OxideTerm_${version}_windows_arm64-setup.nsis.zip` },
             ];
 
             const renames = [];
