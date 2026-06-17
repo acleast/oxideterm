@@ -44,6 +44,7 @@
     "close_tabs_to_right": "Fermer les onglets à droite",
     "close_all_tabs": "Fermer tous les onglets",
     "copy_title": "Copier le titre",
+    "copy_session": "Copier la session",
     "confirm_close_terminal_title": "Fermer la session SSH",
     "confirm_close_terminal_desc": "Fermer cet onglet de terminal SSH ? Le travail non enregistré dans la session distante risque d’être perdu.",
     "confirm_close_all_title": "Fermer tous les onglets",

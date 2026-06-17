@@ -361,6 +361,26 @@ const TabItem = React.memo<TabItemProps>(({
         <Copy className="h-3.5 w-3.5 mr-2" />
         {t('tabbar.copy_title')}
       </ContextMenuItem>
+      {/* Copy Session — duplicate terminal on the same SSH node */}
+      {tab.type === 'terminal' && tab.sessionId && (
+        <ContextMenuItem onSelect={async () => {
+          const { createTerminalForNode, getNodeByTerminalId } = useSessionTreeStore.getState();
+          const node = getNodeByTerminalId(tab.sessionId!);
+          if (!node) {
+            console.error('[TabBar] No node found for terminal session', tab.sessionId);
+            return;
+          }
+          try {
+            const terminalId = await createTerminalForNode(node.id, 0, 0);
+            useAppStore.getState().createTab('terminal', terminalId);
+          } catch (err) {
+            console.error('[TabBar] Failed to copy session:', err);
+          }
+        }}>
+          <Copy className="h-3.5 w-3.5 mr-2" />
+          {t('tabbar.copy_session')}
+        </ContextMenuItem>
+      )}
       {/* Send to Background — only for local terminal tabs */}
       {tab.type === 'local_terminal'
         && tab.sessionId
