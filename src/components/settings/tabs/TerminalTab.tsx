@@ -399,6 +399,17 @@ export const TerminalTab = ({ terminal, buffer, experimental, updateTerminal, up
                         onCheckedChange={(checked) => updateAutosuggest('localShellHistory', checked as boolean)}
                     />
                 </div>
+                <div className="flex items-center justify-between mt-4">
+                    <div>
+                        <Label className="text-theme-text">{t('settings_view.terminal.autosuggest_native_overlay')}</Label>
+                        <p className="text-xs text-theme-text-muted mt-0.5">{t('settings_view.terminal.autosuggest_native_overlay_hint')}</p>
+                    </div>
+                    <Checkbox
+                        id="terminal-autosuggest-native-overlay"
+                        checked={terminal.autosuggest.nativeCompletionOverlay}
+                        onCheckedChange={(checked) => updateAutosuggest('nativeCompletionOverlay', checked as boolean)}
+                    />
+                </div>
             </div>
             )}
 

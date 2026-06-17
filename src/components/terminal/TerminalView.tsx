@@ -88,10 +88,12 @@ import { attachTerminalSmartCopy } from '../../hooks/useTerminalSmartCopy';
 import { useTerminalRecording } from '../../hooks/useTerminalRecording';
 import { useAdaptiveRenderer } from '../../hooks/useAdaptiveRenderer';
 import { useTerminalAutosuggestRecorder } from '../../hooks/useTerminalAutosuggestRecorder';
+import { useTerminalCompletionOverlay } from '../../hooks/useTerminalCompletionOverlay';
 import { observeCliAgentTerminalInput } from '../../lib/ai/orchestrator/cliAgents';
 import { RecordingControls } from './RecordingControls';
 import { FpsOverlay } from './FpsOverlay';
 import { TerminalCommandBar } from './TerminalCommandBar';
+import { TerminalCompletionOverlay } from './TerminalCompletionOverlay';
 import { TerminalContextMenu, type TerminalContextMenuState } from './TerminalContextMenu';
 import { ScrollbackViewer } from './ScrollbackViewer';
 import { useToastStore, type ToastVariant } from '../../hooks/useToast';
@@ -2295,6 +2297,9 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         const processed = runInputPipeline(data, sessionId, nodeId);
         if (processed === null) return;
         const observedInput = autosuggestRecorderRef.current.observeInput(processed);
+        if (observedInput.changed) {
+          completionOverlayRef.current?.refresh();
+        }
         if (observedInput.completedCommand && !isShellIntegrationDetected(effectivePaneId)) {
           createTerminalCommandMark(term, effectivePaneId, {
             command: observedInput.completedCommand,
@@ -2624,6 +2629,22 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     return true;
   }, [sendEncodedTerminalInput]);
 
+  // WindTerm-style native completion overlay. Recompute candidates whenever the
+  // input tracker changes; the keydown wiring further down intercepts arrows/
+  // Tab/Esc only while the overlay is open.
+  const completionOverlay = useTerminalCompletionOverlay({
+    enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
+    isActive,
+    getInputState: autosuggestRecorder.getInputState,
+    acceptCompletion: autosuggestRecorder.acceptCompletion,
+    sendInput: (suffix) => {
+      if (inputLockedRef.current) return;
+      sendProgrammaticTerminalInput(suffix, 'text');
+    },
+  });
+  const completionOverlayRef = useRef(completionOverlay);
+  completionOverlayRef.current = completionOverlay;
+
   const sendFormattedTerminalInput = useCallback((input: string): boolean => {
     const controller = trzszControllerRef.current;
     if (controller) {
@@ -2670,6 +2691,56 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       unlistenFn?.();
     };
   }, [isActive, sendProgrammaticTerminalInput, session?.state]);
+
+  /**
+   * Native completion overlay key handling.
+   *
+   * Only active while the overlay is open. Captures at the container so we run
+   * before xterm's own keydown (which would otherwise forward arrows to the
+   * shell as history navigation). Keys not handled here fall through to xterm
+   * unchanged. Visible-character / backspace / enter are intentionally NOT
+   * intercepted — they flow to the shell, the input tracker mirrors them via
+   * onData, and refresh() recomputes candidates.
+   */
+  useEffect(() => {
+    if (!isActive) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const overlay = completionOverlayRef.current;
+      if (!overlay || !overlay.open) return;
+
+      switch (event.key) {
+        case 'ArrowDown':
+          overlay.moveHighlight(1);
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+        case 'ArrowUp':
+          overlay.moveHighlight(-1);
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+        case 'Tab':
+          if (overlay.accept()) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          break;
+        case 'Escape':
+          overlay.close();
+          event.preventDefault();
+          event.stopPropagation();
+          break;
+        default:
+          break;
+      }
+    };
+
+    container.addEventListener('keydown', handleKeyDown, true);
+    return () => container.removeEventListener('keydown', handleKeyDown, true);
+  }, [isActive]);
 
   /**
    * Handle container click - focus terminal and update active pane
@@ -3396,6 +3467,27 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
            sendPrivilegeInput={sendPrivilegeInput}
            focusTerminal={() => { focusTerminal('strong'); }}
            onLayoutChange={handleCommandBarLayoutChange}
+         />
+       )}
+       {(terminalSettings.autosuggest?.nativeCompletionOverlay ?? true) && completionOverlay.open && (
+         <TerminalCompletionOverlay
+           candidates={completionOverlay.candidates}
+           highlightedIndex={completionOverlay.highlightedIndex}
+           currentInput={autosuggestRecorder.getInputState().value}
+           position={(() => {
+             const pos = getCursorPosition();
+             if (!pos) return null;
+             // cursorX/cursorY are 0-based cell coordinates within the active
+             // viewport; containerRect is the xterm container's viewport rect.
+             // Compose them into viewport pixels for the fixed-position popup.
+             return {
+               left: pos.containerRect.left + pos.x * pos.charWidth,
+               top: pos.containerRect.top + pos.y * pos.lineHeight,
+               lineHeight: pos.lineHeight,
+             };
+           })()}
+           onHoverIndex={completionOverlay.setHighlightedIndex}
+           onPick={() => completionOverlay.accept()}
          />
        )}
     </div>

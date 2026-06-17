@@ -246,6 +246,8 @@ export interface InBandTransferSettings {
 
 export interface TerminalAutosuggestSettings {
   localShellHistory: boolean;
+  /** WindTerm-style native completion popup rendered over the terminal at the prompt cursor (history-based, arrow-key navigation, Tab to accept). */
+  nativeCompletionOverlay: boolean;
 }
 
 export interface TerminalCommandBarSettings {
@@ -581,6 +583,7 @@ const defaultTerminalSettings: TerminalSettings = {
   selectionRequiresShift: false,
   autosuggest: {
     localShellHistory: true,
+    nativeCompletionOverlay: true,
   },
   commandBar: {
     enabled: true,

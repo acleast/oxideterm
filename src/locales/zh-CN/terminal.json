@@ -232,6 +232,15 @@
       "group_quick_commands": "快捷命令",
       "source_quick_command": "快捷命令"
     },
+    "completion": {
+      "overlay": {
+        "aria_label": "命令建议",
+        "group_history": "历史",
+        "source_runtime": "历史",
+        "source_local-history": "本地历史",
+        "source_ai-ledger": "AI"
+      }
+    },
     "command_selection": {
       "actions": "命令选区操作",
       "copy": "复制",

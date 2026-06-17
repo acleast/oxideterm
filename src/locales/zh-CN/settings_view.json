@@ -315,6 +315,8 @@
       },
       "autosuggest_local_history": "命令栏：本地 Shell 历史",
       "autosuggest_local_history_hint": "将本地 zsh/bash/fish 历史作为命令栏历史面板的来源。不会启用终端内 ghost text。",
+      "autosuggest_native_overlay": "终端原生命令补全",
+      "autosuggest_native_overlay_hint": "在终端输入时弹出历史命令浮窗（上下键选择，Tab 接受）。基于历史记录，不含 AI 补全。",
       "command_bar": "底部命令栏",
       "command_bar_hint": "在终端底部显示 OxideTerm 命令栏，用于命令建议、AI 询问、广播、录制、播放和分栏操作。",
       "command_bar_legacy_toolbar": "显示旧顶部工具栏",

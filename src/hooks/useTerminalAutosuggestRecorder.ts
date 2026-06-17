@@ -8,6 +8,7 @@ import {
   recordTerminalAutosuggestCommand,
   TerminalAutosuggestInputTracker,
 } from '@/lib/terminal/autosuggest';
+import type { TerminalAutosuggestInputState } from '@/lib/terminal/autosuggest';
 
 type TerminalKind = 'terminal' | 'local_terminal';
 
@@ -30,6 +31,21 @@ export function useTerminalAutosuggestRecorder(options: {
     trackerRef.current.reset();
   }, []);
 
+  // Expose the live input state for the native completion overlay. The tracker
+  // mirrors what the user has typed into the prompt (best-effort: backspace,
+  // Ctrl+U/K/A/E, arrows, Enter reset, ESC reset are all handled). Read this
+  // on each `changed` tick to refresh candidates without a separate data path.
+  const getInputState = useCallback((): TerminalAutosuggestInputState => {
+    return trackerRef.current.getState();
+  }, []);
+
+  // After the overlay accepts a completion we send the remaining bytes to the
+  // PTY via sendInput — which bypasses `term.onData`, so the tracker would
+  // otherwise never learn the command grew. Sync it explicitly here.
+  const acceptCompletion = useCallback((text: string) => {
+    trackerRef.current.accept(text);
+  }, []);
+
   useEffect(() => {
     if (terminalKind !== 'local_terminal' || !localShellHistory) return;
     let cancelled = false;
@@ -43,5 +59,5 @@ export function useTerminalAutosuggestRecorder(options: {
     };
   }, [localShellHistory, terminalKind]);
 
-  return { observeInput, resetInput };
+  return { observeInput, resetInput, getInputState, acceptCompletion };
 }

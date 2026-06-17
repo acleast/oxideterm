@@ -144,7 +144,7 @@ fn default_settings() -> Value {
             "copyOnSelect": false,
             "middleClickPaste": false,
             "selectionRequiresShift": false,
-            "autosuggest": { "localShellHistory": true },
+            "autosuggest": { "localShellHistory": true, "nativeCompletionOverlay": true },
             "commandBar": {
                 "enabled": true,
                 "showLegacyToolbar": false,

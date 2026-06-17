@@ -232,6 +232,15 @@
       "group_quick_commands": "Quick Commands",
       "source_quick_command": "quick"
     },
+    "completion": {
+      "overlay": {
+        "aria_label": "Command suggestions",
+        "group_history": "History",
+        "source_runtime": "History",
+        "source_local-history": "Local",
+        "source_ai-ledger": "AI"
+      }
+    },
     "command_selection": {
       "actions": "Command selection actions",
       "copy": "Copy",

@@ -337,6 +337,7 @@ describe('settingsStore', () => {
 
     expect(useSettingsStore.getState().settings.terminal.autosuggest).toEqual({
       localShellHistory: true,
+      nativeCompletionOverlay: true,
     });
   });
 
