@@ -47,6 +47,7 @@
     "close_tabs_to_right": "右のタブを閉じる",
     "close_all_tabs": "すべてのタブを閉じる",
     "copy_title": "タイトルをコピー",
+    "copy_session": "セッションをコピー",
     "confirm_close_terminal_title": "SSH セッションを閉じる",
     "confirm_close_terminal_desc": "この SSH ターミナルタブを閉じますか？リモートセッションで未保存の作業内容が失われる可能性があります。",
     "confirm_close_all_title": "すべてのタブを閉じる",

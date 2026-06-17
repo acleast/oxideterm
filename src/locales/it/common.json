@@ -47,6 +47,7 @@
     "close_tabs_to_right": "Chiudi schede a destra",
     "close_all_tabs": "Chiudi tutte le schede",
     "copy_title": "Copia titolo",
+    "copy_session": "Copia sessione",
     "confirm_close_terminal_title": "Chiudi sessione SSH",
     "confirm_close_terminal_desc": "Chiudere questa scheda del terminale SSH? Il lavoro non salvato nella sessione remota potrebbe andare perso.",
     "confirm_close_all_title": "Chiudi tutte le schede",

@@ -47,6 +47,7 @@
     "close_tabs_to_right": "Tabs rechts schließen",
     "close_all_tabs": "Alle Tabs schließen",
     "copy_title": "Titel kopieren",
+    "copy_session": "Sitzung kopieren",
     "confirm_close_terminal_title": "SSH-Sitzung schließen",
     "confirm_close_terminal_desc": "Diesen SSH-Terminal-Tab schließen? Nicht gespeicherte Arbeit in der Remote-Sitzung könnte verloren gehen.",
     "confirm_close_all_title": "Alle Tabs schließen",

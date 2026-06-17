@@ -47,6 +47,7 @@
     "close_tabs_to_right": "Close tabs to the right",
     "close_all_tabs": "Close all tabs",
     "copy_title": "Copy Title",
+    "copy_session": "Copy Session",
     "confirm_close_terminal_title": "Close SSH session",
     "confirm_close_terminal_desc": "Close this SSH terminal tab? Unsaved work in the remote session may be lost.",
     "confirm_close_all_title": "Close All Tabs",
