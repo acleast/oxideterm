@@ -6,6 +6,7 @@ import type {
   TerminalAutosuggestCandidate,
   TerminalAutosuggestPosition,
 } from '@/lib/terminal/autosuggest';
+import { cn } from '@/lib/utils';
 
 interface TerminalCompletionOverlayProps {
   candidates: TerminalAutosuggestCandidate[];
@@ -44,7 +45,7 @@ export const TerminalCompletionOverlay: React.FC<TerminalCompletionOverlayProps>
 }) => {
   const popupMetrics = useMemo(() => {
     const longest = candidates.reduce((max, candidate) => Math.max(max, candidate.command.length), 0);
-    const width = Math.min(560, Math.max(220, longest * 9 + 54));
+    const width = Math.min(560, Math.max(220, longest * 9 + 74));
     return { width };
   }, [candidates]);
 
@@ -76,26 +77,36 @@ export const TerminalCompletionOverlay: React.FC<TerminalCompletionOverlayProps>
             type="button"
             role="option"
             aria-selected={highlighted}
-            className={[
-              'grid h-[28px] w-full grid-cols-[minmax(0,1fr)_32px] items-center border-0 bg-transparent p-0 text-left text-[15px] leading-none tracking-normal outline-none transition-colors',
-              highlighted ? 'bg-[#2d303a]' : 'hover:bg-[#24262d]',
-            ].join(' ')}
+            className={cn(
+              'grid h-[28px] w-full grid-cols-[20px_minmax(0,1fr)_32px] items-center border-0 p-0 text-left text-[15px] leading-none tracking-normal outline-none transition-colors',
+              highlighted
+                ? 'bg-[#0d3b66] text-white'
+                : 'bg-transparent text-[#c8c8c8] hover:bg-[#24262d]',
+            )}
             onMouseEnter={() => onHoverIndex(index)}
             onMouseDown={(event) => {
               event.preventDefault();
               onPick();
             }}
           >
-            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre px-[6px] text-[#d8d8d8]">
-              <span className="text-[#f0f0f0]">{currentInput}</span>
-              {suffix && <span className="text-[#d8d8d8]">{suffix}</span>}
+            <span
+              aria-hidden="true"
+              className="flex h-full items-center justify-center text-[13px] leading-none text-[#5fb3ff]"
+            >
+              {highlighted ? '>' : ''}
+            </span>
+            <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre px-[4px]">
+              <span className={highlighted ? 'text-white/70' : 'text-[#7a7a7a]'}>{currentInput}</span>
+              {suffix && (
+                <span className={highlighted ? 'text-white' : 'text-[#d8d8d8]'}>{suffix}</span>
+              )}
             </span>
             <span
               aria-hidden="true"
-              className={[
-                'flex h-full items-center justify-center border-l border-[#171717]/40 text-[14px] font-semibold text-white',
-                highlighted ? 'bg-[#f2858d]' : 'bg-[#ec7f88]',
-              ].join(' ')}
+              className={cn(
+                'flex h-full items-center justify-center border-l border-black/30 text-[14px] font-semibold text-white',
+                highlighted ? 'bg-[#f2858d]' : 'bg-[#ec7f88]/70',
+              )}
             >
               {sourceLabel}
             </span>

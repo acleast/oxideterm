@@ -7,17 +7,19 @@ import {
   type TerminalAutosuggestCandidate,
   type TerminalAutosuggestInputState,
 } from '@/lib/terminal/autosuggest';
+import { getCwd } from '@/lib/terminalRegistry';
 
 const COMPLETION_LIMIT = 8;
 
 export function useTerminalCompletionOverlay(options: {
   enabled: boolean;
   isActive: boolean;
+  paneId: string;
   getInputState: () => TerminalAutosuggestInputState;
   acceptCompletion: (text: string) => void;
   sendInput: (suffix: string) => void;
 }) {
-  const { enabled, isActive, getInputState, acceptCompletion, sendInput } = options;
+  const { enabled, isActive, paneId, getInputState, acceptCompletion, sendInput } = options;
   const [candidates, setCandidates] = useState<TerminalAutosuggestCandidate[]>([]);
   const [highlightedIndex, setHighlightedIndexState] = useState(0);
   const lastInputRef = useRef<TerminalAutosuggestInputState>(getInputState());
@@ -27,6 +29,7 @@ export function useTerminalCompletionOverlay(options: {
   const refresh = useCallback(() => {
     const input = getInputState();
     lastInputRef.current = input;
+    const cwd = getCwd(paneId);
 
     if (!enabled || !isActive || !input.isCursorAtEnd) {
       setCandidates([]);
@@ -42,7 +45,7 @@ export function useTerminalCompletionOverlay(options: {
     }
 
     const lowerQuery = query.toLowerCase();
-    const nextCandidates = getTerminalAutosuggestCandidates(query, COMPLETION_LIMIT)
+    const nextCandidates = getTerminalAutosuggestCandidates(query, COMPLETION_LIMIT, cwd)
       .filter((candidate) => {
         const lowerCommand = candidate.command.toLowerCase();
         return lowerCommand.startsWith(lowerQuery) && lowerCommand !== lowerQuery;
@@ -52,7 +55,7 @@ export function useTerminalCompletionOverlay(options: {
       if (nextCandidates.length === 0) return 0;
       return Math.min(current, nextCandidates.length - 1);
     });
-  }, [enabled, getInputState, isActive]);
+  }, [enabled, getInputState, isActive, paneId]);
 
   useEffect(() => {
     refresh();

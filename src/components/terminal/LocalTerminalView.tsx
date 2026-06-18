@@ -47,6 +47,7 @@ import {
   notifyTerminalOutput,
   updateTerminalReadiness,
   registerTerminalCommandMarkCreator,
+  getCwd,
 } from '../../lib/terminalRegistry';
 import {
   cleanupTerminalCommandMarks,
@@ -75,10 +76,12 @@ import { attachTerminalSmartCopy } from '../../hooks/useTerminalSmartCopy';
 import { useTerminalRecording } from '../../hooks/useTerminalRecording';
 import { useAdaptiveRenderer } from '../../hooks/useAdaptiveRenderer';
 import { useTerminalAutosuggestRecorder } from '../../hooks/useTerminalAutosuggestRecorder';
+import { useTerminalCompletionOverlay } from '../../hooks/useTerminalCompletionOverlay';
 import { observeCliAgentTerminalInput } from '../../lib/ai/orchestrator/cliAgents';
 import { RecordingControls } from './RecordingControls';
 import { FpsOverlay } from './FpsOverlay';
 import { TerminalCommandBar } from './TerminalCommandBar';
+import { TerminalCompletionOverlay } from './TerminalCompletionOverlay';
 import { ScrollbackViewer } from './ScrollbackViewer';
 import { TerminalContextMenu, type TerminalContextMenuState } from './TerminalContextMenu';
 import { useToastStore } from '../../hooks/useToast';
@@ -144,6 +147,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const clipboardAddonRef = useRef<{ dispose: () => void } | null>(null);
   const selectionGestureRef = useRef<SelectionGestureController | null>(null);
   const smartCopyDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  const completionOverlayRef = useRef<ReturnType<typeof useTerminalCompletionOverlay> | null>(null);
   const highlightEngineRef = useRef<HighlightEngine | null>(null);
   const runtimeDisabledHighlightRulesRef = useRef<Map<string, string>>(new Map());
   const runtimeDisabledHighlightRulesSourceRef = useRef<string | null>(null);
@@ -290,6 +294,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const autosuggestRecorder = useTerminalAutosuggestRecorder({
     terminalKind: 'local_terminal',
     localShellHistory: terminalSettings.autosuggest?.localShellHistory ?? true,
+    paneId: effectivePaneId,
   });
   const autosuggestRecorderRef = useRef(autosuggestRecorder);
   autosuggestRecorderRef.current = autosuggestRecorder;
@@ -331,6 +336,19 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const handleCommandBarLayoutChange = useCallback(() => {
     commandBarResizeSchedulerRef.current?.scheduleFit();
   }, []);
+
+  const completionOverlay = useTerminalCompletionOverlay({
+    enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
+    isActive,
+    paneId: effectivePaneId,
+    getInputState: autosuggestRecorder.getInputState,
+    acceptCompletion: autosuggestRecorder.acceptCompletion,
+    sendInput: (suffix) => {
+      if (!isRunningRef.current) return;
+      writeEncodedTerminalInput(suffix);
+    },
+  });
+  completionOverlayRef.current = completionOverlay;
 
   const getEffectiveHighlightRules = useCallback((rules: HighlightRule[]) => {
     const rulesSignature = getHighlightRulesSignature(rules);
@@ -416,6 +434,92 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
     writeEncodedTerminalInput(input);
     return true;
   }, [writeEncodedTerminalInput]);
+
+  const handleCompletionOverlayKeyEvent = useCallback((event: KeyboardEvent): boolean => {
+    if (event.type !== 'keydown') return true;
+
+    const overlay = completionOverlayRef.current;
+    if (!overlay || !overlay.open) return true;
+    // IME composition (CJK input method candidate selection) must not be
+    // intercepted — Enter commits the composed candidate, not a completion.
+    if (isComposingRef.current) return true;
+
+    const key = event.key || event.code;
+    const code = event.code || event.key;
+
+    switch (key) {
+      case 'ArrowDown':
+      case 'Down':
+        overlay.moveHighlight(1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'ArrowUp':
+      case 'Up':
+        overlay.moveHighlight(-1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'Tab':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Enter':
+      case 'Return':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Escape':
+      case 'Esc':
+        overlay.close();
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      default:
+        break;
+    }
+
+    switch (code) {
+      case 'ArrowDown':
+        overlay.moveHighlight(1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'ArrowUp':
+        overlay.moveHighlight(-1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'Tab':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Enter':
+      case 'NumpadEnter':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Escape':
+        overlay.close();
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      default:
+        return true;
+    }
+  }, []);
 
   // ── Listen for TabBar recording events ──────────────────────────────────
   useEffect(() => {
@@ -742,6 +846,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
       term,
       paneId: effectivePaneId,
       sessionId,
+      getCwd: () => getCwd(effectivePaneId),
     });
     const osc133Disposable = term.parser.registerOscHandler(133, shellIntegrationController.handleOsc133);
     const osc633Disposable = term.parser.registerOscHandler(633, shellIntegrationController.handleOsc633);
@@ -864,6 +969,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
       isCopyOnSelectEnabled: () => useSettingsStore.getState().settings.terminal.copyOnSelect,
       isMiddleClickPasteEnabled: () => useSettingsStore.getState().settings.terminal.middleClickPaste,
       onPasteShortcut: handlePasteShortcut,
+      onKeyEvent: handleCompletionOverlayKeyEvent,
       container: containerRef.current,
     });
     selectionGestureRef.current = installShiftSelectionGuard(
@@ -1962,6 +2068,24 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
           sendPrivilegeInput={isSerialTerminal ? undefined : sendPrivilegeInput}
           focusTerminal={() => { focusTerminal('strong'); }}
           onLayoutChange={handleCommandBarLayoutChange}
+        />
+      )}
+      {(terminalSettings.autosuggest?.nativeCompletionOverlay ?? true) && completionOverlay.open && (
+        <TerminalCompletionOverlay
+          candidates={completionOverlay.candidates}
+          highlightedIndex={completionOverlay.highlightedIndex}
+          currentInput={autosuggestRecorder.getInputState().value}
+          position={(() => {
+            const pos = getCursorPosition();
+            if (!pos) return null;
+            return {
+              left: pos.containerRect.left + pos.x * pos.charWidth,
+              top: pos.containerRect.top + pos.y * pos.lineHeight,
+              lineHeight: pos.lineHeight,
+            };
+          })()}
+          onHoverIndex={completionOverlay.setHighlightedIndex}
+          onPick={() => completionOverlay.accept()}
         />
       )}
     </div>

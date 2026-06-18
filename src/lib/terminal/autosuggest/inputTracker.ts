@@ -131,6 +131,9 @@ export class TerminalAutosuggestInputTracker {
   }
 
   private applyEscapeSequence(sequence: string): number {
+    if (sequence.startsWith('\x1b[A') || sequence.startsWith('\x1bOA') || sequence.startsWith('\x1b[B') || sequence.startsWith('\x1bOB')) {
+      return 3;
+    }
     if (sequence.startsWith('\x1b[D') || sequence.startsWith('\x1bOD')) {
       this.cursorIndex = Math.max(0, this.cursorIndex - 1);
       this.dirty = true;

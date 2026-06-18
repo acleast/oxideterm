@@ -9,23 +9,25 @@ import {
   TerminalAutosuggestInputTracker,
 } from '@/lib/terminal/autosuggest';
 import type { TerminalAutosuggestInputState } from '@/lib/terminal/autosuggest';
+import { getCwd } from '@/lib/terminalRegistry';
 
 type TerminalKind = 'terminal' | 'local_terminal';
 
 export function useTerminalAutosuggestRecorder(options: {
   terminalKind: TerminalKind;
   localShellHistory: boolean;
+  paneId: string;
 }) {
-  const { terminalKind, localShellHistory } = options;
+  const { terminalKind, localShellHistory, paneId } = options;
   const trackerRef = useRef(new TerminalAutosuggestInputTracker());
 
   const observeInput = useCallback((data: string) => {
     const result = trackerRef.current.applyData(data);
     if (result.completedCommand) {
-      recordTerminalAutosuggestCommand(result.completedCommand, 'runtime');
+      recordTerminalAutosuggestCommand(result.completedCommand, 'runtime', getCwd(paneId));
     }
     return result;
-  }, []);
+  }, [paneId]);
 
   const resetInput = useCallback(() => {
     trackerRef.current.reset();
@@ -57,7 +59,7 @@ export function useTerminalAutosuggestRecorder(options: {
     return () => {
       cancelled = true;
     };
-  }, [localShellHistory, terminalKind]);
+  }, [localShellHistory, paneId, terminalKind]);
 
   return { observeInput, resetInput, getInputState, acceptCompletion };
 }

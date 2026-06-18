@@ -38,6 +38,20 @@ describe('terminal autosuggest', () => {
     expect(tracker.getState().value).toBe('');
   });
 
+  it('ignores up and down arrow escape sequences in the input tracker', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+
+    tracker.applyData('git st');
+    expect(tracker.applyData('\x1b[A')).toMatchObject({ changed: false });
+    expect(tracker.applyData('\x1b[B')).toMatchObject({ changed: false });
+
+    expect(tracker.getState()).toMatchObject({
+      value: 'git st',
+      cursorIndex: 6,
+      isCursorAtEnd: true,
+    });
+  });
+
   it('only offers suffix ghost text for prefix matches', () => {
     recordTerminalAutosuggestCommand('git status');
     recordTerminalAutosuggestCommand('git stash list');
@@ -56,6 +70,33 @@ describe('terminal autosuggest', () => {
       'pnpm test',
       'pnpm exec tsc --noEmit',
     ]);
+  });
+
+  it('keeps cwd-scoped runtime commands out of other directories', () => {
+    recordTerminalAutosuggestCommand('pnpm dev', 'runtime', '/work/app-a');
+    recordTerminalAutosuggestCommand('pnpm build', 'runtime', '/work/app-b');
+    recordTerminalAutosuggestCommand('pnpm install', 'local-history');
+
+    expect(getTerminalAutosuggestCandidates('pnpm', 10, '/work/app-a').map((match) => match.command)).toEqual([
+      'pnpm dev',
+      'pnpm install',
+    ]);
+    expect(getTerminalAutosuggestCandidates('pnpm', 10, '/work/app-b').map((match) => match.command)).toEqual([
+      'pnpm build',
+      'pnpm install',
+    ]);
+  });
+
+  it('prefers cwd-specific history over global history for the same command', () => {
+    recordTerminalAutosuggestCommand('make test', 'local-history');
+    recordTerminalAutosuggestCommand('make test', 'runtime', '/work/project');
+
+    const [match] = getTerminalAutosuggestCandidates('make', 10, '/work/project');
+
+    expect(match).toMatchObject({
+      command: 'make test',
+      cwd: '/work/project',
+    });
   });
 
   it('returns recent history when the query is empty', () => {

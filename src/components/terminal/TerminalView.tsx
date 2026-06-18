@@ -39,6 +39,7 @@ import {
   notifyTerminalOutput,
   updateTerminalReadiness,
   registerTerminalCommandMarkCreator,
+  getCwd,
 } from '../../lib/terminalRegistry';
 import {
   cleanupTerminalCommandMarks,
@@ -205,6 +206,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const lastRemoteResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const smartCopyDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  const completionOverlayRef = useRef<ReturnType<typeof useTerminalCompletionOverlay> | null>(null);
   const trzszControllerRef = useRef<TrzszController | null>(null);
   const highlightEngineRef = useRef<HighlightEngine | null>(null);
   const runtimeDisabledHighlightRulesRef = useRef<Map<string, string>>(new Map());
@@ -690,6 +692,92 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     });
   }, []);
 
+  const handleCompletionOverlayKeyEvent = useCallback((event: KeyboardEvent): boolean => {
+    if (event.type !== 'keydown') return true;
+
+    const overlay = completionOverlayRef.current;
+    if (!overlay || !overlay.open) return true;
+    // IME composition (CJK input method candidate selection) must not be
+    // intercepted — Enter commits the composed candidate, not a completion.
+    if (isComposingRef.current) return true;
+
+    const key = event.key || event.code;
+    const code = event.code || event.key;
+
+    switch (key) {
+      case 'ArrowDown':
+      case 'Down':
+        overlay.moveHighlight(1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'ArrowUp':
+      case 'Up':
+        overlay.moveHighlight(-1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'Tab':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Enter':
+      case 'Return':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Escape':
+      case 'Esc':
+        overlay.close();
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      default:
+        break;
+    }
+
+    switch (code) {
+      case 'ArrowDown':
+        overlay.moveHighlight(1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'ArrowUp':
+        overlay.moveHighlight(-1);
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      case 'Tab':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Enter':
+      case 'NumpadEnter':
+        if (overlay.accept()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return false;
+        }
+        return true;
+      case 'Escape':
+        overlay.close();
+        event.preventDefault();
+        event.stopPropagation();
+        return false;
+      default:
+        return true;
+    }
+  }, []);
+
   const transformTerminalOutput = useCallback((payload: Uint8Array) => {
     return terminalOutputDecoderRef.current.transform(payload);
   }, []);
@@ -754,6 +842,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const autosuggestRecorder = useTerminalAutosuggestRecorder({
     terminalKind: 'terminal',
     localShellHistory: terminalSettings.autosuggest?.localShellHistory ?? true,
+    paneId: effectivePaneId,
   });
   const autosuggestRecorderRef = useRef(autosuggestRecorder);
   autosuggestRecorderRef.current = autosuggestRecorder;
@@ -1759,6 +1848,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       paneId: effectivePaneId,
       sessionId,
       nodeId,
+      getCwd: () => getCwd(effectivePaneId),
     });
     const osc133Disposable = term.parser.registerOscHandler(133, shellIntegrationController.handleOsc133);
     const osc633Disposable = term.parser.registerOscHandler(633, shellIntegrationController.handleOsc633);
@@ -1898,6 +1988,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       isCopyOnSelectEnabled: () => useSettingsStore.getState().settings.terminal.copyOnSelect,
       isMiddleClickPasteEnabled: () => useSettingsStore.getState().settings.terminal.middleClickPaste,
       onPasteShortcut: handlePasteShortcut,
+      onKeyEvent: handleCompletionOverlayKeyEvent,
       container: containerRef.current,
     });
     selectionGestureRef.current = installShiftSelectionGuard(
@@ -2635,6 +2726,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const completionOverlay = useTerminalCompletionOverlay({
     enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
     isActive,
+    paneId: effectivePaneId,
     getInputState: autosuggestRecorder.getInputState,
     acceptCompletion: autosuggestRecorder.acceptCompletion,
     sendInput: (suffix) => {
@@ -2642,7 +2734,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       sendProgrammaticTerminalInput(suffix, 'text');
     },
   });
-  const completionOverlayRef = useRef(completionOverlay);
   completionOverlayRef.current = completionOverlay;
 
   const sendFormattedTerminalInput = useCallback((input: string): boolean => {
@@ -2697,50 +2788,24 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
    *
    * Only active while the overlay is open. Captures at the container so we run
    * before xterm's own keydown (which would otherwise forward arrows to the
-   * shell as history navigation). Keys not handled here fall through to xterm
-   * unchanged. Visible-character / backspace / enter are intentionally NOT
-   * intercepted — they flow to the shell, the input tracker mirrors them via
-   * onData, and refresh() recomputes candidates.
+   * shell as history navigation). Arrows move the highlight, Tab/Enter accept
+   * the selected candidate (Enter accepting the inline suggestion is the
+   * Powerlevel10k-style behavior), Escape closes. IME composition is left
+   * untouched so CJK candidate commits are not swallowed. Other keys fall
+   * through to xterm unchanged — visible-character / backspace flow to the
+   * shell, the input tracker mirrors them via onData, and refresh() recomputes
+   * candidates.
    */
   useEffect(() => {
     if (!isActive) return;
-    const container = containerRef.current;
-    if (!container) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      const overlay = completionOverlayRef.current;
-      if (!overlay || !overlay.open) return;
-
-      switch (event.key) {
-        case 'ArrowDown':
-          overlay.moveHighlight(1);
-          event.preventDefault();
-          event.stopPropagation();
-          break;
-        case 'ArrowUp':
-          overlay.moveHighlight(-1);
-          event.preventDefault();
-          event.stopPropagation();
-          break;
-        case 'Tab':
-          if (overlay.accept()) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
-          break;
-        case 'Escape':
-          overlay.close();
-          event.preventDefault();
-          event.stopPropagation();
-          break;
-        default:
-          break;
-      }
+      handleCompletionOverlayKeyEvent(event);
     };
 
-    container.addEventListener('keydown', handleKeyDown, true);
-    return () => container.removeEventListener('keydown', handleKeyDown, true);
-  }, [isActive]);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [handleCompletionOverlayKeyEvent, isActive]);
 
   /**
    * Handle container click - focus terminal and update active pane

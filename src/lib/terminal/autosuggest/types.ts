@@ -11,6 +11,7 @@ export interface TerminalAutosuggestSettings {
 export interface TerminalAutosuggestCandidate {
   command: string;
   source: 'runtime' | 'local-history' | 'ai-ledger';
+  cwd?: string | null;
   lastUsedAt: number;
   score: number;
 }

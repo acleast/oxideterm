@@ -5,9 +5,9 @@ import { getTerminalAutosuggestCandidates, isLikelySecretCommand } from '@/lib/t
 import type { CommandBarCompletion, CommandBarCompletionProvider } from './types';
 import { classifyCommandRisk, riskScorePenalty } from './risk';
 
-export const historyProvider: CommandBarCompletionProvider = ({ input, allowEmptyHistory }) => {
+export const historyProvider: CommandBarCompletionProvider = ({ input, context, allowEmptyHistory }) => {
   if (!input.trim() && !allowEmptyHistory) return [];
-  const candidates = getTerminalAutosuggestCandidates(input, 8);
+  const candidates = getTerminalAutosuggestCandidates(input, 8, context.cwd);
   return candidates
     .filter((candidate) => !isLikelySecretCommand(candidate.command))
     .map<CommandBarCompletion>((candidate) => {
