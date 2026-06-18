@@ -295,6 +295,8 @@ jobs:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
             const version = tag.replace(/^v/, '');
+            // Short commit hash (7 chars) for traceability in asset filenames.
+            const shortSha = context.sha.substring(0, 7);
 
             const { data: release } = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
@@ -302,17 +304,17 @@ jobs:
               tag,
             });
 
-            // Unified naming: OxideTerm_{version}_{os}_{arch}.{ext}
+            // Unified naming: OxideTerm_{version}_{commit}_{os}_{arch}.{ext}
             // Arch: x64 (Intel/AMD 64-bit), arm64 (ARM 64-bit)
             const renameRules = [
               // macOS DMG (ARM64 only)
-              { match: /^OxideTerm.*[_-](aarch64|arm64)\.dmg$/i, newName: `OxideTerm_${version}_macos_arm64.dmg` },
+              { match: /^OxideTerm.*[_-](aarch64|arm64)\.dmg$/i, newName: `OxideTerm_${version}_${shortSha}_macos_arm64.dmg` },
               // macOS updater (.app.tar.gz)
-              { match: /^OxideTerm.*[_-](aarch64|arm64)\.app\.tar\.gz$/i, newName: `OxideTerm_${version}_macos_arm64.app.tar.gz` },
+              { match: /^OxideTerm.*[_-](aarch64|arm64)\.app\.tar\.gz$/i, newName: `OxideTerm_${version}_${shortSha}_macos_arm64.app.tar.gz` },
               // Windows NSIS installer
-              { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.exe$/i, newName: `OxideTerm_${version}_windows_x64-setup.exe` },
+              { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.exe$/i, newName: `OxideTerm_${version}_${shortSha}_windows_x64-setup.exe` },
               // Windows NSIS updater (.nsis.zip)
-              { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.nsis\.zip$/i, newName: `OxideTerm_${version}_windows_x64-setup.nsis.zip` },
+              { match: /^OxideTerm.*[_-](x64|x86_64|amd64)-setup\.nsis\.zip$/i, newName: `OxideTerm_${version}_${shortSha}_windows_x64-setup.nsis.zip` },
             ];
 
             const renames = [];
