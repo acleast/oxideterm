@@ -10,6 +10,11 @@ import {
 import { getCwd } from '@/lib/terminalRegistry';
 
 const COMPLETION_LIMIT = 8;
+// Sentinel for "no candidate selected". The popup opens unselected so that
+// Tab/Enter fall through to the shell's own completion until the user opts in
+// by pressing ArrowUp/ArrowDown (or hovering). A value of -1 means no row is
+// highlighted and accept() is a no-op.
+const NO_SELECTION = -1;
 
 export function useTerminalCompletionOverlay(options: {
   enabled: boolean;
@@ -21,8 +26,13 @@ export function useTerminalCompletionOverlay(options: {
 }) {
   const { enabled, isActive, paneId, getInputState, acceptCompletion, sendInput } = options;
   const [candidates, setCandidates] = useState<TerminalAutosuggestCandidate[]>([]);
-  const [highlightedIndex, setHighlightedIndexState] = useState(0);
+  const [highlightedIndex, setHighlightedIndexState] = useState<number>(NO_SELECTION);
   const lastInputRef = useRef<TerminalAutosuggestInputState>(getInputState());
+  // Mirror of `candidates` read inside the 80ms refresh tick to detect whether
+  // the list actually changed (avoids clobbering the user's highlight selection
+  // on every idle poll). Kept in a ref so refresh stays independent of the
+  // candidates state closure.
+  const candidatesRef = useRef<TerminalAutosuggestCandidate[]>([]);
 
   const open = enabled && isActive && candidates.length > 0;
 
@@ -33,14 +43,16 @@ export function useTerminalCompletionOverlay(options: {
 
     if (!enabled || !isActive || !input.isCursorAtEnd) {
       setCandidates([]);
-      setHighlightedIndexState(0);
+      candidatesRef.current = [];
+      setHighlightedIndexState(NO_SELECTION);
       return;
     }
 
     const query = input.value.trimStart();
     if (!query) {
       setCandidates([]);
-      setHighlightedIndexState(0);
+      candidatesRef.current = [];
+      setHighlightedIndexState(NO_SELECTION);
       return;
     }
 
@@ -50,11 +62,29 @@ export function useTerminalCompletionOverlay(options: {
         const lowerCommand = candidate.command.toLowerCase();
         return lowerCommand.startsWith(lowerQuery) && lowerCommand !== lowerQuery;
       });
+
+    // Detect whether the candidate set actually changed since the last refresh.
+    // The 80ms polling tick fires even while the user is idle, so resetting the
+    // highlight on every tick would wipe a selection the user just made with
+    // the arrow keys. Only reset to unselected when the list genuinely changes.
+    const prevCommands = candidatesRef.current;
+    const changed =
+      prevCommands.length !== nextCandidates.length ||
+      nextCandidates.some((candidate, index) => candidate.command !== prevCommands[index]?.command);
+
     setCandidates(nextCandidates);
-    setHighlightedIndexState((current) => {
-      if (nextCandidates.length === 0) return 0;
-      return Math.min(current, nextCandidates.length - 1);
-    });
+    candidatesRef.current = nextCandidates;
+    if (changed) {
+      setHighlightedIndexState(NO_SELECTION);
+    } else {
+      // Same list: keep the current selection, clamping if it now falls out of
+      // range (e.g. the list shrank between ticks).
+      setHighlightedIndexState((current) => {
+        if (nextCandidates.length === 0) return NO_SELECTION;
+        if (current === NO_SELECTION) return NO_SELECTION;
+        return Math.min(current, nextCandidates.length - 1);
+      });
+    }
   }, [enabled, getInputState, isActive, paneId]);
 
   useEffect(() => {
@@ -69,24 +99,31 @@ export function useTerminalCompletionOverlay(options: {
 
   const close = useCallback(() => {
     setCandidates([]);
-    setHighlightedIndexState(0);
+    candidatesRef.current = [];
+    setHighlightedIndexState(NO_SELECTION);
   }, []);
 
   const moveHighlight = useCallback((delta: number) => {
     setHighlightedIndexState((current) => {
-      if (candidates.length === 0) return 0;
+      if (candidates.length === 0) return NO_SELECTION;
+      // From the unselected state, ArrowDown selects the first row and
+      // ArrowUp selects the last — mirroring typical menu behavior.
+      if (current === NO_SELECTION) {
+        return delta > 0 ? 0 : candidates.length - 1;
+      }
       return (current + delta + candidates.length) % candidates.length;
     });
   }, [candidates.length]);
 
   const setHighlightedIndex = useCallback((index: number) => {
     setHighlightedIndexState(() => {
-      if (candidates.length === 0) return 0;
+      if (candidates.length === 0) return NO_SELECTION;
       return Math.max(0, Math.min(index, candidates.length - 1));
     });
   }, [candidates.length]);
 
   const accept = useCallback((): boolean => {
+    if (highlightedIndex === NO_SELECTION) return false;
     const input = getInputState();
     const candidate = candidates[highlightedIndex];
     if (!candidate || !input.isCursorAtEnd) return false;

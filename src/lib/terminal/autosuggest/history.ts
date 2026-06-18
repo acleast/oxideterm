@@ -15,12 +15,24 @@ type HistoryEntry = {
 };
 
 const MAX_HISTORY = 1000;
+// Cap the on-disk runtime history independently. Runtime commands are the only
+// source persisted (ai-ledger is re-seeded each session, local-history is read
+// from shell files), so this bounds disk growth across sessions.
+const MAX_PERSISTED_RUNTIME = 1000;
+const PERSIST_DEBOUNCE_MS = 1500;
+const PERSIST_FILENAME = 'autosuggest_runtime_history.json';
 const entries = new Map<string, HistoryEntry>();
 let sequenceCounter = 0;
 // AI ledger is imported once per process lifetime; re-seeding every refresh
 // tick would keep bumping sequence/lastUsedAt and distort ranking. Reset to
 // false in clearTerminalAutosuggestHistory so a cleared store can re-seed.
 let aiLedgerSeeded = false;
+// Persisted runtime history: loaded once from disk on first use, debounced
+// writes after each runtime record. `runtimeHistoryLoaded` guards the load so
+// multiple panes don't race; `persistTimer` coalesces bursts of commands.
+let runtimeHistoryLoaded = false;
+let runtimeHistoryLoadPromise: Promise<void> | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 function normalizeCommand(command: string): string {
   return command.replace(/\s+/g, ' ').trim();
@@ -77,6 +89,11 @@ export function recordTerminalAutosuggestCommand(
   cwd?: string | null,
 ): void {
   putCommand(command, source, Date.now(), true, cwd);
+  // Only runtime commands are persisted across sessions; ai-ledger re-seeds
+  // each launch and local-history is read from shell files on demand.
+  if (source === 'runtime') {
+    scheduleRuntimeHistoryPersist();
+  }
 }
 
 export function importTerminalAutosuggestCommands(
@@ -187,4 +204,105 @@ export function clearTerminalAutosuggestHistory(): void {
   entries.clear();
   sequenceCounter = 0;
   aiLedgerSeeded = false;
+  // Cancel any pending write and wipe the persisted file so a cleared store
+  // does not silently resurrect on next launch.
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  void persistRuntimeHistory([]);
+}
+
+/**
+ * Load persisted runtime history from disk once per process. Safe to call from
+ * any pane; concurrent callers share the same load promise. No-ops outside
+ * Tauri (e.g. `pnpm dev`) where the filesystem APIs are unavailable.
+ */
+export function ensureRuntimeHistoryLoaded(): Promise<void> {
+  if (runtimeHistoryLoaded) return Promise.resolve();
+  if (runtimeHistoryLoadPromise) return runtimeHistoryLoadPromise;
+  runtimeHistoryLoadPromise = loadRuntimeHistory().finally(() => {
+    runtimeHistoryLoaded = true;
+    runtimeHistoryLoadPromise = null;
+  });
+  return runtimeHistoryLoadPromise;
+}
+
+function scheduleRuntimeHistoryPersist(): void {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void persistRuntimeHistory(collectPersistableRuntimeEntries());
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+function collectPersistableRuntimeEntries(): HistoryEntry[] {
+  return [...entries.values()]
+    .filter((entry) => entry.source === 'runtime')
+    .sort((a, b) => b.lastUsedAt - a.lastUsedAt || b.uses - a.uses)
+    .slice(0, MAX_PERSISTED_RUNTIME);
+}
+
+async function resolvePersistPath(): Promise<string | null> {
+  try {
+    const pathApi = await import('@tauri-apps/api/path');
+    const dir = await pathApi.appDataDir();
+    return pathApi.join(dir, PERSIST_FILENAME);
+  } catch {
+    return null;
+  }
+}
+
+async function loadRuntimeHistory(): Promise<void> {
+  try {
+    const filePath = await resolvePersistPath();
+    if (!filePath) return;
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    const raw = await readTextFile(filePath);
+    const parsed = JSON.parse(raw) as Array<{
+      command: string;
+      cwd: string | null;
+      lastUsedAt: number;
+      uses: number;
+    }>;
+    if (!Array.isArray(parsed)) return;
+    for (const item of parsed) {
+      if (!item || typeof item.command !== 'string' || !item.command) continue;
+      putCommand(item.command, 'runtime', item.lastUsedAt ?? Date.now(), false, item.cwd ?? null);
+      // Restore use counts so frequency ranking survives restarts.
+      const key = entryKey(normalizeCommand(item.command), normalizeCwd(item.cwd ?? null));
+      const existing = entries.get(key);
+      if (existing && typeof item.uses === 'number' && item.uses > existing.uses) {
+        existing.uses = item.uses;
+      }
+    }
+  } catch {
+    // Missing/corrupt file on first run or non-Tauri env — nothing to restore.
+  }
+}
+
+async function persistRuntimeHistory(items: HistoryEntry[]): Promise<void> {
+  try {
+    const filePath = await resolvePersistPath();
+    if (!filePath) return;
+    const { writeTextFile, mkdir } = await import('@tauri-apps/plugin-fs');
+    const { dirname } = await import('@tauri-apps/api/path');
+    const dir = await dirname(filePath);
+    try {
+      await mkdir(dir, { recursive: true });
+    } catch {
+      // Directory likely already exists.
+    }
+    const payload = JSON.stringify(
+      items.map((entry) => ({
+        command: entry.command,
+        cwd: entry.cwd,
+        lastUsedAt: entry.lastUsedAt,
+        uses: entry.uses,
+      })),
+    );
+    await writeTextFile(filePath, payload);
+  } catch {
+    // Persistence is best-effort; never block command recording on disk errors.
+  }
 }

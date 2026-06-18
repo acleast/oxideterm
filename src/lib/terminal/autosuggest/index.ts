@@ -4,6 +4,7 @@
 export { TerminalAutosuggestInputTracker } from './inputTracker';
 export {
   clearTerminalAutosuggestHistory,
+  ensureRuntimeHistoryLoaded,
   getTerminalAutosuggestCandidates,
   getTerminalAutosuggestion,
   importTerminalAutosuggestCommands,

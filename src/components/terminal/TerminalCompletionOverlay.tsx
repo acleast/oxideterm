@@ -7,6 +7,8 @@ import type {
   TerminalAutosuggestPosition,
 } from '@/lib/terminal/autosuggest';
 import { cn } from '@/lib/utils';
+import { getFontFamily } from '@/lib/fontFamily';
+import { useSettingsStore } from '@/store/settingsStore';
 
 interface TerminalCompletionOverlayProps {
   candidates: TerminalAutosuggestCandidate[];
@@ -49,6 +51,13 @@ export const TerminalCompletionOverlay: React.FC<TerminalCompletionOverlayProps>
     return { width };
   }, [candidates]);
 
+  // Match the terminal's configured font so the popup aligns with the prompt
+  // text beneath it (character widths, ligatures, Nerd Font glyphs).
+  const fontFamily = useSettingsStore(
+    (state) =>
+      getFontFamily(state.settings.terminal.fontFamily, state.settings.terminal.customFontFamily),
+  );
+
   if (!position || candidates.length === 0) return null;
 
   const top = position.top + position.lineHeight;
@@ -58,12 +67,13 @@ export const TerminalCompletionOverlay: React.FC<TerminalCompletionOverlayProps>
     <div
       role="listbox"
       aria-label="Command suggestions"
-      className="fixed z-[120] overflow-hidden rounded-none border border-zinc-500/40 bg-[#171717]/95 font-mono shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur-[1px]"
+      className="fixed z-[120] overflow-hidden rounded-none border border-zinc-500/40 bg-[#171717]/95 shadow-[0_14px_40px_rgba(0,0,0,0.45)] backdrop-blur-[1px]"
       style={{
         left,
         top,
         width: popupMetrics.width,
         maxWidth: 'calc(100vw - 16px)',
+        fontFamily,
       }}
     >
       {candidates.map((candidate, index) => {

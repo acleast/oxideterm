@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
+  ensureRuntimeHistoryLoaded,
   importTerminalAutosuggestCommands,
   loadLocalShellHistoryCommands,
   recordTerminalAutosuggestCommand,
@@ -49,6 +50,11 @@ export function useTerminalAutosuggestRecorder(options: {
   }, []);
 
   useEffect(() => {
+    // Restore persisted runtime history once per process so commands from
+    // previous sessions (including SSH sessions, which have no local shell
+    // file to read) resurface. ensureRuntimeHistoryLoaded is idempotent.
+    void ensureRuntimeHistoryLoaded();
+
     if (terminalKind !== 'local_terminal' || !localShellHistory) return;
     let cancelled = false;
     void loadLocalShellHistoryCommands().then((commands) => {
