@@ -90,6 +90,7 @@ import { useTerminalRecording } from '../../hooks/useTerminalRecording';
 import { useAdaptiveRenderer } from '../../hooks/useAdaptiveRenderer';
 import { useTerminalAutosuggestRecorder } from '../../hooks/useTerminalAutosuggestRecorder';
 import { useTerminalCompletionOverlay } from '../../hooks/useTerminalCompletionOverlay';
+import { readTerminalPromptInput } from '../../lib/terminal/autosuggest/promptReadback';
 import { observeCliAgentTerminalInput } from '../../lib/ai/orchestrator/cliAgents';
 import { RecordingControls } from './RecordingControls';
 import { FpsOverlay } from './FpsOverlay';
@@ -1849,6 +1850,9 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       sessionId,
       nodeId,
       getCwd: () => getCwd(effectivePaneId),
+      onCommandSubmitted: (command, cwd) => {
+        autosuggestRecorderRef.current.recordSubmittedCommand(command, cwd);
+      },
     });
     const osc133Disposable = term.parser.registerOscHandler(133, shellIntegrationController.handleOsc133);
     const osc633Disposable = term.parser.registerOscHandler(633, shellIntegrationController.handleOsc633);
@@ -1883,6 +1887,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         clearTerminalCommandMarkSelection(effectivePaneId);
       }
       prevAlternateBuffer = alternateBuffer;
+      const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState());
+      if (promptInput) {
+        const synced = autosuggestRecorderRef.current.syncPromptInput(promptInput);
+        if (synced.changed) {
+          completionOverlayRef.current?.refresh();
+        }
+      }
       notifyTerminalOutput(sessionId);
     });
 
@@ -2392,6 +2403,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           completionOverlayRef.current?.refresh();
         }
         if (observedInput.completedCommand && !isShellIntegrationDetected(effectivePaneId)) {
+          autosuggestRecorderRef.current.recordSubmittedCommand(observedInput.completedCommand);
           createTerminalCommandMark(term, effectivePaneId, {
             command: observedInput.completedCommand,
             source: 'user_input_observed',

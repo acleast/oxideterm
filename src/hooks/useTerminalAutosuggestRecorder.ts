@@ -24,11 +24,8 @@ export function useTerminalAutosuggestRecorder(options: {
 
   const observeInput = useCallback((data: string) => {
     const result = trackerRef.current.applyData(data);
-    if (result.completedCommand) {
-      recordTerminalAutosuggestCommand(result.completedCommand, 'runtime', getCwd(paneId));
-    }
     return result;
-  }, [paneId]);
+  }, []);
 
   const resetInput = useCallback(() => {
     trackerRef.current.reset();
@@ -49,6 +46,14 @@ export function useTerminalAutosuggestRecorder(options: {
     trackerRef.current.accept(text);
   }, []);
 
+  const syncPromptInput = useCallback((state: TerminalAutosuggestInputState) => {
+    return trackerRef.current.sync(state.value, state.cursorIndex);
+  }, []);
+
+  const recordSubmittedCommand = useCallback((command: string, cwd?: string | null) => {
+    recordTerminalAutosuggestCommand(command, 'runtime', cwd ?? getCwd(paneId));
+  }, [getCwd, paneId]);
+
   useEffect(() => {
     // Restore persisted runtime history once per process so commands from
     // previous sessions (including SSH sessions, which have no local shell
@@ -67,5 +72,5 @@ export function useTerminalAutosuggestRecorder(options: {
     };
   }, [localShellHistory, paneId, terminalKind]);
 
-  return { observeInput, resetInput, getInputState, acceptCompletion };
+  return { observeInput, resetInput, getInputState, acceptCompletion, syncPromptInput, recordSubmittedCommand };
 }

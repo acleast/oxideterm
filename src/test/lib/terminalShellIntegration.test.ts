@@ -7,6 +7,7 @@ import { cleanupTerminalCommandMarks, createTerminalCommandMark, listTerminalCom
 import {
   cleanupShellIntegration,
   createShellIntegrationController,
+  getShellIntegrationCommandStart,
   getShellIntegrationTrace,
   getShellIntegrationStatus,
   parseOsc133,
@@ -176,6 +177,30 @@ describe('terminal shell integration', () => {
       startLine: 10,
       endLine: 11,
     }));
+  });
+
+  it('emits submitted commands from shell integration output start', () => {
+    const term = createMockTerminal();
+    const onCommandSubmitted = vi.fn();
+    const controller = createShellIntegrationController({
+      term,
+      paneId: 'pane-1',
+      sessionId: 'session-1',
+      getCwd: () => '/work/app',
+      onCommandSubmitted,
+    });
+
+    term.setPosition(10);
+    controller.handleOsc633('A');
+    term.setPosition(10, 5);
+    controller.handleOsc633('B');
+
+    expect(getShellIntegrationCommandStart('pane-1')).toEqual({ line: 10, col: 5 });
+
+    controller.handleOsc633('E;git%20status');
+
+    expect(onCommandSubmitted).toHaveBeenCalledTimes(1);
+    expect(onCommandSubmitted).toHaveBeenCalledWith('git status', '/work/app');
   });
 
   it('uses the next prompt to close commands that never emitted command_end', () => {

@@ -12,12 +12,18 @@ import {
   recordTerminalAutosuggestCommand,
   TerminalAutosuggestInputTracker,
 } from '@/lib/terminal/autosuggest';
+import { readTerminalPromptInput } from '@/lib/terminal/autosuggest/promptReadback';
+import {
+  cleanupShellIntegration,
+  createShellIntegrationController,
+} from '@/lib/terminal/shellIntegration';
 
 const fakeSecret = (...parts: string[]) => parts.join('');
 
 describe('terminal autosuggest', () => {
   beforeEach(() => {
     clearTerminalAutosuggestHistory();
+    cleanupShellIntegration('pane-1');
   });
 
   it('tracks editable command input and records completed commands', () => {
@@ -50,6 +56,45 @@ describe('terminal autosuggest', () => {
       cursorIndex: 6,
       isCursorAtEnd: true,
     });
+  });
+
+  it('syncs tracker state from terminal prompt readback after shell completion rewrites the line', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    tracker.applyData('cd co');
+
+    const term = createMockTerminal({
+      line: 'tester@host:~/work$ cd code/',
+      cursorX: 'tester@host:~/work$ cd code/'.length,
+    });
+    const promptInput = readTerminalPromptInput(term, 'pane-1', tracker.getState());
+
+    expect(promptInput).toMatchObject({
+      value: 'cd code/',
+      cursorIndex: 8,
+      isCursorAtEnd: true,
+    });
+    tracker.sync(promptInput!.value, promptInput!.cursorIndex);
+    expect(tracker.getState().value).toBe('cd code/');
+  });
+
+  it('does not read terminal output as prompt input while shell integration is in output state', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    tracker.applyData('cd co');
+    const term = createMockTerminal({
+      line: 'code',
+      cursorX: 'code'.length,
+    });
+    const controller = createShellIntegrationController({
+      term,
+      paneId: 'pane-1',
+      sessionId: 'session-1',
+    });
+
+    controller.handleOsc633('A');
+    controller.handleOsc633('B');
+    controller.handleOsc633('E;cd%20code/');
+
+    expect(readTerminalPromptInput(term, 'pane-1', tracker.getState())).toBeNull();
   });
 
   it('only offers suffix ghost text for prefix matches', () => {
@@ -121,3 +166,33 @@ describe('terminal autosuggest', () => {
     expect(getTerminalAutosuggestion('ls')).toBe(' -la');
   });
 });
+
+function createMockTerminal(options: { line: string; cursorX?: number }) {
+  const activeBuffer = {
+    type: 'normal',
+    baseY: 0,
+    cursorY: 0,
+    cursorX: options.cursorX ?? options.line.length,
+    getLine: vi.fn(() => ({
+      translateToString: () => options.line,
+    })),
+  };
+  const marker = {
+    line: 0,
+    isDisposed: false,
+    dispose: vi.fn(),
+    onDispose: vi.fn(),
+  };
+
+  return {
+    cols: 120,
+    rows: 24,
+    buffer: { active: activeBuffer },
+    modes: { mouseTrackingMode: 'none' },
+    registerMarker: vi.fn(() => marker),
+    registerDecoration: vi.fn(() => ({
+      dispose: vi.fn(),
+      onRender: vi.fn(),
+    })),
+  } as never;
+}

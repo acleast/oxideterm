@@ -54,6 +54,7 @@ type ControllerOptions = {
   sessionId: string;
   nodeId?: string;
   getCwd?: () => string | null | undefined;
+  onCommandSubmitted?: (command: string, cwd?: string | null) => void;
 };
 
 type PromptPosition = TerminalPosition & { at: number };
@@ -272,6 +273,17 @@ export function getShellIntegrationStatus(paneId: string): ShellIntegrationStatu
   };
 }
 
+export function getShellIntegrationCommandStart(paneId: string): TerminalPosition | null {
+  const state = stateByPane.get(paneId);
+  if (!state?.commandStart || (state.lifecycle !== 'prompt' && state.lifecycle !== 'command')) {
+    return null;
+  }
+  return {
+    line: state.commandStart.line,
+    col: state.commandStart.col,
+  };
+}
+
 export function isShellIntegrationDetected(paneId: string): boolean {
   return getShellIntegrationStatus(paneId).detected;
 }
@@ -295,7 +307,7 @@ export function createShellIntegrationController(options: ControllerOptions): {
   handleOsc633: (data: string) => boolean;
   dispose: () => void;
 } {
-  const { term, paneId, sessionId, nodeId, getCwd } = options;
+  const { term, paneId, sessionId, nodeId, getCwd, onCommandSubmitted } = options;
 
   const handleEvent = (event: ShellIntegrationEvent): void => {
     const previousLifecycle = stateByPane.get(paneId)?.lifecycle ?? 'idle';
@@ -364,15 +376,19 @@ export function createShellIntegrationController(options: ControllerOptions): {
         const command = state.pendingCommandTextFromProtocol
           ? state.pendingCommandText ?? null
           : extractCommandFromVisibleBuffer(term, state.commandStart, { line: event.line, col: event.col });
+        const cwd = getCwd?.() ?? undefined;
         const mark = createShellIntegratedCommandMark(term, paneId, {
           command,
           sessionId,
           nodeId,
-          cwd: getCwd?.() ?? undefined,
+          cwd,
           startLine,
           commandLine,
           startedAt: state.startedAt ?? state.promptStart?.at ?? Date.now(),
         });
+        if (command) {
+          onCommandSubmitted?.(command, cwd);
+        }
         if (mark) {
           state.activeCommandId = mark.commandId;
           state.activeStartLine = startLine;

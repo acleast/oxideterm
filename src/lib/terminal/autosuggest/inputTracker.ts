@@ -30,6 +30,14 @@ export class TerminalAutosuggestInputTracker {
     this.cursorIndex = this.value.length;
   }
 
+  sync(value: string, cursorIndex = value.length): { changed: boolean } {
+    const before = this.snapshot();
+    this.value = value;
+    this.cursorIndex = Math.max(0, Math.min(cursorIndex, value.length));
+    this.dirty = false;
+    return { changed: this.snapshot() !== before };
+  }
+
   applyData(data: string): { completedCommand?: string; changed: boolean } {
     if (!data) return { changed: false };
     const before = this.snapshot();
