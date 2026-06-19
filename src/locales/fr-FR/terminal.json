@@ -212,6 +212,8 @@
       "command": "Commande",
       "command_mode": "Mode commande",
       "command_placeholder": "Exécuter une commande",
+      "collapse_input": "Réduire la saisie",
+      "expand_input": "Développer la saisie",
       "run_command": "Exécuter",
       "local_shell": "Shell local",
       "remote_shell": "Shell distant",

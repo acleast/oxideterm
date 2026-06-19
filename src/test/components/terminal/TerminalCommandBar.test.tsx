@@ -265,6 +265,31 @@ describe('TerminalCommandBar', () => {
     expect(commandBarStateMock.submitCommand).toHaveBeenCalledWith(undefined);
   });
 
+  it('collapses and restores the rich command input from the left toolbar button', () => {
+    render(
+      <TerminalCommandBar
+        paneId="pane-1"
+        sessionId="session-1"
+        tabId="tab-1"
+        terminalType="local_terminal"
+        isActive
+        sendInput={vi.fn()}
+        focusTerminal={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText('terminal.command_bar.command_placeholder')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('terminal.command_bar.collapse_input'));
+
+    expect(screen.queryByPlaceholderText('terminal.command_bar.command_placeholder')).not.toBeInTheDocument();
+    expect(commandBarStateMock.setFocused).toHaveBeenCalledWith(false);
+
+    fireEvent.click(screen.getByLabelText('terminal.command_bar.expand_input'));
+
+    expect(screen.getByPlaceholderText('terminal.command_bar.command_placeholder')).toBeInTheDocument();
+  });
+
   it('uses the configured terminal font for the command input', () => {
     render(
       <TerminalCommandBar

@@ -212,6 +212,8 @@
       "command": "Command",
       "command_mode": "Command mode",
       "command_placeholder": "Run commands",
+      "collapse_input": "Eingabe einklappen",
+      "expand_input": "Eingabe ausklappen",
       "run_command": "Run command",
       "local_shell": "Local shell",
       "remote_shell": "Remote shell",
