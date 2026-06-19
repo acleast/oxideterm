@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
 jobs:
   build:
     permissions:
@@ -114,7 +117,7 @@ jobs:
         id: release_notes
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           NOTES=$(pnpm --silent release:notes "$VERSION" --stdout)
 
           echo "body<<EOF" >> $GITHUB_OUTPUT
@@ -140,11 +143,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'OxideTerm ${{ github.ref_name }}'
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: 'OxideTerm ${{ env.RELEASE_TAG }}'
           releaseBody: ${{ steps.release_notes.outputs.body || 'See the assets below to download the installer for your platform.' }}
           releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           includeUpdaterJson: false
           args: ${{ matrix.args }}
 
@@ -160,7 +163,7 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const tag = context.ref.replace('refs/tags/', '');
+            const tag = process.env.RELEASE_TAG;
             const version = tag.replace(/^v/, '');
 
             const { data: release } = await github.rest.repos.getReleaseByTag({
@@ -264,7 +267,7 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const tag = context.ref.replace('refs/tags/', '');
+            const tag = process.env.RELEASE_TAG;
             const { data: release } = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -283,9 +286,9 @@ jobs:
 
   rename-assets:
     name: Rename release assets
-    needs: cleanup-sigs
+    needs: [build, cleanup-sigs]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ always() && needs.build.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.cleanup-sigs.result == 'success') }}
     permissions:
       contents: write
     steps:
@@ -293,8 +296,7 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const tag = context.ref.replace('refs/tags/', '');
-            const version = tag.replace(/^v/, '');
+            const tag = process.env.RELEASE_TAG;
             // Short commit hash (7 chars) for traceability in asset filenames.
             const shortSha = context.sha.substring(0, 7);
 
@@ -303,6 +305,12 @@ jobs:
               repo: context.repo.repo,
               tag,
             });
+
+            const versionFromTag = tag.startsWith('v') ? tag.replace(/^v/, '') : null;
+            const versionFromAsset = release.assets
+              .map(asset => asset.name.match(/^OxideTerm[_-](\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)/)?.[1])
+              .find(Boolean);
+            const version = versionFromTag || versionFromAsset || tag;
 
             // Unified naming: OxideTerm_{version}_{commit}_{os}_{arch}.{ext}
             // Arch: x64 (Intel/AMD 64-bit), arm64 (ARM 64-bit)
@@ -318,14 +326,34 @@ jobs:
             ];
 
             const renames = [];
+            const unmatched = [];
+            const existingNames = new Set(release.assets.map(asset => asset.name));
             for (const asset of release.assets) {
               if (asset.name === 'latest.json') continue;
+              let matched = false;
               for (const rule of renameRules) {
                 if (rule.match.test(asset.name) && asset.name !== rule.newName) {
-                  renames.push({ id: asset.id, oldName: asset.name, newName: rule.newName });
+                  if (existingNames.has(rule.newName)) {
+                    console.log(`Skipping rename for ${asset.name}; ${rule.newName} already exists.`);
+                  } else {
+                    renames.push({ id: asset.id, oldName: asset.name, newName: rule.newName });
+                    existingNames.add(rule.newName);
+                  }
+                  matched = true;
+                  break;
+                }
+                if (rule.match.test(asset.name)) {
+                  matched = true;
                   break;
                 }
               }
+              if (!matched) {
+                unmatched.push(asset.name);
+              }
+            }
+
+            if (unmatched.length > 0) {
+              console.log(`Assets not matched by rename rules: ${unmatched.join(', ')}`);
             }
 
             for (const { id, oldName, newName } of renames) {
@@ -389,7 +417,7 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const tag = context.ref.replace('refs/tags/', '');
+            const tag = process.env.RELEASE_TAG;
 
             // Get the latest.json from the current release
             const { data: release } = await github.rest.repos.getReleaseByTag({
