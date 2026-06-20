@@ -328,8 +328,13 @@ jobs:
             const renames = [];
             const unmatched = [];
             const existingNames = new Set(release.assets.map(asset => asset.name));
+            const alreadyNormalized = /^OxideTerm_\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?_[0-9a-f]{7}_(macos|windows)_(arm64|x64)(?:-setup)?\.(dmg|exe)$/i;
             for (const asset of release.assets) {
               if (asset.name === 'latest.json') continue;
+              if (alreadyNormalized.test(asset.name)) {
+                console.log(`Keeping existing renamed asset: ${asset.name}`);
+                continue;
+              }
               let matched = false;
               for (const rule of renameRules) {
                 if (rule.match.test(asset.name) && asset.name !== rule.newName) {
