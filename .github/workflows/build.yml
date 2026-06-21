@@ -371,7 +371,20 @@ jobs:
               }
             }
 
+            const assetsByName = new Map(release.assets.map(asset => [asset.name, asset]));
             for (const { id, oldName, newName } of renames) {
+              const existingTarget = assetsByName.get(newName);
+              if (existingTarget && existingTarget.id !== id) {
+                // Keep the source asset bytes because latest.json signatures were generated for them.
+                console.log(`Deleting existing target before rename: ${newName}`);
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: existingTarget.id,
+                });
+                assetsByName.delete(newName);
+              }
+
               console.log(`Renaming: ${oldName} → ${newName}`);
               await github.rest.repos.updateReleaseAsset({
                 owner: context.repo.owner,
@@ -379,6 +392,8 @@ jobs:
                 asset_id: id,
                 name: newName,
               });
+              assetsByName.delete(oldName);
+              assetsByName.set(newName, { id, name: newName });
             }
 
             // Update latest.json URLs to match renamed assets
