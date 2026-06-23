@@ -19,12 +19,13 @@ const NO_SELECTION = -1;
 export function useTerminalCompletionOverlay(options: {
   enabled: boolean;
   isActive: boolean;
+  isShellMode: boolean;
   paneId: string;
   getInputState: () => TerminalAutosuggestInputState;
   acceptCompletion: (text: string) => void;
   sendInput: (suffix: string) => void;
 }) {
-  const { enabled, isActive, paneId, getInputState, acceptCompletion, sendInput } = options;
+  const { enabled, isActive, isShellMode, paneId, getInputState, acceptCompletion, sendInput } = options;
   const [candidates, setCandidates] = useState<TerminalAutosuggestCandidate[]>([]);
   const [highlightedIndex, setHighlightedIndexState] = useState<number>(NO_SELECTION);
   const lastInputRef = useRef<TerminalAutosuggestInputState>(getInputState());
@@ -41,7 +42,7 @@ export function useTerminalCompletionOverlay(options: {
     lastInputRef.current = input;
     const cwd = getCwd(paneId);
 
-    if (!enabled || !isActive || !input.isCursorAtEnd) {
+    if (!enabled || !isActive || !isShellMode || !input.isCursorAtEnd) {
       setCandidates([]);
       candidatesRef.current = [];
       setHighlightedIndexState(NO_SELECTION);
@@ -85,17 +86,17 @@ export function useTerminalCompletionOverlay(options: {
         return Math.min(current, nextCandidates.length - 1);
       });
     }
-  }, [enabled, getInputState, isActive, paneId]);
+  }, [enabled, getInputState, isActive, isShellMode, paneId]);
 
   useEffect(() => {
     refresh();
-    if (!enabled || !isActive) return;
+    if (!enabled || !isActive || !isShellMode) return;
 
     const interval = window.setInterval(refresh, 80);
     return () => {
       window.clearInterval(interval);
     };
-  }, [enabled, isActive, refresh]);
+  }, [enabled, isActive, isShellMode, refresh]);
 
   const close = useCallback(() => {
     setCandidates([]);

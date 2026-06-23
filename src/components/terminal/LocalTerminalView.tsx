@@ -149,6 +149,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const selectionGestureRef = useRef<SelectionGestureController | null>(null);
   const smartCopyDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const completionOverlayRef = useRef<ReturnType<typeof useTerminalCompletionOverlay> | null>(null);
+  const alternateBufferRef = useRef(false);
   const highlightEngineRef = useRef<HighlightEngine | null>(null);
   const runtimeDisabledHighlightRulesRef = useRef<Map<string, string>>(new Map());
   const runtimeDisabledHighlightRulesSourceRef = useRef<string | null>(null);
@@ -341,6 +342,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const completionOverlay = useTerminalCompletionOverlay({
     enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
     isActive,
+    isShellMode: !alternateBufferRef.current,
     paneId: effectivePaneId,
     getInputState: autosuggestRecorder.getInputState,
     acceptCompletion: autosuggestRecorder.acceptCompletion,
@@ -869,7 +871,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
 
     // Detect mouse tracking mode changes (tmux, vim, etc.)
     let prevMouseTracking = false;
-    let prevAlternateBuffer = term.buffer.active.type === 'alternate';
+    alternateBufferRef.current = term.buffer.active.type === 'alternate';
     term.onWriteParsed(() => {
       const active = term.modes.mouseTrackingMode !== 'none';
       if (active !== prevMouseTracking) {
@@ -881,10 +883,13 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
       }
       const alternateBuffer = term.buffer.active.type === 'alternate';
       // Alternate-screen apps own the visible surface, so stale mark overlays must leave.
-      if (alternateBuffer && !prevAlternateBuffer) {
+      if (alternateBuffer && !alternateBufferRef.current) {
         clearTerminalCommandMarkSelection(effectivePaneId);
+        // Reset input tracker and disable completion when entering vim/TUI mode.
+        autosuggestRecorderRef.current.resetInput();
+        completionOverlayRef.current?.close();
       }
-      prevAlternateBuffer = alternateBuffer;
+      alternateBufferRef.current = alternateBuffer;
       const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState());
       if (promptInput) {
         const synced = autosuggestRecorderRef.current.syncPromptInput(promptInput);
