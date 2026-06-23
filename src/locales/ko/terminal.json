@@ -212,6 +212,8 @@
       "command": "Command",
       "command_mode": "Command mode",
       "command_placeholder": "Run commands",
+      "collapse_input": "입력창 접기",
+      "expand_input": "입력창 펼치기",
       "run_command": "Run command",
       "local_shell": "Local shell",
       "remote_shell": "Remote shell",
@@ -296,7 +298,9 @@
       "icon_server": "Server",
       "icon_folder": "Folder",
       "icon_docker": "Docker",
-      "icon_zap": "Custom"
+      "icon_zap": "Custom",
+      "pin": "계속 열어 두기",
+      "unpin": "실행 후 닫기"
     },
     "privilege_helper": {
       "fill": "비밀번호 입력",

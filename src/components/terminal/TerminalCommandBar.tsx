@@ -5,12 +5,14 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import {
+  ChevronDown,
   ChevronRight,
   FilePlay,
   Folder,
   GitBranch,
   KeyRound,
   Pencil,
+  Pin,
   Radio,
   Search,
   Server,
@@ -60,6 +62,33 @@ import type { SavedPrivilegeCredential } from '@/types';
 
 const LOCAL_SHELL_PRIVILEGE_CONNECTION_ID = 'local-shell:default';
 
+type QuickCommandRunCompletion = {
+  quickCommandsOpen: boolean;
+  shouldFocusInput: boolean;
+};
+
+export function resolveQuickCommandRunCompletion(
+  keepOpen: boolean,
+  didSubmit: boolean,
+  shouldHandOffFocus: boolean,
+): QuickCommandRunCompletion {
+  if (keepOpen) {
+    // Pin mode turns Quick Commands into a repeatable launcher. Keep the
+    // palette visible even if a confirmation modal or focus handoff ran first.
+    return { quickCommandsOpen: true, shouldFocusInput: false };
+  }
+  return {
+    quickCommandsOpen: false,
+    shouldFocusInput: !didSubmit || !shouldHandOffFocus,
+  };
+}
+
+export function resolveQuickCommandInsertCompletion(keepOpen: boolean): QuickCommandRunCompletion {
+  // Insert uses the command bar as the next keyboard owner. Pin only controls
+  // whether the palette remains visible after the row body is clicked.
+  return { quickCommandsOpen: keepOpen, shouldFocusInput: true };
+}
+
 type TerminalCommandBarProps = {
   paneId: string;
   sessionId: string;
@@ -105,6 +134,7 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
   const [highlightedSuggestion, setHighlightedSuggestion] = useState(-1);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [quickCommandsOpen, setQuickCommandsOpen] = useState(false);
+  const [inputCollapsed, setInputCollapsed] = useState(false);
   const [privilegeCredentials, setPrivilegeCredentials] = useState<SavedPrivilegeCredential[]>([]);
   const [privilegeBufferSnapshot, setPrivilegeBufferSnapshot] = useState('');
   const [privilegeFillLoading, setPrivilegeFillLoading] = useState(false);
@@ -120,6 +150,7 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
     ?? (terminalType === 'local_terminal' ? LOCAL_SHELL_PRIVILEGE_CONNECTION_ID : null);
 
   const placeholder = t('terminal.command_bar.command_placeholder');
+  const inputToggleTitle = t(inputCollapsed ? 'terminal.command_bar.expand_input' : 'terminal.command_bar.collapse_input');
   const detectedPrivilegePrompt = useMemo(
     () => detectPrivilegePrompt(privilegeBufferSnapshot),
     [privilegeBufferSnapshot],
@@ -237,7 +268,7 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
     focusTerminal();
   }, [focusTerminal, openConnectionEditor, privilegeScopeId, t]);
 
-  const runCommand = useCallback(async (command: string) => {
+  const runCommand = useCallback(async (command: string, keepOpen = false) => {
     const risk = classifyCommandRisk(command);
     if (quickCommandSettings.quickCommandsConfirmBeforeRun || risk === 'high' || risk === 'medium') {
       const confirmed = await confirm({
@@ -258,8 +289,13 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
         variant: 'success',
       });
     }
-    setQuickCommandsOpen(false);
-    if (!didSubmit || !shouldHandOffFocusToTerminal(command, quickCommandSettings.focusHandoffCommands)) {
+    const completion = resolveQuickCommandRunCompletion(
+      keepOpen,
+      didSubmit,
+      shouldHandOffFocusToTerminal(command, quickCommandSettings.focusHandoffCommands),
+    );
+    setQuickCommandsOpen(completion.quickCommandsOpen);
+    if (completion.shouldFocusInput) {
       inputRef.current?.focus();
     }
   }, [confirm, quickCommandSettings.focusHandoffCommands, quickCommandSettings.quickCommandsConfirmBeforeRun, quickCommandSettings.quickCommandsShowToast, submitCommand, t]);
@@ -357,6 +393,21 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
     }
   }, [focusTerminal, highlightedSuggestion, quickCommandsOpen, state, submitCommand, suggestionsOpen]);
 
+  const toggleInputCollapsed = useCallback(() => {
+    setInputCollapsed((collapsed) => {
+      const nextCollapsed = !collapsed;
+      if (nextCollapsed) {
+        // Collapse hides the rich input surface but keeps the current draft intact.
+        inputRef.current?.blur();
+        state.setFocused(false);
+        setSuggestionsOpen(false);
+        setQuickCommandsOpen(false);
+        setHighlightedSuggestion(-1);
+      }
+      return nextCollapsed;
+    });
+  }, [state]);
+
   useLayoutEffect(() => {
     if (!rootRef.current || !onLayoutChange) return;
     let frame: number | null = null;
@@ -411,7 +462,7 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
 
   return (
     <div ref={rootRef} className="relative z-20 flex-shrink-0 border-t border-theme-border/70 bg-theme-bg/95 px-3 py-1 shadow-[0_-6px_18px_rgba(0,0,0,0.16)]">
-      {state.focused && suggestionsOpen && state.suggestions.length > 0 && (
+      {!inputCollapsed && state.focused && suggestionsOpen && state.suggestions.length > 0 && (
         <TerminalCommandSuggestions
           suggestions={state.suggestions}
           highlightedIndex={highlightedSuggestion}
@@ -423,17 +474,20 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
           }}
         />
       )}
-      {quickCommandSettings.quickCommandsEnabled && quickCommandsOpen && (
+      {quickCommandSettings.quickCommandsEnabled && !inputCollapsed && quickCommandsOpen && (
         <QuickCommandsPopover
           targetLabel={state.targetLabel}
           cwdHost={null}
-          onInsert={(command) => {
+          onInsert={(command, keepOpen) => {
             state.setValue(command);
             state.setCursorIndex(command.length);
-            setQuickCommandsOpen(false);
-            inputRef.current?.focus();
+            const completion = resolveQuickCommandInsertCompletion(keepOpen);
+            setQuickCommandsOpen(completion.quickCommandsOpen);
+            if (completion.shouldFocusInput) {
+              inputRef.current?.focus();
+            }
           }}
-          onRun={(command) => void runCommand(command)}
+          onRun={(command, keepOpen) => void runCommand(command, keepOpen)}
           onClose={() => {
             setQuickCommandsOpen(false);
             inputRef.current?.focus();
@@ -441,19 +495,33 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
         />
       )}
       <div className="flex min-h-6 min-w-0 items-center justify-between gap-2">
-        <TerminalCommandBarChips
-          targetLabel={state.targetLabel}
-          cwd={state.cwd}
-          broadcastEnabled={state.chips.broadcastEnabled}
-          broadcastTargetCount={state.chips.broadcastTargetCount}
-          isRecording={state.chips.isRecording}
-          gitBranch={state.chips.gitBranch}
-          detectedPrivilegePrompt={!!detectedPrivilegePrompt}
-          matchedPrivilegeCredentials={matchedPrivilegeCredentials.map((match) => match.credential)}
-          privilegeFillLoading={privilegeFillLoading}
-          onPrivilegeFill={handlePrivilegeFill}
-          onPrivilegeManage={handlePrivilegeManage}
-        />
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleInputCollapsed}
+            className={cn(
+              'inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+              'text-theme-text-muted hover:bg-theme-accent/10 hover:text-theme-accent',
+            )}
+            title={inputToggleTitle}
+            aria-label={inputToggleTitle}
+          >
+            {inputCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+          <TerminalCommandBarChips
+            targetLabel={state.targetLabel}
+            cwd={state.cwd}
+            broadcastEnabled={state.chips.broadcastEnabled}
+            broadcastTargetCount={state.chips.broadcastTargetCount}
+            isRecording={state.chips.isRecording}
+            gitBranch={state.chips.gitBranch}
+            detectedPrivilegePrompt={!!detectedPrivilegePrompt}
+            matchedPrivilegeCredentials={matchedPrivilegeCredentials.map((match) => match.credential)}
+            privilegeFillLoading={privilegeFillLoading}
+            onPrivilegeFill={handlePrivilegeFill}
+            onPrivilegeManage={handlePrivilegeManage}
+          />
+        </div>
         <div className="flex flex-shrink-0 items-center gap-1">
           <TerminalCommandBarActions
             paneId={paneId}
@@ -463,100 +531,102 @@ export const TerminalCommandBar: React.FC<TerminalCommandBarProps> = (props) => 
           />
         </div>
       </div>
-      <div
-        className={cn(
-          'mt-0.5 flex min-w-0 cursor-text items-center gap-2 border-t border-theme-border/45 pt-1',
-          state.focused && 'border-theme-accent/45',
-        )}
-        onMouseDown={(event) => {
-          if (event.target === event.currentTarget) {
-            event.preventDefault();
-            inputRef.current?.focus();
-          }
-        }}
-      >
-        <span className={cn(
-          'flex h-6 w-5 flex-shrink-0 items-center justify-center',
-          'text-theme-text-muted',
-        )}>
-          <ChevronRight className="h-4 w-4" />
-        </span>
-        <textarea
-          autoCapitalize="off"
-          autoCorrect="off"
-          ref={inputRef}
-          value={state.value}
-          onChange={(event) => {
-            state.setValue(event.target.value);
-            state.setCursorIndex(event.target.selectionStart ?? event.target.value.length);
-            setHighlightedSuggestion(-1);
-            setSuggestionsOpen(false);
-          }}
-          onSelect={(event) => {
-            if (!composingRef.current) {
-              state.setCursorIndex(event.currentTarget.selectionStart ?? state.value.length);
+      {!inputCollapsed && (
+        <div
+          className={cn(
+            'mt-0.5 flex min-w-0 cursor-text items-center gap-2 border-t border-theme-border/45 pt-1',
+            state.focused && 'border-theme-accent/45',
+          )}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              event.preventDefault();
+              inputRef.current?.focus();
             }
           }}
-          onKeyUp={(event) => {
-            if (!composingRef.current) {
-              state.setCursorIndex(event.currentTarget.selectionStart ?? state.value.length);
-            }
-          }}
-          onClick={(event) => state.setCursorIndex(event.currentTarget.selectionStart ?? state.value.length)}
-          onFocus={() => state.setFocused(true)}
-          onBlur={() => window.setTimeout(() => {
-            setSuggestionsOpen(false);
-            state.setFocused(false);
-          }, 120)}
-          onCompositionStart={() => {
-            composingRef.current = true;
-            state.setInputComposing(true);
-            setHighlightedSuggestion(-1);
-            setSuggestionsOpen(false);
-          }}
-          onCompositionEnd={(event) => {
-            const nextValue = event.currentTarget.value;
-            state.setValue(nextValue);
-            state.setCursorIndex(event.currentTarget.selectionStart ?? nextValue.length);
-            window.setTimeout(() => {
-              composingRef.current = false;
-              state.setInputComposing(false);
-            }, 0);
-          }}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          rows={Math.min(6, Math.max(1, state.value.split(/\r?\n/).length))}
-          className="max-h-36 min-h-6 min-w-0 flex-1 resize-none bg-transparent py-0.5 text-sm leading-6 text-theme-text outline-none placeholder:text-theme-text-muted"
-          style={terminalFontStyle}
-          spellCheck={false}
-        />
-        {state.focused && state.ghostText && !state.value.includes('\n') && (
-          <span className="pointer-events-none max-w-[24rem] flex-shrink truncate text-sm leading-6 text-theme-text-muted/35" style={terminalFontStyle}>
-            {state.ghostText}
+        >
+          <span className={cn(
+            'flex h-6 w-5 flex-shrink-0 items-center justify-center',
+            'text-theme-text-muted',
+          )}>
+            <ChevronRight className="h-4 w-4" />
           </span>
-        )}
-        {quickCommandSettings.quickCommandsEnabled && (
-          <div className="ml-auto flex flex-shrink-0 items-center">
-            <button
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                setSuggestionsOpen(false);
-                setHighlightedSuggestion(-1);
-                setQuickCommandsOpen((open) => !open);
-                inputRef.current?.focus();
-              }}
-              className={cn(
-                'inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-theme-accent/10',
-                quickCommandsOpen ? 'bg-theme-accent/10 text-theme-accent' : 'text-theme-text-muted hover:text-theme-accent',
-              )}
-              title={t('terminal.quick_commands.open')}
-            >
-              <Zap className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-      </div>
+          <textarea
+            autoCapitalize="off"
+            autoCorrect="off"
+            ref={inputRef}
+            value={state.value}
+            onChange={(event) => {
+              state.setValue(event.target.value);
+              state.setCursorIndex(event.target.selectionStart ?? event.target.value.length);
+              setHighlightedSuggestion(-1);
+              setSuggestionsOpen(false);
+            }}
+            onSelect={(event) => {
+              if (!composingRef.current) {
+                state.setCursorIndex(event.currentTarget.selectionStart ?? state.value.length);
+              }
+            }}
+            onKeyUp={(event) => {
+              if (!composingRef.current) {
+                state.setCursorIndex(event.currentTarget.selectionStart ?? state.value.length);
+              }
+            }}
+            onClick={(event) => state.setCursorIndex(event.currentTarget.selectionStart ?? state.value.length)}
+            onFocus={() => state.setFocused(true)}
+            onBlur={() => window.setTimeout(() => {
+              setSuggestionsOpen(false);
+              state.setFocused(false);
+            }, 120)}
+            onCompositionStart={() => {
+              composingRef.current = true;
+              state.setInputComposing(true);
+              setHighlightedSuggestion(-1);
+              setSuggestionsOpen(false);
+            }}
+            onCompositionEnd={(event) => {
+              const nextValue = event.currentTarget.value;
+              state.setValue(nextValue);
+              state.setCursorIndex(event.currentTarget.selectionStart ?? nextValue.length);
+              window.setTimeout(() => {
+                composingRef.current = false;
+                state.setInputComposing(false);
+              }, 0);
+            }}
+            onKeyDown={handleKeyDown}
+            placeholder={placeholder}
+            rows={Math.min(6, Math.max(1, state.value.split(/\r?\n/).length))}
+            className="max-h-36 min-h-6 min-w-0 flex-1 resize-none bg-transparent py-0.5 text-sm leading-6 text-theme-text outline-none placeholder:text-theme-text-muted"
+            style={terminalFontStyle}
+            spellCheck={false}
+          />
+          {state.focused && state.ghostText && !state.value.includes('\n') && (
+            <span className="pointer-events-none max-w-[24rem] flex-shrink truncate text-sm leading-6 text-theme-text-muted/35" style={terminalFontStyle}>
+              {state.ghostText}
+            </span>
+          )}
+          {quickCommandSettings.quickCommandsEnabled && (
+            <div className="ml-auto flex flex-shrink-0 items-center">
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setSuggestionsOpen(false);
+                  setHighlightedSuggestion(-1);
+                  setQuickCommandsOpen((open) => !open);
+                  inputRef.current?.focus();
+                }}
+                className={cn(
+                  'inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-theme-accent/10',
+                  quickCommandsOpen ? 'bg-theme-accent/10 text-theme-accent' : 'text-theme-text-muted hover:text-theme-accent',
+                )}
+                title={t('terminal.quick_commands.open')}
+              >
+                <Zap className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {ConfirmDialog}
     </div>
   );
@@ -665,8 +735,8 @@ const TerminalCommandBarChips: React.FC<ChipsProps> = ({
 type QuickCommandsPopoverProps = {
   targetLabel: string;
   cwdHost?: string | null;
-  onInsert: (command: string) => void;
-  onRun: (command: string) => void;
+  onInsert: (command: string, keepOpen: boolean) => void;
+  onRun: (command: string, keepOpen: boolean) => void;
   onClose: () => void;
 };
 
@@ -684,6 +754,7 @@ const QuickCommandsPopover: React.FC<QuickCommandsPopoverProps> = ({ targetLabel
   const [editingCategory, setEditingCategory] = useState<QuickCommandCategory | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [categoryEditorOpen, setCategoryEditorOpen] = useState(false);
+  const [keepOpen, setKeepOpen] = useState(false);
 
   const targetFields = useMemo(() => [targetLabel, cwdHost], [cwdHost, targetLabel]);
   const filteredCommands = useMemo(() => {
@@ -737,6 +808,24 @@ const QuickCommandsPopover: React.FC<QuickCommandsPopoverProps> = ({ targetLabel
             {t('terminal.quick_commands.title')}
           </span>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setKeepOpen((current) => !current);
+              }}
+              className={cn(
+                'rounded p-1 hover:bg-theme-bg-hover',
+                keepOpen
+                  ? 'bg-theme-accent/10 text-theme-accent hover:text-theme-accent'
+                  : 'text-theme-text-muted hover:text-theme-text',
+              )}
+              title={t(keepOpen ? 'terminal.quick_commands.unpin' : 'terminal.quick_commands.pin')}
+              aria-label={t(keepOpen ? 'terminal.quick_commands.unpin' : 'terminal.quick_commands.pin')}
+              aria-pressed={keepOpen}
+            >
+              <Pin className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -855,8 +944,8 @@ const QuickCommandsPopover: React.FC<QuickCommandsPopoverProps> = ({ targetLabel
                 <QuickCommandRow
                   key={command.id}
                   command={command}
-                  onInsert={() => onInsert(command.command)}
-                  onRun={() => onRun(command.command)}
+                  onInsert={() => onInsert(command.command, keepOpen)}
+                  onRun={() => onRun(command.command, keepOpen)}
                   onEdit={() => startEdit(command)}
                   onDelete={() => deleteCommand(command.id)}
                 />

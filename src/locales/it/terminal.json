@@ -212,6 +212,8 @@
       "command": "Command",
       "command_mode": "Command mode",
       "command_placeholder": "Run commands",
+      "collapse_input": "Comprimi input",
+      "expand_input": "Espandi input",
       "run_command": "Run command",
       "local_shell": "Local shell",
       "remote_shell": "Remote shell",
@@ -296,7 +298,9 @@
       "icon_server": "Server",
       "icon_folder": "Folder",
       "icon_docker": "Docker",
-      "icon_zap": "Custom"
+      "icon_zap": "Custom",
+      "pin": "Mantieni aperto",
+      "unpin": "Chiudi dopo l'esecuzione"
     },
     "privilege_helper": {
       "fill": "Inserisci password",

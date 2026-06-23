@@ -212,6 +212,8 @@
       "command": "命令",
       "command_mode": "命令模式",
       "command_placeholder": "輸入命令...",
+      "collapse_input": "收合輸入列",
+      "expand_input": "展開輸入列",
       "run_command": "執行命令",
       "local_shell": "本機 Shell",
       "remote_shell": "遠端 Shell",
@@ -296,7 +298,9 @@
       "icon_server": "服务器",
       "icon_folder": "文件夹",
       "icon_docker": "Docker",
-      "icon_zap": "自定义"
+      "icon_zap": "自定义",
+      "pin": "固定面板",
+      "unpin": "執行後關閉"
     },
     "privilege_helper": {
       "fill": "填入密碼",
