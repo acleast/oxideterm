@@ -88,21 +88,24 @@ export function useTerminalCompletionOverlay(options: {
     }
   }, [enabled, getInputState, isActive, isShellMode, paneId]);
 
-  useEffect(() => {
-    refresh();
-    if (!enabled || !isActive || !isShellMode) return;
-
-    const interval = window.setInterval(refresh, 80);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [enabled, isActive, isShellMode, refresh]);
-
   const close = useCallback(() => {
     setCandidates([]);
     candidatesRef.current = [];
     setHighlightedIndexState(NO_SELECTION);
   }, []);
+
+  useEffect(() => {
+    refresh();
+    if (!enabled || !isActive || !isShellMode) {
+      close();
+      return;
+    }
+
+    const interval = window.setInterval(refresh, 80);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [close, enabled, isActive, isShellMode, refresh]);
 
   const moveHighlight = useCallback((delta: number) => {
     setHighlightedIndexState((current) => {
