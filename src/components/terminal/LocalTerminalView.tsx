@@ -59,7 +59,6 @@ import {
 } from '../../lib/terminal/commandMarks';
 import {
   createShellIntegrationController,
-  getShellIntegrationStatus,
   isShellIntegrationDetected,
 } from '../../lib/terminal/shellIntegration';
 import { shouldSuppressTerminalAutosuggestForCommand } from '../../lib/terminal/interactiveCommands';
@@ -363,12 +362,21 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
     commandBarResizeSchedulerRef.current?.scheduleFit();
   }, []);
 
+  const getCompletionPromptInputState = useCallback(() => {
+    const term = terminalRef.current;
+    if (!term) return null;
+    return readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
+      requireStrongPromptMarker: true,
+    });
+  }, [effectivePaneId]);
+
   const completionOverlay = useTerminalCompletionOverlay({
     enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
     isActive,
     isShellMode: !alternateBufferRef.current && !interactiveAutosuggestSuppressed,
     paneId: effectivePaneId,
     getInputState: autosuggestRecorder.getInputState,
+    getPromptInputState: getCompletionPromptInputState,
     acceptCompletion: autosuggestRecorder.acceptCompletion,
     sendInput: (suffix) => {
       if (!isRunningRef.current) return;
@@ -920,14 +928,11 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
       } else if (!alternateBuffer && alternateBufferRef.current) {
         setInteractiveAutosuggestSuppression(false);
       } else if (interactiveAutosuggestSuppressedRef.current) {
-        const shellIntegrationStatus = getShellIntegrationStatus(effectivePaneId);
-        const canResumeFromShellIntegration = shellIntegrationStatus.detected
-          && (shellIntegrationStatus.state === 'prompt' || shellIntegrationStatus.state === 'closed');
         const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
           allowEmptyPrompt: true,
           requireStrongPromptMarker: true,
         });
-        if (canResumeFromShellIntegration || promptInput) {
+        if (promptInput) {
           setInteractiveAutosuggestSuppression(false);
         }
       }

@@ -22,10 +22,20 @@ export function useTerminalCompletionOverlay(options: {
   isShellMode: boolean;
   paneId: string;
   getInputState: () => TerminalAutosuggestInputState;
+  getPromptInputState?: () => TerminalAutosuggestInputState | null;
   acceptCompletion: (text: string) => void;
   sendInput: (suffix: string) => void;
 }) {
-  const { enabled, isActive, isShellMode, paneId, getInputState, acceptCompletion, sendInput } = options;
+  const {
+    enabled,
+    isActive,
+    isShellMode,
+    paneId,
+    getInputState,
+    getPromptInputState,
+    acceptCompletion,
+    sendInput,
+  } = options;
   const [candidates, setCandidates] = useState<TerminalAutosuggestCandidate[]>([]);
   const [highlightedIndex, setHighlightedIndexState] = useState<number>(NO_SELECTION);
   const lastInputRef = useRef<TerminalAutosuggestInputState>(getInputState());
@@ -37,23 +47,28 @@ export function useTerminalCompletionOverlay(options: {
 
   const open = enabled && isActive && candidates.length > 0;
 
+  const resetCandidateState = useCallback(() => {
+    if (candidatesRef.current.length > 0) {
+      candidatesRef.current = [];
+      setCandidates([]);
+    }
+    setHighlightedIndexState(NO_SELECTION);
+  }, []);
+
   const refresh = useCallback(() => {
-    const input = getInputState();
-    lastInputRef.current = input;
+    const trackedInput = getInputState();
+    const input = getPromptInputState ? getPromptInputState() : trackedInput;
+    lastInputRef.current = input ?? trackedInput;
     const cwd = getCwd(paneId);
 
-    if (!enabled || !isActive || !isShellMode || !input.isCursorAtEnd) {
-      setCandidates([]);
-      candidatesRef.current = [];
-      setHighlightedIndexState(NO_SELECTION);
+    if (!enabled || !isActive || !isShellMode || !input || !input.isCursorAtEnd) {
+      resetCandidateState();
       return;
     }
 
     const query = input.value.trimStart();
     if (!query) {
-      setCandidates([]);
-      candidatesRef.current = [];
-      setHighlightedIndexState(NO_SELECTION);
+      resetCandidateState();
       return;
     }
 
@@ -73,9 +88,9 @@ export function useTerminalCompletionOverlay(options: {
       prevCommands.length !== nextCandidates.length ||
       nextCandidates.some((candidate, index) => candidate.command !== prevCommands[index]?.command);
 
-    setCandidates(nextCandidates);
-    candidatesRef.current = nextCandidates;
     if (changed) {
+      setCandidates(nextCandidates);
+      candidatesRef.current = nextCandidates;
       setHighlightedIndexState(NO_SELECTION);
     } else {
       // Same list: keep the current selection, clamping if it now falls out of
@@ -86,13 +101,11 @@ export function useTerminalCompletionOverlay(options: {
         return Math.min(current, nextCandidates.length - 1);
       });
     }
-  }, [enabled, getInputState, isActive, isShellMode, paneId]);
+  }, [enabled, getInputState, getPromptInputState, isActive, isShellMode, paneId, resetCandidateState]);
 
   const close = useCallback(() => {
-    setCandidates([]);
-    candidatesRef.current = [];
-    setHighlightedIndexState(NO_SELECTION);
-  }, []);
+    resetCandidateState();
+  }, [resetCandidateState]);
 
   useEffect(() => {
     refresh();
@@ -128,9 +141,9 @@ export function useTerminalCompletionOverlay(options: {
 
   const accept = useCallback((): boolean => {
     if (highlightedIndex === NO_SELECTION) return false;
-    const input = getInputState();
+    const input = getPromptInputState ? getPromptInputState() : getInputState();
     const candidate = candidates[highlightedIndex];
-    if (!candidate || !input.isCursorAtEnd) return false;
+    if (!candidate || !input || !input.isCursorAtEnd) return false;
 
     const query = input.value.trimStart();
     if (!query || !candidate.command.startsWith(query)) return false;
@@ -142,7 +155,7 @@ export function useTerminalCompletionOverlay(options: {
     acceptCompletion(suffix);
     close();
     return true;
-  }, [acceptCompletion, candidates, close, getInputState, highlightedIndex, sendInput]);
+  }, [acceptCompletion, candidates, close, getInputState, getPromptInputState, highlightedIndex, sendInput]);
 
   return useMemo(() => ({
     accept,
