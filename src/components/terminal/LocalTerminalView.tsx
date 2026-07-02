@@ -106,6 +106,7 @@ import {
 } from '../../lib/terminalEncoding';
 import { createTerminalResizeScheduler, type TerminalResizeScheduler } from '../../lib/terminal/resizeScheduler';
 import { createTerminalImageAddon } from '../../lib/terminal/imageAddon';
+import { SerialConsoleIngress } from '../../lib/terminal/serialConsoleIngress';
 
 interface LocalTerminalViewProps {
   sessionId: string;
@@ -139,6 +140,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const serialConsoleIngressRef = useRef(new SerialConsoleIngress());
   const commandMarkPointerRef = useRef<{ x: number; y: number; selection: string } | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const commandBarResizeSchedulerRef = useRef<TerminalResizeScheduler | null>(null);
@@ -272,6 +274,10 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
   const { writeTerminal, resizeTerminal, getTerminal, updateTerminalState } = useLocalTerminalStore();
   const terminalInfo = getTerminal(sessionId);
   const isSerialTerminal = terminalInfo?.transport?.type === 'serial';
+
+  useEffect(() => {
+    serialConsoleIngressRef.current.reset();
+  }, [isSerialTerminal, sessionId]);
 
   const writeEncodedTerminalInput = useCallback((input: string) => {
     const write = (bytes: Uint8Array) => {
@@ -1352,7 +1358,10 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
         : new Uint8Array(event.payload.data ?? []);
       
       maybeSuggestTerminalEncoding(data);
-      const displayData = terminalOutputDecoderRef.current.transform(data).bytes;
+      const decodedOutput = terminalOutputDecoderRef.current.transform(data).bytes;
+      const displayData = isSerialTerminal
+        ? serialConsoleIngressRef.current.filter(decodedOutput)
+        : decodedOutput;
       if (recorderRef.current) {
         // Feed recording (terminal output)
         feedOutput(displayData);

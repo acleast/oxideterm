@@ -113,10 +113,56 @@ vi.mock('@/components/sessionManager/ManagerToolbar', () => ({
   ManagerToolbar: () => <div>toolbar</div>,
 }));
 
+vi.mock('@/components/sessionManager/SessionManagerViews', () => ({
+  SessionManagerViews: ({
+    connections,
+    serialProfiles,
+    onConnect,
+    onEdit,
+    onDuplicate,
+    onDelete,
+    onTestConnection,
+    onOpenSerialProfile,
+    onDeleteSerialProfile,
+    onRequestCreateGroup,
+  }: {
+    connections: Array<{ id: string; name: string }>;
+    serialProfiles: SerialProfile[];
+    onConnect: (id: string) => void;
+    onEdit: (id: string) => void;
+    onDuplicate: (conn: { id: string; name: string }) => void;
+    onDelete: (conn: { id: string; name: string }) => void;
+    onTestConnection?: (conn: { id: string; name: string }) => void;
+    onOpenSerialProfile: (profile: SerialProfile) => void;
+    onDeleteSerialProfile: (profile: SerialProfile) => void;
+    onRequestCreateGroup: () => void;
+  }) => (
+    <>
+      {connections[0] ? (
+        <>
+          <button onClick={() => onConnect(connections[0].id)}>connect-row</button>
+          <button onClick={() => onEdit(connections[0].id)}>edit-row</button>
+          <button onClick={() => onTestConnection?.(connections[0])}>test-row</button>
+          <button onClick={() => onDuplicate(connections[0])}>duplicate-row</button>
+          <button onClick={() => onDelete(connections[0])}>delete-row</button>
+        </>
+      ) : null}
+      {serialProfiles[0] ? (
+        <>
+          <button onClick={() => onOpenSerialProfile(serialProfiles[0])}>sessionManager.serial_profiles.open</button>
+          <button onClick={() => onDeleteSerialProfile(serialProfiles[0])}>sessionManager.serial_profiles.delete</button>
+        </>
+      ) : null}
+      <button onClick={onRequestCreateGroup}>new-group</button>
+    </>
+  ),
+}));
+
 vi.mock('@/components/sessionManager/ConnectionTable', () => ({
-  ConnectionTable: ({ onConnect, onDuplicate, onDelete, onTestConnection, connections }: { onConnect: (id: string) => void; onDuplicate?: (conn: { id: string; name: string }) => void; onDelete: (conn: { id: string; name: string }) => void; onTestConnection?: (conn: { id: string; name: string }) => void; connections: Array<{ id: string; name: string }> }) => (
+  ConnectionTable: ({ onConnect, onEdit, onDuplicate, onDelete, onTestConnection, connections }: { onConnect: (id: string) => void; onEdit?: (id: string) => void; onDuplicate?: (conn: { id: string; name: string }) => void; onDelete: (conn: { id: string; name: string }) => void; onTestConnection?: (conn: { id: string; name: string }) => void; connections: Array<{ id: string; name: string }> }) => (
     <>
       <button onClick={() => onConnect('conn-1')}>connect-row</button>
+      <button onClick={() => onEdit?.('conn-1')}>edit-row</button>
       <button onClick={() => onTestConnection?.(connections[0])}>test-row</button>
       <button onClick={() => onDuplicate?.(connections[0])}>duplicate-row</button>
       <button onClick={() => onDelete(connections[0])}>delete-row</button>
@@ -170,9 +216,10 @@ vi.mock('@/components/modals/HostKeyConfirmDialog', () => ({
 }));
 
 vi.mock('@/components/modals/EditConnectionPropertiesModal', () => ({
-  EditConnectionPropertiesModal: ({ open, connection, duplicateDraft }: { open: boolean; connection: { id: string; name?: string } | null; duplicateDraft?: { connection: { name: string } } | null }) => (
+  EditConnectionPropertiesModal: ({ open, connection, duplicateDraft, onSaved }: { open: boolean; connection: { id: string; name?: string } | null; duplicateDraft?: { connection: { name: string } } | null; onSaved?: () => Promise<void> | void }) => (
     open ? <div data-testid="properties-modal" data-mode={duplicateDraft ? 'duplicate' : 'edit'}>
       {connection?.id}:{duplicateDraft?.connection.name ?? connection?.name}
+      <button onClick={() => void onSaved?.()}>save-properties</button>
     </div> : null
   ),
 }));
@@ -692,6 +739,26 @@ describe('SessionManagerPanel', () => {
       expect(api.deleteConnection).toHaveBeenCalledWith('conn-1');
       expect(sessionManagerState.refresh).toHaveBeenCalled();
       expect(dispatchEventSpy).toHaveBeenCalled();
+    });
+  });
+
+  it('broadcasts saved connection changes after editing connection properties', async () => {
+    const dispatchEventSpy = vi.spyOn(window, 'dispatchEvent');
+
+    render(<SessionManagerPanel />);
+    fireEvent.click(screen.getByText('edit-row'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('properties-modal')).toHaveAttribute('data-mode', 'edit');
+    });
+
+    fireEvent.click(screen.getByText('save-properties'));
+
+    await waitFor(() => {
+      expect(sessionManagerState.refresh).toHaveBeenCalled();
+      expect(dispatchEventSpy.mock.calls.some(([event]) => (
+        event instanceof CustomEvent && event.type === 'saved-connections-changed'
+      ))).toBe(true);
     });
   });
 

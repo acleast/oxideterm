@@ -289,6 +289,11 @@ export const SessionManagerPanel = () => {
     notifySavedConnectionsChanged();
   }, [notifySavedConnectionsChanged, refresh, toast, t]);
 
+  const handleConnectionPropertiesSaved = useCallback(async () => {
+    await refresh();
+    notifySavedConnectionsChanged();
+  }, [notifySavedConnectionsChanged, refresh]);
+
   // Delete action
   const handleDelete = useCallback(async (conn: ConnectionInfo) => {
     const confirmed = await confirm({
@@ -760,7 +765,7 @@ export const SessionManagerPanel = () => {
         }}
         connection={duplicateDraft?.connection ?? (editingConnectionId ? allConnections.find(c => c.id === editingConnectionId) ?? null : null)}
         duplicateDraft={duplicateDraft}
-        onSaved={duplicateDraft ? handleDuplicateSaved : refresh}
+        onSaved={duplicateDraft ? handleDuplicateSaved : handleConnectionPropertiesSaved}
       />
 
       <EditConnectionModal

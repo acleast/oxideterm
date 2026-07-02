@@ -102,8 +102,11 @@ pub fn default_shell() -> ShellInfo {
                 .and_then(|n| n.to_str())
                 .unwrap_or("shell")
                 .to_string();
-            let label = capitalize_first(&id);
-            return ShellInfo::new(id, label, path).with_args(vec!["--login".to_string()]);
+            let label = match id.as_str() {
+                "nu" => "Nushell".to_string(),
+                _ => capitalize_first(&id),
+            };
+            return ShellInfo::new(id.clone(), label, path).with_args(default_args_for_shell(&id));
         }
     }
 
@@ -116,6 +119,7 @@ pub fn default_shell() -> ShellInfo {
 fn default_args_for_shell(shell_id: &str) -> Vec<String> {
     match shell_id {
         "zsh" | "bash" | "fish" | "sh" => vec!["--login".to_string()],
+        "nu" | "nu.exe" => vec![],
         // PowerShell: -NoExit keeps interactive mode, -ExecutionPolicy Bypass allows profile scripts
         "pwsh" | "powershell" => vec![
             "-NoLogo".to_string(),
@@ -161,6 +165,15 @@ pub fn get_shell_args(shell_id: &str, load_profile: bool) -> Vec<String> {
                 vec!["--login".to_string()]
             } else {
                 vec!["--no-config".to_string()]
+            }
+        }
+        "nu" | "nu.exe" => {
+            // Nushell loads its config by default; only pass a flag when the
+            // user explicitly disables shell profile loading.
+            if load_profile {
+                vec![]
+            } else {
+                vec!["--no-config-file".to_string()]
             }
         }
         "sh" | "dash" => {
@@ -237,7 +250,7 @@ fn scan_unix_shells() -> Vec<ShellInfo> {
     }
 
     // 2. Check common shell locations via `which`
-    let common_shells = ["zsh", "bash", "fish", "sh", "dash", "ksh", "tcsh"];
+    let common_shells = ["zsh", "bash", "fish", "nu", "sh", "dash", "ksh", "tcsh"];
     for shell_name in common_shells {
         if let Ok(output) = std::process::Command::new("which").arg(shell_name).output() {
             if output.status.success() {
@@ -284,6 +297,7 @@ fn shell_info_from_path(path: &PathBuf) -> Option<ShellInfo> {
         "zsh" => "Zsh",
         "bash" => "Bash",
         "fish" => "Fish",
+        "nu" => "Nushell",
         "sh" => "Bourne Shell",
         "dash" => "Dash",
         "ksh" => "Korn Shell",
@@ -374,7 +388,41 @@ fn scan_windows_shells() -> Vec<ShellInfo> {
         }
     }
 
-    // 4. Git Bash (if installed)
+    // 4. Nushell (nu.exe, if installed)
+    let nu_paths = [
+        PathBuf::from(&program_files).join(r"nu\bin\nu.exe"),
+        PathBuf::from(&program_files_x86).join(r"nu\bin\nu.exe"),
+    ];
+    for path in nu_paths {
+        if path.exists() {
+            shells.push(ShellInfo::new("nu", "Nushell", path));
+            break;
+        }
+    }
+
+    // Also check PATH for winget, Scoop, Chocolatey, or cargo-installed nu.
+    if !shells.iter().any(|s| s.id == "nu") {
+        if let Ok(output) = std::process::Command::new("where")
+            .arg("nu.exe")
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+        {
+            if output.status.success() {
+                let path_str = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let path = PathBuf::from(&path_str);
+                if path.exists() {
+                    shells.push(ShellInfo::new("nu", "Nushell", path));
+                }
+            }
+        }
+    }
+
+    // 5. Git Bash (if installed)
     // Check standard install locations and a few common alternate drive paths,
     // then fallback to PATH. Users can still override the path from settings.
     let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| r"C:".to_string());
@@ -422,7 +470,7 @@ fn scan_windows_shells() -> Vec<ShellInfo> {
         }
     }
 
-    // 5. WSL2 - Scan for installed distributions
+    // 6. WSL2 - Scan for installed distributions
     scan_wsl_distributions(&mut shells);
 
     shells
@@ -555,5 +603,34 @@ mod tests {
 
         let args_without_profile = get_shell_args("fish", false);
         assert!(args_without_profile.contains(&"--no-config".to_string()));
+    }
+
+    #[test]
+    fn test_get_shell_args_nushell() {
+        let args_with_profile = get_shell_args("nu", true);
+        assert!(args_with_profile.is_empty());
+
+        let args_without_profile = get_shell_args("nu", false);
+        assert_eq!(args_without_profile, vec!["--no-config-file".to_string()]);
+    }
+
+    #[test]
+    fn test_get_shell_args_nushell_windows_executable() {
+        let args_with_profile = get_shell_args("nu.exe", true);
+        assert!(args_with_profile.is_empty());
+
+        let args_without_profile = get_shell_args("nu.exe", false);
+        assert_eq!(args_without_profile, vec!["--no-config-file".to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_shell_info_from_path_recognizes_nushell() {
+        let shell = shell_info_from_path(&PathBuf::from("/opt/homebrew/bin/nu"))
+            .expect("nu should be treated as a known shell");
+
+        assert_eq!(shell.id, "nu");
+        assert_eq!(shell.label, "Nushell");
+        assert!(shell.args.is_empty());
     }
 }
