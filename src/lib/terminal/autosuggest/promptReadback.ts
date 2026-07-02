@@ -11,11 +11,29 @@ import type { TerminalAutosuggestInputState } from './types';
 const PROMPT_COMMAND_PREFIX = /^[\s❯➜λ>$#%❮›»]+/u;
 const PROMPT_MARKERS = ['$', '#', '%', '>', '❯', '➜', 'λ', '❮', '›', '»'];
 const STRONG_PROMPT_MARKERS = ['$', '#', '%', '❯', '➜', 'λ', '❮', '›', '»'];
+const SHELL_PROMPT_MARKERS = ['$', '#', '%'];
 
 type PromptReadbackOptions = {
   allowEmptyPrompt?: boolean;
   requireStrongPromptMarker?: boolean;
+  requireShellPromptMarker?: boolean;
 };
+
+function hasRequiredPromptMarker(text: string, options: PromptReadbackOptions): boolean {
+  if (
+    options.requireStrongPromptMarker
+    && !STRONG_PROMPT_MARKERS.some((marker) => text.includes(marker))
+  ) {
+    return false;
+  }
+  if (
+    options.requireShellPromptMarker
+    && !SHELL_PROMPT_MARKERS.some((marker) => text.includes(marker))
+  ) {
+    return false;
+  }
+  return true;
+}
 
 function lineText(term: Terminal, row: number): string {
   return term.buffer.active.getLine(row)?.translateToString(true) ?? '';
@@ -70,6 +88,10 @@ function readFromCurrentLine(
   if (trimmedCurrent) {
     const index = textBeforeCursor.lastIndexOf(trimmedCurrent);
     if (index >= 0) {
+      const promptPrefix = textBeforeCursor.slice(0, index);
+      if (!hasRequiredPromptMarker(promptPrefix, options)) {
+        return null;
+      }
       const value = textBeforeCursor.slice(index).trimEnd();
       return {
         value,
@@ -83,10 +105,7 @@ function readFromCurrentLine(
   if (markerIndex < 0 && !PROMPT_COMMAND_PREFIX.test(textBeforeCursor)) {
     return null;
   }
-  if (
-    options.requireStrongPromptMarker
-    && !STRONG_PROMPT_MARKERS.some((marker) => textBeforeCursor.includes(marker))
-  ) {
+  if (!hasRequiredPromptMarker(textBeforeCursor, options)) {
     return null;
   }
 

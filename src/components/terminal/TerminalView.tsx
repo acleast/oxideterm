@@ -1917,6 +1917,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
           allowEmptyPrompt: true,
           requireStrongPromptMarker: true,
+          requireShellPromptMarker: true,
         });
         if (promptInput) {
           setInteractiveAutosuggestSuppression(false);
@@ -2779,6 +2780,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     if (!term) return null;
     return readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
       requireStrongPromptMarker: true,
+      requireShellPromptMarker: true,
     });
   }, [effectivePaneId]);
 

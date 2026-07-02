@@ -89,6 +89,7 @@ describe('terminal autosuggest', () => {
     expect(readTerminalPromptInput(term, 'pane-1', tracker.getState(), {
       allowEmptyPrompt: true,
       requireStrongPromptMarker: true,
+      requireShellPromptMarker: true,
     })).toMatchObject({
       value: '',
       cursorIndex: 0,
@@ -106,6 +107,19 @@ describe('terminal autosuggest', () => {
     expect(readTerminalPromptInput(term, 'pane-1', tracker.getState(), {
       allowEmptyPrompt: true,
       requireStrongPromptMarker: true,
+    })).toBeNull();
+  });
+
+  it('does not treat a codex-style greater-than input line as a shell prompt', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    tracker.applyData('git st');
+    const term = createMockTerminal({
+      line: '> git st',
+      cursorX: '> git st'.length,
+    });
+
+    expect(readTerminalPromptInput(term, 'pane-1', tracker.getState(), {
+      requireShellPromptMarker: true,
     })).toBeNull();
   });
 

@@ -367,6 +367,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
     if (!term) return null;
     return readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
       requireStrongPromptMarker: true,
+      requireShellPromptMarker: true,
     });
   }, [effectivePaneId]);
 
@@ -931,6 +932,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
         const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
           allowEmptyPrompt: true,
           requireStrongPromptMarker: true,
+          requireShellPromptMarker: true,
         });
         if (promptInput) {
           setInteractiveAutosuggestSuppression(false);
