@@ -10,6 +10,12 @@ import type { TerminalAutosuggestInputState } from './types';
 
 const PROMPT_COMMAND_PREFIX = /^[\s❯➜λ>$#%❮›»]+/u;
 const PROMPT_MARKERS = ['$', '#', '%', '>', '❯', '➜', 'λ', '❮', '›', '»'];
+const STRONG_PROMPT_MARKERS = ['$', '#', '%', '❯', '➜', 'λ', '❮', '›', '»'];
+
+type PromptReadbackOptions = {
+  allowEmptyPrompt?: boolean;
+  requireStrongPromptMarker?: boolean;
+};
 
 function lineText(term: Terminal, row: number): string {
   return term.buffer.active.getLine(row)?.translateToString(true) ?? '';
@@ -46,26 +52,41 @@ function readFromShellIntegrationStart(term: Terminal, paneId: string): Terminal
   };
 }
 
-function readFromCurrentLine(term: Terminal, currentValue: string): TerminalAutosuggestInputState | null {
+function readFromCurrentLine(
+  term: Terminal,
+  currentValue: string,
+  options: PromptReadbackOptions = {},
+): TerminalAutosuggestInputState | null {
   const cursorRow = absoluteCursorRow(term);
   const textBeforeCursor = lineText(term, cursorRow).slice(0, term.buffer.active.cursorX);
   const trimmedCurrent = currentValue.trimStart();
-  if (!trimmedCurrent || !textBeforeCursor.trim()) {
+  if (!textBeforeCursor.trim()) {
+    return null;
+  }
+  if (!trimmedCurrent && !options.allowEmptyPrompt) {
     return null;
   }
 
-  const index = textBeforeCursor.lastIndexOf(trimmedCurrent);
-  if (index >= 0) {
-    const value = textBeforeCursor.slice(index).trimEnd();
-    return {
-      value,
-      cursorIndex: value.length,
-      isCursorAtEnd: true,
-    };
+  if (trimmedCurrent) {
+    const index = textBeforeCursor.lastIndexOf(trimmedCurrent);
+    if (index >= 0) {
+      const value = textBeforeCursor.slice(index).trimEnd();
+      return {
+        value,
+        cursorIndex: value.length,
+        isCursorAtEnd: true,
+      };
+    }
   }
 
   const markerIndex = Math.max(...PROMPT_MARKERS.map((marker) => textBeforeCursor.lastIndexOf(marker)));
   if (markerIndex < 0 && !PROMPT_COMMAND_PREFIX.test(textBeforeCursor)) {
+    return null;
+  }
+  if (
+    options.requireStrongPromptMarker
+    && !STRONG_PROMPT_MARKERS.some((marker) => textBeforeCursor.includes(marker))
+  ) {
     return null;
   }
 
@@ -73,6 +94,9 @@ function readFromCurrentLine(term: Terminal, currentValue: string): TerminalAuto
     ? textBeforeCursor.slice(markerIndex + 1)
     : textBeforeCursor.replace(PROMPT_COMMAND_PREFIX, '');
   const value = rawValue.trimStart().trimEnd();
+  if (!value && !options.allowEmptyPrompt) {
+    return null;
+  }
   return {
     value,
     cursorIndex: value.length,
@@ -84,6 +108,7 @@ export function readTerminalPromptInput(
   term: Terminal,
   paneId: string,
   currentState: TerminalAutosuggestInputState,
+  options: PromptReadbackOptions = {},
 ): TerminalAutosuggestInputState | null {
   if (term.buffer.active.type === 'alternate' || term.modes.mouseTrackingMode !== 'none') {
     return null;
@@ -98,5 +123,5 @@ export function readTerminalPromptInput(
     return null;
   }
 
-  return readFromShellIntegrationStart(term, paneId) ?? readFromCurrentLine(term, currentState.value);
+  return readFromShellIntegrationStart(term, paneId) ?? readFromCurrentLine(term, currentState.value, options);
 }

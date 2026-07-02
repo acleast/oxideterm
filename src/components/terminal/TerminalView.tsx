@@ -51,8 +51,10 @@ import {
 } from '../../lib/terminal/commandMarks';
 import {
   createShellIntegrationController,
+  getShellIntegrationStatus,
   isShellIntegrationDetected,
 } from '../../lib/terminal/shellIntegration';
+import { shouldSuppressTerminalAutosuggestForCommand } from '../../lib/terminal/interactiveCommands';
 import { installPreserveScrollbackEd3Handler } from '../../lib/terminal/preserveScrollback';
 import { onMapleRegularLoaded, ensureCJKFallback, prepareTerminalFontForOpen } from '../../lib/fontLoader';
 import { runInputPipeline, runOutputPipeline } from '../../lib/plugin/pluginTerminalHooks';
@@ -209,6 +211,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const smartCopyDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const completionOverlayRef = useRef<ReturnType<typeof useTerminalCompletionOverlay> | null>(null);
   const alternateBufferRef = useRef(false);
+  const interactiveAutosuggestSuppressedRef = useRef(false);
   const trzszControllerRef = useRef<TrzszController | null>(null);
   const highlightEngineRef = useRef<HighlightEngine | null>(null);
   const runtimeDisabledHighlightRulesRef = useRef<Map<string, string>>(new Map());
@@ -240,6 +243,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   
   // Mouse tracking mode indicator (tmux/vim mouse capture)
   const [mouseMode, setMouseMode] = useState(false);
+  const [interactiveAutosuggestSuppressed, setInteractiveAutosuggestSuppressed] = useState(false);
 
   // Paste protection state
   const [pendingPaste, setPendingPaste] = useState<string | null>(null);
@@ -849,12 +853,31 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const autosuggestRecorderRef = useRef(autosuggestRecorder);
   autosuggestRecorderRef.current = autosuggestRecorder;
 
+  const setInteractiveAutosuggestSuppression = useCallback((suppressed: boolean) => {
+    if (interactiveAutosuggestSuppressedRef.current === suppressed) return;
+    interactiveAutosuggestSuppressedRef.current = suppressed;
+    setInteractiveAutosuggestSuppressed(suppressed);
+    autosuggestRecorderRef.current.resetInput();
+    completionOverlayRef.current?.close();
+  }, []);
+
+  const maybeSuppressAutosuggestForCommand = useCallback((command: string) => {
+    if (!shouldSuppressTerminalAutosuggestForCommand(command)) return false;
+    setInteractiveAutosuggestSuppression(true);
+    return true;
+  }, [setInteractiveAutosuggestSuppression]);
+
   const sendCommandBarInput = useCallback((input: string) => {
     if (inputLockedRef.current) return;
     adaptiveRenderer.notifyUserInput();
     const processed = runInputPipeline(input, sessionId, nodeId);
     if (processed === null) return;
-    autosuggestRecorderRef.current.observeInput(processed);
+    if (!interactiveAutosuggestSuppressedRef.current) {
+      const observedInput = autosuggestRecorderRef.current.observeInput(processed);
+      if (observedInput.completedCommand) {
+        maybeSuppressAutosuggestForCommand(observedInput.completedCommand);
+      }
+    }
     observeCliAgentTerminalInput({
       data: processed,
       targetId: nodeId ? `ssh-node:${nodeId}` : undefined,
@@ -868,7 +891,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     } else if (!controllerRuntimePendingRef.current) {
       sendEncodedTerminalInput(processed);
     }
-  }, [adaptiveRenderer, feedInput, nodeId, sendEncodedTerminalInput, sessionId]);
+  }, [adaptiveRenderer, feedInput, maybeSuppressAutosuggestForCommand, nodeId, sendEncodedTerminalInput, sessionId]);
 
   const sendPrivilegeInput = useCallback((input: string): boolean => {
     if (inputLockedRef.current || controllerRuntimePendingRef.current || !transportRef.current) {
@@ -1853,6 +1876,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       getCwd: () => getCwd(effectivePaneId),
       onCommandSubmitted: (command, cwd) => {
         autosuggestRecorderRef.current.recordSubmittedCommand(command, cwd);
+        maybeSuppressAutosuggestForCommand(command);
       },
     });
     const osc133Disposable = term.parser.registerOscHandler(133, shellIntegrationController.handleOsc133);
@@ -1887,8 +1911,20 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       if (alternateBuffer && !alternateBufferRef.current) {
         clearTerminalCommandMarkSelection(effectivePaneId);
         // Reset input tracker and disable completion when entering vim/TUI mode.
-        autosuggestRecorderRef.current.resetInput();
-        completionOverlayRef.current?.close();
+        setInteractiveAutosuggestSuppression(true);
+      } else if (!alternateBuffer && alternateBufferRef.current) {
+        setInteractiveAutosuggestSuppression(false);
+      } else if (interactiveAutosuggestSuppressedRef.current) {
+        const shellIntegrationStatus = getShellIntegrationStatus(effectivePaneId);
+        const canResumeFromShellIntegration = shellIntegrationStatus.detected
+          && (shellIntegrationStatus.state === 'prompt' || shellIntegrationStatus.state === 'closed');
+        const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState(), {
+          allowEmptyPrompt: true,
+          requireStrongPromptMarker: true,
+        });
+        if (canResumeFromShellIntegration || promptInput) {
+          setInteractiveAutosuggestSuppression(false);
+        }
       }
       alternateBufferRef.current = alternateBuffer;
       const promptInput = readTerminalPromptInput(term, effectivePaneId, autosuggestRecorderRef.current.getInputState());
@@ -2402,18 +2438,21 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         // Plugin input pipeline (fail-open, null = suppress)
         const processed = runInputPipeline(data, sessionId, nodeId);
         if (processed === null) return;
-        const observedInput = autosuggestRecorderRef.current.observeInput(processed);
-        if (observedInput.changed) {
-          completionOverlayRef.current?.refresh();
-        }
-        if (observedInput.completedCommand && !isShellIntegrationDetected(effectivePaneId)) {
-          autosuggestRecorderRef.current.recordSubmittedCommand(observedInput.completedCommand);
-          createTerminalCommandMark(term, effectivePaneId, {
-            command: observedInput.completedCommand,
-            source: 'user_input_observed',
-            sessionId,
-            nodeId,
-          });
+        if (!interactiveAutosuggestSuppressedRef.current) {
+          const observedInput = autosuggestRecorderRef.current.observeInput(processed);
+          if (observedInput.changed) {
+            completionOverlayRef.current?.refresh();
+          }
+          if (observedInput.completedCommand && !isShellIntegrationDetected(effectivePaneId)) {
+            autosuggestRecorderRef.current.recordSubmittedCommand(observedInput.completedCommand);
+            maybeSuppressAutosuggestForCommand(observedInput.completedCommand);
+            createTerminalCommandMark(term, effectivePaneId, {
+              command: observedInput.completedCommand,
+              source: 'user_input_observed',
+              sessionId,
+              nodeId,
+            });
+          }
         }
         observeCliAgentTerminalInput({
           data: processed,
@@ -2742,7 +2781,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const completionOverlay = useTerminalCompletionOverlay({
     enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
     isActive,
-    isShellMode: !alternateBufferRef.current,
+    isShellMode: !alternateBufferRef.current && !interactiveAutosuggestSuppressed,
     paneId: effectivePaneId,
     getInputState: autosuggestRecorder.getInputState,
     acceptCompletion: autosuggestRecorder.acceptCompletion,

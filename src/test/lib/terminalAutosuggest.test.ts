@@ -13,6 +13,7 @@ import {
   TerminalAutosuggestInputTracker,
 } from '@/lib/terminal/autosuggest';
 import { readTerminalPromptInput } from '@/lib/terminal/autosuggest/promptReadback';
+import { shouldSuppressTerminalAutosuggestForCommand } from '@/lib/terminal/interactiveCommands';
 import {
   cleanupShellIntegration,
   createShellIntegrationController,
@@ -75,6 +76,37 @@ describe('terminal autosuggest', () => {
     });
     tracker.sync(promptInput!.value, promptInput!.cursorIndex);
     expect(tracker.getState().value).toBe('cd code/');
+  });
+
+  it('can read an empty shell prompt only when explicitly requested', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    const term = createMockTerminal({
+      line: 'tester@host:~/work$ ',
+      cursorX: 'tester@host:~/work$ '.length,
+    });
+
+    expect(readTerminalPromptInput(term, 'pane-1', tracker.getState())).toBeNull();
+    expect(readTerminalPromptInput(term, 'pane-1', tracker.getState(), {
+      allowEmptyPrompt: true,
+      requireStrongPromptMarker: true,
+    })).toMatchObject({
+      value: '',
+      cursorIndex: 0,
+      isCursorAtEnd: true,
+    });
+  });
+
+  it('does not treat a bare greater-than prompt as a strong shell prompt', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    const term = createMockTerminal({
+      line: '> ',
+      cursorX: '> '.length,
+    });
+
+    expect(readTerminalPromptInput(term, 'pane-1', tracker.getState(), {
+      allowEmptyPrompt: true,
+      requireStrongPromptMarker: true,
+    })).toBeNull();
   });
 
   it('does not read terminal output as prompt input while shell integration is in output state', () => {
@@ -164,6 +196,13 @@ describe('terminal autosuggest', () => {
     expect(getTerminalAutosuggestCandidates('curl')).toEqual([]);
     expect(getTerminalAutosuggestCandidates('export')).toEqual([]);
     expect(getTerminalAutosuggestion('ls')).toBe(' -la');
+  });
+
+  it('identifies interactive commands that should suppress native suggestions', () => {
+    expect(shouldSuppressTerminalAutosuggestForCommand('vim src/main.rs')).toBe(true);
+    expect(shouldSuppressTerminalAutosuggestForCommand('claude code')).toBe(true);
+    expect(shouldSuppressTerminalAutosuggestForCommand('env EDITOR=vim codex')).toBe(true);
+    expect(shouldSuppressTerminalAutosuggestForCommand('git status')).toBe(false);
   });
 });
 
