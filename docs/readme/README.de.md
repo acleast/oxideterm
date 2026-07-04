@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.6.9-blue" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.6.10-blue" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Plattform">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="Lizenz">
   <img src="https://img.shields.io/badge/rust-1.85+-orange" alt="Rust">
@@ -97,6 +97,18 @@ Es ist keine gehostete Cloud-Agent-Plattform und kein Projekt, das nur Terminal-
 ## Download
 
 Laden Sie die neueste Version von [GitHub Releases](https://github.com/AnalyseDeCircuit/oxideterm/releases/latest) herunter.
+
+macOS-Nutzer können außerdem über den OxideTerm Homebrew Tap installieren:
+
+```bash
+brew install --cask AnalyseDeCircuit/tap/oxideterm
+```
+
+Arch-Linux-Nutzer können das von der Community gepflegte AUR-Paket installieren:
+
+```bash
+yay -S oxideterm-bin
+```
 
 ---
 

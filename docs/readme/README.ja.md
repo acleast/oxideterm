@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.6.9-blue" alt="バージョン">
+  <img src="https://img.shields.io/badge/version-1.6.10-blue" alt="バージョン">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="プラットフォーム">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="ライセンス">
   <img src="https://img.shields.io/badge/rust-1.85+-orange" alt="Rust">
@@ -97,6 +97,18 @@ OxideTerm は **リモートサーバー向けのローカル優先 AI ワーク
 ## ダウンロード
 
 [GitHub Releases](https://github.com/AnalyseDeCircuit/oxideterm/releases/latest) から最新版をダウンロードしてください。
+
+macOS ユーザーは OxideTerm の Homebrew tap からもインストールできます:
+
+```bash
+brew install --cask AnalyseDeCircuit/tap/oxideterm
+```
+
+Arch Linux ユーザーはコミュニティ管理の AUR パッケージをインストールできます:
+
+```bash
+yay -S oxideterm-bin
+```
 
 ---
 

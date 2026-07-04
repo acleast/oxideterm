@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.6.9-blue" alt="Phiên bản">
+  <img src="https://img.shields.io/badge/version-1.6.10-blue" alt="Phiên bản">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Nền tảng">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="Giấy phép">
   <img src="https://img.shields.io/badge/rust-1.85+-orange" alt="Rust">
@@ -97,6 +97,18 @@ Nó không cố trở thành nền tảng tác nhân đám mây được lưu tr
 ## Tải xuống
 
 Tải phiên bản mới nhất từ [GitHub Releases](https://github.com/AnalyseDeCircuit/oxideterm/releases/latest).
+
+Người dùng macOS cũng có thể cài đặt từ Homebrew tap của OxideTerm:
+
+```bash
+brew install --cask AnalyseDeCircuit/tap/oxideterm
+```
+
+Người dùng Arch Linux có thể cài đặt gói AUR do cộng đồng duy trì:
+
+```bash
+yay -S oxideterm-bin
+```
 
 ---
 
