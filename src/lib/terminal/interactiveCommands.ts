@@ -33,25 +33,94 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 function normalizeCommandName(value: string): string {
   const baseName = value.split('/').pop() ?? value;
-  return baseName.replace(/\.(?:cmd|exe)$/i, '').toLowerCase();
+  return baseName.replace(/\.(?:bat|cmd|com|exe|ps1)$/i, '').toLowerCase();
 }
 
-function firstExecutableToken(commandLine: string): string | null {
+function isCommandSeparator(value: string): boolean {
+  return value === '&&' || value === '||' || value === ';' || value === '|';
+}
+
+function executableTokens(commandLine: string): string[] {
   const parsed = tokenizeCommandLine(commandLine.trim());
+  const commands: string[] = [];
+  let expectCommand = true;
+
   for (const token of parsed.tokens) {
     const value = token.value.trim();
-    if (!value || value === '&&' || value === '||' || value === ';' || value === '|') continue;
+    if (!value) continue;
+    if (isCommandSeparator(value)) {
+      expectCommand = true;
+      continue;
+    }
+    if (!expectCommand) continue;
     if (ENV_ASSIGNMENT.test(value)) continue;
 
     const command = normalizeCommandName(value);
     if (COMMAND_WRAPPERS.has(command)) continue;
     if (command === 'env') continue;
-    return command;
+    commands.push(command);
+    expectCommand = false;
   }
-  return null;
+
+  return commands;
+}
+
+function splitShellCommandSegments(commandLine: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+
+  const pushSegment = (end: number) => {
+    const segment = commandLine.slice(start, end).trim();
+    if (segment) segments.push(segment);
+  };
+
+  for (let index = 0; index < commandLine.length; index += 1) {
+    const char = commandLine[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    const next = commandLine[index + 1];
+    if ((char === '&' && next === '&') || (char === '|' && next === '|')) {
+      pushSegment(index);
+      index += 1;
+      start = index + 1;
+      continue;
+    }
+
+    if (char === ';' || char === '|') {
+      pushSegment(index);
+      start = index + 1;
+    }
+  }
+
+  pushSegment(commandLine.length);
+  return segments;
+}
+
+function commandLineExecutables(commandLine: string): string[] {
+  return [...new Set(splitShellCommandSegments(commandLine).flatMap((segment) => executableTokens(segment)))];
 }
 
 export function shouldSuppressTerminalAutosuggestForCommand(commandLine: string): boolean {
-  const command = firstExecutableToken(commandLine);
-  return command ? INTERACTIVE_COMMANDS.has(command) : false;
+  return commandLineExecutables(commandLine).some((command) => INTERACTIVE_COMMANDS.has(command));
 }

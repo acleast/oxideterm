@@ -97,6 +97,35 @@ describe('terminal autosuggest', () => {
     });
   });
 
+  it('supports minimal shell prompts for common bash and root shells', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    tracker.applyData('git st');
+
+    const userPrompt = createMockTerminal({
+      line: '$ git st',
+      cursorX: '$ git st'.length,
+    });
+    const rootPrompt = createMockTerminal({
+      line: '# git st',
+      cursorX: '# git st'.length,
+    });
+
+    expect(readTerminalPromptInput(userPrompt, 'pane-1', tracker.getState(), {
+      requireShellPromptMarker: true,
+    })).toMatchObject({
+      value: 'git st',
+      cursorIndex: 6,
+      isCursorAtEnd: true,
+    });
+    expect(readTerminalPromptInput(rootPrompt, 'pane-1', tracker.getState(), {
+      requireShellPromptMarker: true,
+    })).toMatchObject({
+      value: 'git st',
+      cursorIndex: 6,
+      isCursorAtEnd: true,
+    });
+  });
+
   it('does not treat a bare greater-than prompt as a strong shell prompt', () => {
     const tracker = new TerminalAutosuggestInputTracker();
     const term = createMockTerminal({
@@ -119,6 +148,27 @@ describe('terminal autosuggest', () => {
     });
 
     expect(readTerminalPromptInput(term, 'pane-1', tracker.getState(), {
+      requireShellPromptMarker: true,
+    })).toBeNull();
+  });
+
+  it('does not treat vim buffer text containing shell marker characters as a shell prompt', () => {
+    const tracker = new TerminalAutosuggestInputTracker();
+    tracker.applyData('git st');
+
+    const dollarLine = createMockTerminal({
+      line: 'const home = "$HOME"; git st',
+      cursorX: 'const home = "$HOME"; git st'.length,
+    });
+    const commentLine = createMockTerminal({
+      line: 'const heading = "#"; git st',
+      cursorX: 'const heading = "#"; git st'.length,
+    });
+
+    expect(readTerminalPromptInput(dollarLine, 'pane-1', tracker.getState(), {
+      requireShellPromptMarker: true,
+    })).toBeNull();
+    expect(readTerminalPromptInput(commentLine, 'pane-1', tracker.getState(), {
       requireShellPromptMarker: true,
     })).toBeNull();
   });
@@ -214,8 +264,12 @@ describe('terminal autosuggest', () => {
 
   it('identifies interactive commands that should suppress native suggestions', () => {
     expect(shouldSuppressTerminalAutosuggestForCommand('vim src/main.rs')).toBe(true);
+    expect(shouldSuppressTerminalAutosuggestForCommand('cd src && vim main.rs')).toBe(true);
+    expect(shouldSuppressTerminalAutosuggestForCommand('vim.bat src/main.rs')).toBe(true);
     expect(shouldSuppressTerminalAutosuggestForCommand('claude code')).toBe(true);
     expect(shouldSuppressTerminalAutosuggestForCommand('env EDITOR=vim codex')).toBe(true);
+    expect(shouldSuppressTerminalAutosuggestForCommand('echo "before; vim after"')).toBe(false);
+    expect(shouldSuppressTerminalAutosuggestForCommand('echo foo\\; vim')).toBe(false);
     expect(shouldSuppressTerminalAutosuggestForCommand('git status')).toBe(false);
   });
 });

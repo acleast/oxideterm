@@ -8,10 +8,10 @@ import {
 } from '@/lib/terminal/shellIntegration';
 import type { TerminalAutosuggestInputState } from './types';
 
-const PROMPT_COMMAND_PREFIX = /^[\s❯➜λ>$#%❮›»]+/u;
 const PROMPT_MARKERS = ['$', '#', '%', '>', '❯', '➜', 'λ', '❮', '›', '»'];
 const STRONG_PROMPT_MARKERS = ['$', '#', '%', '❯', '➜', 'λ', '❮', '›', '»'];
 const SHELL_PROMPT_MARKERS = ['$', '#', '%'];
+const SHELL_CONTEXT_RE = /[@:~\/\\\]\)]/u;
 
 type PromptReadbackOptions = {
   allowEmptyPrompt?: boolean;
@@ -20,19 +20,34 @@ type PromptReadbackOptions = {
 };
 
 function hasRequiredPromptMarker(text: string, options: PromptReadbackOptions): boolean {
-  if (
-    options.requireStrongPromptMarker
-    && !STRONG_PROMPT_MARKERS.some((marker) => text.includes(marker))
-  ) {
-    return false;
+  return findPromptMarkerIndex(text, options) >= 0;
+}
+
+function allowedPromptMarkers(options: PromptReadbackOptions): string[] {
+  if (options.requireShellPromptMarker) return SHELL_PROMPT_MARKERS;
+  if (options.requireStrongPromptMarker) return STRONG_PROMPT_MARKERS;
+  return PROMPT_MARKERS;
+}
+
+function findPromptMarkerIndex(text: string, options: PromptReadbackOptions): number {
+  const trimmedEnd = text.trimEnd();
+  if (!trimmedEnd) return -1;
+
+  const marker = [...trimmedEnd].at(-1);
+  if (!marker || !allowedPromptMarkers(options).includes(marker)) return -1;
+
+  const index = text.lastIndexOf(marker);
+  if (options.requireShellPromptMarker && !looksLikeShellPromptPrefix(trimmedEnd.slice(0, -marker.length))) {
+    return -1;
   }
-  if (
-    options.requireShellPromptMarker
-    && !SHELL_PROMPT_MARKERS.some((marker) => text.includes(marker))
-  ) {
-    return false;
-  }
-  return true;
+  return index;
+}
+
+function looksLikeShellPromptPrefix(prefixBeforeMarker: string): boolean {
+  const prefix = prefixBeforeMarker.trim();
+  if (!prefix) return true;
+  if (prefix.length > 120) return false;
+  return SHELL_CONTEXT_RE.test(prefix);
 }
 
 function lineText(term: Terminal, row: number): string {
@@ -101,17 +116,12 @@ function readFromCurrentLine(
     }
   }
 
-  const markerIndex = Math.max(...PROMPT_MARKERS.map((marker) => textBeforeCursor.lastIndexOf(marker)));
-  if (markerIndex < 0 && !PROMPT_COMMAND_PREFIX.test(textBeforeCursor)) {
-    return null;
-  }
-  if (!hasRequiredPromptMarker(textBeforeCursor, options)) {
+  const promptMarkerIndex = findPromptMarkerIndex(textBeforeCursor, options);
+  if (promptMarkerIndex < 0) {
     return null;
   }
 
-  const rawValue = markerIndex >= 0
-    ? textBeforeCursor.slice(markerIndex + 1)
-    : textBeforeCursor.replace(PROMPT_COMMAND_PREFIX, '');
+  const rawValue = textBeforeCursor.slice(promptMarkerIndex + 1);
   const value = rawValue.trimStart().trimEnd();
   if (!value && !options.allowEmptyPrompt) {
     return null;
