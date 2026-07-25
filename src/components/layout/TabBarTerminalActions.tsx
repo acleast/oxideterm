@@ -33,6 +33,7 @@ import { useBroadcastStore } from '../../store/broadcastStore';
 import { getAllEntries } from '../../lib/terminalRegistry';
 import { MAX_PANES_PER_TAB } from '../../types';
 import type { Tab, SplitDirection } from '../../types';
+import { ScheduledInputDialog } from '../terminal/ScheduledInputDialog';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -415,6 +416,14 @@ export const TabBarTerminalActions: React.FC<TabBarTerminalActionsProps> = ({
         onRefresh={() => setRefreshKey(k => k + 1)}
         t={t}
       />
+
+      {!isSerialTerminal && (
+        <ScheduledInputDialog
+          sessionId={sessionId}
+          targetKind={isLocalTerminal ? 'local' : 'ssh'}
+          buttonClassName="mx-1 inline-flex h-7 w-7 items-center justify-center rounded-md"
+        />
+      )}
 
       {/* ── Separator before recording ──────────────────────────────── */}
       <div className="w-px h-4 bg-theme-border/50" />

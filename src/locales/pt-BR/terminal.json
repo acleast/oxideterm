@@ -311,6 +311,35 @@
       "manage": "Salvar credencial",
       "manage_title": "Salvar uma credencial privilegiada para esta conexão",
       "local_manage_unavailable": "O gerenciamento de credenciais de privilégio do shell local ainda não está disponível."
+    },
+    "scheduled_input": {
+      "open": "Entrada agendada",
+      "title": "Entrada agendada do terminal",
+      "description": "Envia o texto configurado seguido de Enter, mesmo com o terminal em segundo plano.",
+      "command": "Texto de entrada",
+      "command_placeholder": "Texto a enviar para este terminal",
+      "repeat": "Repetição",
+      "once": "Uma vez",
+      "daily": "Diariamente",
+      "run_at": "Executar em",
+      "daily_times": "Horários diários",
+      "add_time": "Adicionar horário",
+      "remove_time": "Remover horário",
+      "tasks": "Tarefas agendadas",
+      "task_count": "{{count}} tarefa(s)",
+      "empty": "Nenhuma entrada agendada para este terminal",
+      "daily_at": "Diariamente às {{times}}",
+      "pending": "Pendente até o terminal ficar disponível",
+      "next_run": "Próxima: {{time}}",
+      "delete": "Excluir tarefa",
+      "close": "Fechar",
+      "save": "Adicionar tarefa",
+      "saving": "Adicionando...",
+      "saved": "Entrada agendada adicionada",
+      "save_failed": "Não foi possível adicionar a entrada agendada",
+      "delete_failed": "Não foi possível excluir a entrada agendada",
+      "command_required": "Digite o texto a enviar",
+      "time_required": "Selecione um horário de execução"
     }
   }
 }

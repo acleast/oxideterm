@@ -521,6 +521,33 @@ export interface Tab {
   pluginTabId?: string;
 }
 
+export type ScheduledInputTargetKind = 'ssh' | 'local';
+export type ScheduledInputRepeat = 'once' | 'daily';
+export type ScheduledInputStatus = 'waiting' | 'pending' | 'success';
+
+export type ScheduledInputTask = {
+  id: string;
+  sessionId: string;
+  targetKind: ScheduledInputTargetKind;
+  command: string;
+  repeat: ScheduledInputRepeat;
+  onceRunAt: string | null;
+  dailyTimes: string[];
+  nextRunAt: string;
+  pending: boolean;
+  lastRunAt: string | null;
+  status: ScheduledInputStatus;
+};
+
+export type CreateScheduledInputRequest = {
+  sessionId: string;
+  targetKind: ScheduledInputTargetKind;
+  command: string;
+  repeat: ScheduledInputRepeat;
+  onceRunAt?: string | null;
+  dailyTimes?: string[];
+};
+
 // Connection Config Types
 
 /**

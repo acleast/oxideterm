@@ -145,6 +145,14 @@ impl LocalTerminalRegistry {
         sessions.get(session_id).map(|s| s.info())
     }
 
+    /// Check whether a session is still owned by the registry.
+    pub fn contains_session(&self, session_id: &str) -> bool {
+        self.sessions
+            .try_read()
+            .map(|sessions| sessions.contains_key(session_id))
+            .unwrap_or(true)
+    }
+
     /// List all sessions
     pub async fn list_sessions(&self) -> Vec<LocalTerminalInfo> {
         let sessions = self.sessions.read().await;

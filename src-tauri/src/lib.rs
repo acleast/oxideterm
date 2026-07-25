@@ -91,6 +91,7 @@ use bridge::BridgeManager;
 use commands::HealthRegistry;
 use commands::config::ConfigState;
 use commands::plugin_server::PluginFileServer;
+use commands::scheduled_input::ScheduledInputManager;
 use commands::session_tree::SessionTreeState;
 use serial::SerialSessionRegistry;
 use session::{AutoReconnectService, SessionRegistry};
@@ -337,6 +338,14 @@ pub fn run() {
     #[cfg(feature = "local-terminal")]
     let local_terminal_state = Arc::new(commands::local::LocalTerminalState::new());
 
+    #[cfg(feature = "local-terminal")]
+    let scheduled_input_manager = Arc::new(ScheduledInputManager::new(
+        registry.clone(),
+        local_terminal_state.clone(),
+    ));
+    #[cfg(not(feature = "local-terminal"))]
+    let scheduled_input_manager = Arc::new(ScheduledInputManager::new(registry.clone()));
+
     // Create WSL graphics state (only on Windows with feature enabled)
     #[cfg(all(feature = "wsl-graphics", target_os = "windows"))]
     let wsl_graphics_state = Arc::new(graphics::WslGraphicsState::new());
@@ -375,6 +384,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .manage(BridgeManager::new())
+        .manage(scheduled_input_manager)
         .manage(registry.clone())
         .manage(forwarding_registry.clone())
         .manage(health_registry)
@@ -418,6 +428,8 @@ pub fn run() {
     let builder = builder.manage(wsl_graphics_state);
 
     let builder = builder.setup(move |app| {
+        app.state::<Arc<ScheduledInputManager>>().start();
+
         // Initialize config state synchronously (blocking)
         tracing::info!("Initializing config state...");
         write_startup_log("Initializing config state...");
@@ -519,6 +531,9 @@ pub fn run() {
         commands::revoke_asset_file,
         commands::get_audio_metadata,
         commands::local_exec_command,
+        commands::create_scheduled_input,
+        commands::list_scheduled_inputs,
+        commands::delete_scheduled_input,
         commands::serial_list_ports,
         commands::serial_open_session,
         commands::serial_write_session,
@@ -951,6 +966,9 @@ pub fn run() {
         commands::restore_sessions,
         commands::list_persisted_sessions,
         commands::delete_persisted_session,
+        commands::create_scheduled_input,
+        commands::list_scheduled_inputs,
+        commands::delete_scheduled_input,
         // SSH connection pool commands (new architecture)
         commands::establish_connection,
         commands::test_connection,
@@ -1364,6 +1382,11 @@ pub fn run() {
                 // Handle app lifecycle events
                 if let tauri::RunEvent::Exit = event {
                     tracing::info!("App exit requested, cleaning up resources...");
+
+                    if let Some(manager) = app_handle.try_state::<Arc<ScheduledInputManager>>() {
+                        tracing::info!("Stopping scheduled terminal inputs...");
+                        tauri::async_runtime::block_on(manager.shutdown());
+                    }
 
                     // Windows: 清理高精度定时器（恢复系统默认值）
                     #[cfg(target_os = "windows")]

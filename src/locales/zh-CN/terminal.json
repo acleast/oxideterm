@@ -320,6 +320,35 @@
       "manage": "保存凭据",
       "manage_title": "为此连接保存提权凭据",
       "local_manage_unavailable": "本地 Shell 的提权凭据管理尚未开放。"
+    },
+    "scheduled_input": {
+      "open": "定时输入",
+      "title": "终端定时输入",
+      "description": "到点后直接向此终端输入指定内容并按回车，即使终端处于后台也会执行。",
+      "command": "输入内容",
+      "command_placeholder": "要发送到此终端的内容",
+      "repeat": "重复类型",
+      "once": "一次性",
+      "daily": "每天",
+      "run_at": "执行时间",
+      "daily_times": "每天执行时间",
+      "add_time": "添加时间",
+      "remove_time": "删除时间",
+      "tasks": "定时任务",
+      "task_count": "{{count}} 个任务",
+      "empty": "此终端暂无定时输入",
+      "daily_at": "每天 {{times}}",
+      "pending": "等待终端可用后补执行",
+      "next_run": "下次：{{time}}",
+      "delete": "删除任务",
+      "close": "关闭",
+      "save": "添加任务",
+      "saving": "添加中...",
+      "saved": "已添加定时输入",
+      "save_failed": "添加定时输入失败",
+      "delete_failed": "删除定时输入失败",
+      "command_required": "请输入要发送的内容",
+      "time_required": "请选择执行时间"
     }
   }
 }

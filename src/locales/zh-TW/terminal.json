@@ -311,6 +311,35 @@
       "manage": "儲存憑證",
       "manage_title": "為此連線儲存提權憑證",
       "local_manage_unavailable": "本機 Shell 的提權憑證管理尚未開放。"
+    },
+    "scheduled_input": {
+      "open": "排程輸入",
+      "title": "終端排程輸入",
+      "description": "時間到後直接向此終端輸入指定內容並按下 Enter，即使終端位於背景也會執行。",
+      "command": "輸入內容",
+      "command_placeholder": "要傳送到此終端的內容",
+      "repeat": "重複類型",
+      "once": "單次",
+      "daily": "每天",
+      "run_at": "執行時間",
+      "daily_times": "每天執行時間",
+      "add_time": "新增時間",
+      "remove_time": "移除時間",
+      "tasks": "排程任務",
+      "task_count": "{{count}} 個任務",
+      "empty": "此終端沒有排程輸入",
+      "daily_at": "每天 {{times}}",
+      "pending": "等待終端可用後補執行",
+      "next_run": "下次：{{time}}",
+      "delete": "刪除任務",
+      "close": "關閉",
+      "save": "新增任務",
+      "saving": "新增中...",
+      "saved": "已新增排程輸入",
+      "save_failed": "無法新增排程輸入",
+      "delete_failed": "無法刪除排程輸入",
+      "command_required": "請輸入要傳送的內容",
+      "time_required": "請選擇執行時間"
     }
   }
 }

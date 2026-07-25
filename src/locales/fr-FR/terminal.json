@@ -311,6 +311,35 @@
       "manage": "Enregistrer l’identifiant",
       "manage_title": "Enregistrer un identifiant privilégié pour cette connexion",
       "local_manage_unavailable": "La gestion des identifiants d’élévation du shell local n’est pas encore disponible."
+    },
+    "scheduled_input": {
+      "open": "Saisie planifiée",
+      "title": "Saisie planifiée du terminal",
+      "description": "Envoie le texte configuré suivi d’Entrée, même si le terminal est en arrière-plan.",
+      "command": "Texte à saisir",
+      "command_placeholder": "Texte à envoyer à ce terminal",
+      "repeat": "Répétition",
+      "once": "Une fois",
+      "daily": "Tous les jours",
+      "run_at": "Exécuter à",
+      "daily_times": "Heures quotidiennes",
+      "add_time": "Ajouter une heure",
+      "remove_time": "Supprimer l’heure",
+      "tasks": "Tâches planifiées",
+      "task_count": "{{count}} tâche(s)",
+      "empty": "Aucune saisie planifiée pour ce terminal",
+      "daily_at": "Tous les jours à {{times}}",
+      "pending": "En attente de disponibilité du terminal",
+      "next_run": "Prochaine : {{time}}",
+      "delete": "Supprimer la tâche",
+      "close": "Fermer",
+      "save": "Ajouter la tâche",
+      "saving": "Ajout...",
+      "saved": "Saisie planifiée ajoutée",
+      "save_failed": "Impossible d’ajouter la saisie planifiée",
+      "delete_failed": "Impossible de supprimer la saisie planifiée",
+      "command_required": "Saisissez le texte à envoyer",
+      "time_required": "Sélectionnez une heure d’exécution"
     }
   }
 }

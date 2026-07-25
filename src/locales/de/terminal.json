@@ -311,6 +311,35 @@
       "manage": "Zugang speichern",
       "manage_title": "Privileg-Zugang für diese Verbindung speichern",
       "local_manage_unavailable": "Die Verwaltung von Privileg-Anmeldedaten für die lokale Shell ist noch nicht verfügbar."
+    },
+    "scheduled_input": {
+      "open": "Geplante Eingabe",
+      "title": "Geplante Terminaleingabe",
+      "description": "Sendet den festgelegten Text mit Enter, auch wenn das Terminal im Hintergrund ist.",
+      "command": "Eingabetext",
+      "command_placeholder": "Text für dieses Terminal",
+      "repeat": "Wiederholung",
+      "once": "Einmal",
+      "daily": "Täglich",
+      "run_at": "Ausführen um",
+      "daily_times": "Tägliche Zeiten",
+      "add_time": "Zeit hinzufügen",
+      "remove_time": "Zeit entfernen",
+      "tasks": "Geplante Aufgaben",
+      "task_count": "{{count}} Aufgabe(n)",
+      "empty": "Keine geplante Eingabe für dieses Terminal",
+      "daily_at": "Täglich um {{times}}",
+      "pending": "Wartet, bis das Terminal verfügbar ist",
+      "next_run": "Nächste: {{time}}",
+      "delete": "Aufgabe löschen",
+      "close": "Schließen",
+      "save": "Aufgabe hinzufügen",
+      "saving": "Wird hinzugefügt...",
+      "saved": "Geplante Eingabe hinzugefügt",
+      "save_failed": "Geplante Eingabe konnte nicht hinzugefügt werden",
+      "delete_failed": "Geplante Eingabe konnte nicht gelöscht werden",
+      "command_required": "Text zum Senden eingeben",
+      "time_required": "Ausführungszeit auswählen"
     }
   }
 }

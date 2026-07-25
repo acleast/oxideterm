@@ -311,6 +311,35 @@
       "manage": "Salva credenziale",
       "manage_title": "Salva una credenziale privilegiata per questa connessione",
       "local_manage_unavailable": "La gestione delle credenziali di privilegio della shell locale non è ancora disponibile."
+    },
+    "scheduled_input": {
+      "open": "Input pianificato",
+      "title": "Input pianificato del terminale",
+      "description": "Invia il testo configurato seguito da Invio anche quando il terminale è in background.",
+      "command": "Testo da inserire",
+      "command_placeholder": "Testo da inviare a questo terminale",
+      "repeat": "Ripetizione",
+      "once": "Una volta",
+      "daily": "Ogni giorno",
+      "run_at": "Esegui alle",
+      "daily_times": "Orari giornalieri",
+      "add_time": "Aggiungi orario",
+      "remove_time": "Rimuovi orario",
+      "tasks": "Attività pianificate",
+      "task_count": "{{count}} attività",
+      "empty": "Nessun input pianificato per questo terminale",
+      "daily_at": "Ogni giorno alle {{times}}",
+      "pending": "In attesa che il terminale sia disponibile",
+      "next_run": "Prossima: {{time}}",
+      "delete": "Elimina attività",
+      "close": "Chiudi",
+      "save": "Aggiungi attività",
+      "saving": "Aggiunta...",
+      "saved": "Input pianificato aggiunto",
+      "save_failed": "Impossibile aggiungere l’input pianificato",
+      "delete_failed": "Impossibile eliminare l’input pianificato",
+      "command_required": "Inserisci il testo da inviare",
+      "time_required": "Seleziona un orario di esecuzione"
     }
   }
 }

@@ -311,6 +311,35 @@
       "manage": "Guardar credencial",
       "manage_title": "Guardar una credencial privilegiada para esta conexión",
       "local_manage_unavailable": "La gestión de credenciales de privilegios para el shell local aún no está disponible."
+    },
+    "scheduled_input": {
+      "open": "Entrada programada",
+      "title": "Entrada programada del terminal",
+      "description": "Envía el texto configurado seguido de Intro aunque el terminal esté en segundo plano.",
+      "command": "Texto de entrada",
+      "command_placeholder": "Texto que se enviará a este terminal",
+      "repeat": "Repetición",
+      "once": "Una vez",
+      "daily": "Diariamente",
+      "run_at": "Ejecutar a las",
+      "daily_times": "Horas diarias",
+      "add_time": "Añadir hora",
+      "remove_time": "Quitar hora",
+      "tasks": "Tareas programadas",
+      "task_count": "{{count}} tarea(s)",
+      "empty": "No hay entradas programadas para este terminal",
+      "daily_at": "Cada día a las {{times}}",
+      "pending": "Pendiente hasta que el terminal esté disponible",
+      "next_run": "Siguiente: {{time}}",
+      "delete": "Eliminar tarea",
+      "close": "Cerrar",
+      "save": "Añadir tarea",
+      "saving": "Añadiendo...",
+      "saved": "Entrada programada añadida",
+      "save_failed": "No se pudo añadir la entrada programada",
+      "delete_failed": "No se pudo eliminar la entrada programada",
+      "command_required": "Introduce el texto que se enviará",
+      "time_required": "Selecciona una hora de ejecución"
     }
   }
 }

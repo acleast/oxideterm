@@ -311,6 +311,35 @@
       "manage": "Lưu thông tin xác thực",
       "manage_title": "Lưu thông tin xác thực đặc quyền cho kết nối này",
       "local_manage_unavailable": "Quản lý thông tin xác thực đặc quyền cho shell cục bộ chưa khả dụng."
+    },
+    "scheduled_input": {
+      "open": "Nhập theo lịch",
+      "title": "Nhập lệnh đầu cuối theo lịch",
+      "description": "Gửi nội dung đã đặt kèm phím Enter ngay cả khi đầu cuối chạy nền.",
+      "command": "Nội dung nhập",
+      "command_placeholder": "Nội dung gửi tới đầu cuối này",
+      "repeat": "Lặp lại",
+      "once": "Một lần",
+      "daily": "Hàng ngày",
+      "run_at": "Chạy lúc",
+      "daily_times": "Giờ chạy hàng ngày",
+      "add_time": "Thêm giờ",
+      "remove_time": "Xóa giờ",
+      "tasks": "Tác vụ đã đặt",
+      "task_count": "{{count}} tác vụ",
+      "empty": "Không có nội dung nhập theo lịch cho đầu cuối này",
+      "daily_at": "Hàng ngày lúc {{times}}",
+      "pending": "Chờ đến khi đầu cuối khả dụng",
+      "next_run": "Tiếp theo: {{time}}",
+      "delete": "Xóa tác vụ",
+      "close": "Đóng",
+      "save": "Thêm tác vụ",
+      "saving": "Đang thêm...",
+      "saved": "Đã thêm nội dung nhập theo lịch",
+      "save_failed": "Không thể thêm nội dung nhập theo lịch",
+      "delete_failed": "Không thể xóa nội dung nhập theo lịch",
+      "command_required": "Nhập nội dung cần gửi",
+      "time_required": "Chọn thời gian thực thi"
     }
   }
 }

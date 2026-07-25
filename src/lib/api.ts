@@ -597,6 +597,40 @@ export const api = {
     return invoke('close_terminal', { sessionId });
   },
 
+  createScheduledInput: async (
+    request: import('../types').CreateScheduledInputRequest,
+  ): Promise<import('../types').ScheduledInputTask> => {
+    if (USE_MOCK) {
+      const now = new Date().toISOString();
+      return {
+        id: crypto.randomUUID(),
+        sessionId: request.sessionId,
+        targetKind: request.targetKind,
+        command: request.command,
+        repeat: request.repeat,
+        onceRunAt: request.onceRunAt ?? null,
+        dailyTimes: request.dailyTimes ?? [],
+        nextRunAt: request.onceRunAt ?? now,
+        pending: false,
+        lastRunAt: null,
+        status: 'waiting',
+      };
+    }
+    return invoke('create_scheduled_input', { request });
+  },
+
+  listScheduledInputs: async (
+    sessionId: string,
+  ): Promise<import('../types').ScheduledInputTask[]> => {
+    if (USE_MOCK) return [];
+    return invoke('list_scheduled_inputs', { sessionId });
+  },
+
+  deleteScheduledInput: async (taskId: string): Promise<boolean> => {
+    if (USE_MOCK) return true;
+    return invoke('delete_scheduled_input', { taskId });
+  },
+
   /**
    * Recreate terminal PTY after connection reconnect
    * Returns new WebSocket URL and token for the existing session

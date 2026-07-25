@@ -59,6 +59,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { api } from '@/lib/api';
 import { detectPrivilegePrompt, findPrivilegeCredentialsForPrompt } from '@/lib/privilegePromptHelper';
 import type { SavedPrivilegeCredential } from '@/types';
+import { ScheduledInputDialog } from './ScheduledInputDialog';
 
 const LOCAL_SHELL_PRIVILEGE_CONNECTION_ID = 'local-shell:default';
 
@@ -1262,6 +1263,14 @@ const TerminalCommandBarActions: React.FC<ActionsProps> = ({ paneId, sessionId, 
         onRefresh={() => setRefreshKey((key) => key + 1)}
         t={t}
       />
+      {!isSerialTerminal && (
+        <ScheduledInputDialog
+          sessionId={sessionId}
+          targetKind={terminalType === 'terminal' ? 'ssh' : 'local'}
+          buttonClassName="inline-flex h-6 w-6 items-center justify-center rounded-md"
+          iconClassName="h-3.5 w-3.5"
+        />
+      )}
       {isRecording ? (
         <>
           <button type="button" onClick={handleStopRecording} className={actionButtonClass(true)} title={t('terminal.recording.stop')}>

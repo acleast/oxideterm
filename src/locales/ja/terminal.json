@@ -311,6 +311,35 @@
       "manage": "認証情報を保存",
       "manage_title": "この接続の昇格認証情報を保存",
       "local_manage_unavailable": "ローカル Shell の権限昇格用資格情報管理はまだ利用できません。"
+    },
+    "scheduled_input": {
+      "open": "予約入力",
+      "title": "ターミナル予約入力",
+      "description": "ターミナルがバックグラウンドでも、指定した文字列を入力して Enter を送信します。",
+      "command": "入力内容",
+      "command_placeholder": "このターミナルへ送信する文字列",
+      "repeat": "繰り返し",
+      "once": "1回",
+      "daily": "毎日",
+      "run_at": "実行日時",
+      "daily_times": "毎日の実行時刻",
+      "add_time": "時刻を追加",
+      "remove_time": "時刻を削除",
+      "tasks": "予約タスク",
+      "task_count": "{{count}} 件",
+      "empty": "このターミナルに予約入力はありません",
+      "daily_at": "毎日 {{times}}",
+      "pending": "ターミナルが利用可能になるまで保留",
+      "next_run": "次回：{{time}}",
+      "delete": "タスクを削除",
+      "close": "閉じる",
+      "save": "タスクを追加",
+      "saving": "追加中...",
+      "saved": "予約入力を追加しました",
+      "save_failed": "予約入力を追加できませんでした",
+      "delete_failed": "予約入力を削除できませんでした",
+      "command_required": "送信する文字列を入力してください",
+      "time_required": "実行時刻を選択してください"
     }
   }
 }

@@ -31,6 +31,8 @@ vi.mock('lucide-react', () => ({
   ChevronDown: () => null,
   ChevronUp: () => null,
   Check: () => null,
+  CalendarClock: () => null,
+  Clock3: () => null,
   Container: () => null,
   FilePlay: () => null,
   Folder: () => null,
@@ -38,6 +40,7 @@ vi.mock('lucide-react', () => ({
   KeyRound: () => null,
   Monitor: () => null,
   Pencil: () => null,
+  Pin: () => null,
   Play: () => null,
   Plus: () => null,
   Radio: () => null,
@@ -138,6 +141,9 @@ vi.mock('@/hooks/useToast', () => ({
 const apiMock = vi.hoisted(() => ({
   listPrivilegeCredentials: vi.fn(),
   getPrivilegeCredentialSecret: vi.fn(),
+  listScheduledInputs: vi.fn(),
+  createScheduledInput: vi.fn(),
+  deleteScheduledInput: vi.fn(),
 }));
 const appStoreMock = vi.hoisted(() => ({
   openConnectionEditor: vi.fn(),
@@ -240,6 +246,12 @@ describe('TerminalCommandBar', () => {
     apiMock.listPrivilegeCredentials.mockResolvedValue([]);
     apiMock.getPrivilegeCredentialSecret.mockReset();
     apiMock.getPrivilegeCredentialSecret.mockResolvedValue('sudo-secret');
+    apiMock.listScheduledInputs.mockReset();
+    apiMock.listScheduledInputs.mockResolvedValue([]);
+    apiMock.createScheduledInput.mockReset();
+    apiMock.createScheduledInput.mockResolvedValue(undefined);
+    apiMock.deleteScheduledInput.mockReset();
+    apiMock.deleteScheduledInput.mockResolvedValue(true);
     appStoreMock.openConnectionEditor.mockReset();
     appStoreMock.createTab.mockReset();
   });

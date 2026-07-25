@@ -311,6 +311,35 @@
       "manage": "자격 증명 저장",
       "manage_title": "이 연결의 권한 자격 증명 저장",
       "local_manage_unavailable": "로컬 Shell 권한 상승 자격 증명 관리는 아직 사용할 수 없습니다."
+    },
+    "scheduled_input": {
+      "open": "예약 입력",
+      "title": "터미널 예약 입력",
+      "description": "터미널이 백그라운드에 있어도 지정한 텍스트와 Enter를 전송합니다.",
+      "command": "입력 텍스트",
+      "command_placeholder": "이 터미널에 전송할 텍스트",
+      "repeat": "반복",
+      "once": "한 번",
+      "daily": "매일",
+      "run_at": "실행 시간",
+      "daily_times": "매일 실행 시간",
+      "add_time": "시간 추가",
+      "remove_time": "시간 삭제",
+      "tasks": "예약 작업",
+      "task_count": "{{count}}개 작업",
+      "empty": "이 터미널에 예약 입력이 없습니다",
+      "daily_at": "매일 {{times}}",
+      "pending": "터미널을 사용할 수 있을 때까지 대기",
+      "next_run": "다음: {{time}}",
+      "delete": "작업 삭제",
+      "close": "닫기",
+      "save": "작업 추가",
+      "saving": "추가 중...",
+      "saved": "예약 입력을 추가했습니다",
+      "save_failed": "예약 입력을 추가하지 못했습니다",
+      "delete_failed": "예약 입력을 삭제하지 못했습니다",
+      "command_required": "전송할 텍스트를 입력하세요",
+      "time_required": "실행 시간을 선택하세요"
     }
   }
 }

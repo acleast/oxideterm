@@ -320,6 +320,35 @@
       "manage": "Save credential",
       "manage_title": "Save a privilege credential for this connection",
       "local_manage_unavailable": "Local shell privilege credential management is not available yet."
+    },
+    "scheduled_input": {
+      "open": "Scheduled input",
+      "title": "Scheduled terminal input",
+      "description": "Send the configured text followed by Enter, even when this terminal is in the background.",
+      "command": "Input text",
+      "command_placeholder": "Text to send to this terminal",
+      "repeat": "Repeat",
+      "once": "Once",
+      "daily": "Daily",
+      "run_at": "Run at",
+      "daily_times": "Daily times",
+      "add_time": "Add time",
+      "remove_time": "Remove time",
+      "tasks": "Scheduled tasks",
+      "task_count": "{{count}} task(s)",
+      "empty": "No scheduled input for this terminal",
+      "daily_at": "Daily at {{times}}",
+      "pending": "Pending until the terminal is available",
+      "next_run": "Next: {{time}}",
+      "delete": "Delete task",
+      "close": "Close",
+      "save": "Add task",
+      "saving": "Adding...",
+      "saved": "Scheduled input added",
+      "save_failed": "Could not add scheduled input",
+      "delete_failed": "Could not delete scheduled input",
+      "command_required": "Enter text to send",
+      "time_required": "Select an execution time"
     }
   }
 }
