@@ -1,0 +1,116 @@
+name: Windows Temporary Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Git branch, tag, or commit to build'
+        required: false
+        default: 'dev'
+        type: string
+      retention_days:
+        description: 'Artifact retention period'
+        required: true
+        default: '7'
+        type: choice
+        options:
+          - '3'
+          - '7'
+          - '14'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-temporary-build-${{ inputs.source_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows temporary installer
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout requested source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            ./src-tauri -> target
+            ./cli -> target
+          key: windows-temporary-x86_64-pc-windows-msvc
+          cache-on-failure: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build CLI companion
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd cli
+          cargo build --release --target x86_64-pc-windows-msvc
+          mkdir -p ../src-tauri/cli-bin
+          cp target/x86_64-pc-windows-msvc/release/oxt.exe ../src-tauri/cli-bin/oxt.exe
+
+      - name: Build Windows NSIS installer
+        run: pnpm tauri build --bundles nsis
+
+      - name: Collect installer and checksums
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ inputs.source_ref || github.ref }}
+        run: |
+          $output = "temporary-build"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          $installers = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe"
+          if ($installers.Count -eq 0) {
+            throw "No NSIS installer was produced"
+          }
+
+          Copy-Item $installers.FullName -Destination $output
+          Get-ChildItem "$output/*.exe" |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } |
+            Set-Content "$output/SHA256SUMS.txt"
+
+          $commit = (git rev-parse HEAD).Trim()
+          @(
+            "source_ref=$env:SOURCE_REF"
+            "commit=$commit"
+            "workflow_run=$env:GITHUB_RUN_ID"
+          ) | Set-Content "$output/BUILD_INFO.txt"
+
+          "### Windows temporary build" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Source: ``$env:SOURCE_REF``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Commit: ``$commit``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Artifact: ``OxideTerm-Windows-temporary-$env:GITHUB_RUN_NUMBER``" |
+            Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload temporary Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: OxideTerm-Windows-temporary-${{ github.run_number }}
+          path: temporary-build/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 0
