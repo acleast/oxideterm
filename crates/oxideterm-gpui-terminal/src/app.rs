@@ -1348,15 +1348,15 @@ impl TerminalPane {
         }
     }
 
-    pub fn send_command_line(&mut self, command: &str, cx: &mut Context<Self>) {
+    pub fn send_command_line(&mut self, command: &str, cx: &mut Context<Self>) -> bool {
         if command.trim().is_empty() {
-            return;
+            return false;
         }
         let mut input = command.replace("\r\n", "\r").replace('\n', "\r");
         input.push('\r');
         self.observe_privilege_input("command-line", input.as_bytes(), Instant::now(), cx);
         self.observe_autosuggest_input_bytes(input.as_bytes(), cx);
-        self.send_text(&input, cx);
+        self.send_text(&input, cx)
     }
 
     pub fn send_internal_control_command_line(
@@ -2046,9 +2046,9 @@ impl TerminalPane {
         }
     }
 
-    fn send_text(&mut self, text: &str, cx: &mut Context<Self>) {
+    fn send_text(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         if !self.terminal_accepts_input() {
-            return;
+            return false;
         }
 
         if self.terminal.lock().write_text(text).is_ok() {
@@ -2059,7 +2059,9 @@ impl TerminalPane {
             self.last_terminal_input = Instant::now();
             self.reset_cursor_blink();
             cx.notify();
+            return true;
         }
+        false
     }
 
     fn restore_live_output_after_user_input(&mut self) {

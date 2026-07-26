@@ -59,6 +59,18 @@ impl ScheduledInputState {
 }
 
 impl WorkspaceApp {
+    pub(super) fn rebind_scheduled_input_session(
+        &mut self,
+        old_session_id: TerminalSessionId,
+        new_session_id: TerminalSessionId,
+    ) {
+        for task in &mut self.scheduled_input.tasks {
+            if task.session_id == old_session_id {
+                task.session_id = new_session_id;
+            }
+        }
+    }
+
     pub(super) fn scheduled_input_popover_open(&self) -> bool {
         self.scheduled_input.open
     }
@@ -237,8 +249,7 @@ impl WorkspaceApp {
                     if !pane.read(cx).ai_accepts_input() {
                         return false;
                     }
-                    pane.update(cx, |pane, cx| pane.send_command_line(&command, cx));
-                    true
+                    pane.update(cx, |pane, cx| pane.send_command_line(&command, cx))
                 });
             let Some(index) = self
                 .scheduled_input
