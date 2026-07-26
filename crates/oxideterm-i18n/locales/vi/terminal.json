@@ -337,6 +337,21 @@
     },
     "typeLocal": "NỘI BỘ",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "Nhập theo lịch",
+      "title": "Nhập lệnh đầu cuối theo lịch",
+      "description": "Gửi nội dung trên thanh lệnh kèm phím Enter ngay cả khi đầu cuối chạy nền.",
+      "command_placeholder": "Nhập nội dung vào thanh lệnh trước",
+      "once": "Một lần",
+      "daily": "Hàng ngày",
+      "run_in": "Chạy sau",
+      "tasks": "Tác vụ đã đặt",
+      "empty": "Không có nội dung nhập theo lịch cho đầu cuối này",
+      "save": "Thêm tác vụ",
+      "saved": "Đã thêm nội dung nhập theo lịch",
+      "save_failed": "Không thể thêm nội dung nhập theo lịch",
+      "command_required": "Nhập nội dung cần gửi"
+    },
     "privilege_helper": {
       "fill": "Điền mật khẩu",
       "filling": "Đang điền...",

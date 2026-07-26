@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "Fermer les onglets à droite",
     "close_all_tabs": "Fermer tous les onglets",
     "copy_title": "Copier le titre",
+    "copy_session": "Copier la session",
+    "copy_session_failed": "Échec de la copie de la session",
     "detach_to_window": "Déplacer vers une nouvelle fenêtre",
     "return_to_main_window": "Renvoyer vers la fenêtre principale",
     "detached_tab_closed": "Cet onglet a été fermé.",

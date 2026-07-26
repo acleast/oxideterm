@@ -236,6 +236,9 @@ impl WorkspaceApp {
                     bar.child(self.render_terminal_quick_commands_popover(cx))
                 },
             )
+            .when(self.scheduled_input_popover_open(), |bar| {
+                bar.child(self.render_scheduled_input_popover(cx))
+            })
             .when(self.terminal_git_branch_picker.open, |bar| {
                 bar.child(self.render_terminal_git_branch_picker(cx))
             })
@@ -493,6 +496,27 @@ impl WorkspaceApp {
                                     } else {
                                         this.open_search(window, cx);
                                     }
+                                    cx.stop_propagation();
+                                },
+                                cx,
+                            ))
+                            .child(self.terminal_command_action_button(
+                                LucideIcon::History,
+                                if self.active_terminal_scheduled_input_count() > 0 {
+                                    rgb(theme.accent)
+                                } else {
+                                    rgb(theme.text_muted)
+                                },
+                                self.active_tab_has_serial_terminal(),
+                                Some(if self.scheduled_input_popover_open() {
+                                    rgba((theme.accent << 8) | 0x26)
+                                } else {
+                                    rgba(0x00000000)
+                                }),
+                                "terminal-command-scheduled-input",
+                                self.i18n.t("terminal.scheduled_input.open"),
+                                |this, _event, _window, cx| {
+                                    this.toggle_scheduled_input_popover(cx);
                                     cx.stop_propagation();
                                 },
                                 cx,

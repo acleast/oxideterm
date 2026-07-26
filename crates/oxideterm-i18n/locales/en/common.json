@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "Close tabs to the right",
     "close_all_tabs": "Close all tabs",
     "copy_title": "Copy Title",
+    "copy_session": "Copy Session",
+    "copy_session_failed": "Failed to copy session",
     "detach_to_window": "Move to New Window",
     "return_to_main_window": "Return to Main Window",
     "detached_tab_closed": "This tab was closed.",

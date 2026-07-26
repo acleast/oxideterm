@@ -8,7 +8,7 @@ use oxideterm_gpui_ui::context_menu::{
 use oxideterm_gpui_ui::modal::overlay_content_boundary;
 
 const TAB_CONTEXT_MENU_WIDTH: f32 = 228.0;
-const TAB_CONTEXT_MENU_HEIGHT: f32 = 136.0;
+const TAB_CONTEXT_MENU_HEIGHT: f32 = 176.0;
 const TAB_CONTEXT_MENU_MARGIN: f32 = 8.0;
 const TAB_HANDOFF_PREVIEW_WIDTH_EXTRA: f32 = 96.0;
 const TAB_HANDOFF_PREVIEW_MIN_WIDTH: f32 = 220.0;
@@ -85,6 +85,51 @@ fn tab_return_visible_insertion_index(pointer_x: f32, tab_widths: &[f32]) -> usi
 }
 
 impl WorkspaceApp {
+    fn duplicate_ssh_terminal_tab(
+        &mut self,
+        tab_id: TabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tab_by_id(tab_id) else {
+            return;
+        };
+        let Some(pane_id) = tab.active_pane_id else {
+            return;
+        };
+        let Some(session_id) = tab
+            .root_pane
+            .as_ref()
+            .and_then(|root| root.session_id_for_pane(pane_id))
+        else {
+            return;
+        };
+        let Some(node_id) = self.terminal_ssh_nodes.get(&session_id).cloned() else {
+            return;
+        };
+        let Some(node) = self.ssh_nodes.get(&node_id).cloned() else {
+            return;
+        };
+
+        // A copied terminal is only a new consumer. The NodeRouter-owned SSH
+        // connection remains independent from either terminal pane lifetime.
+        if let Err(error) = self.queue_ssh_terminal_tab_for_node(
+            node_id,
+            node.config,
+            node.title,
+            node.saved_connection_id,
+            window,
+            cx,
+        ) {
+            self.push_command_palette_toast(
+                self.i18n.t("tabbar.copy_session_failed"),
+                Some(error.to_string()),
+                TerminalNoticeVariant::Error,
+            );
+            cx.notify();
+        }
+    }
+
     pub(in crate::workspace) fn update_main_window_tabbar_drop_bounds(
         &mut self,
         window: &Window,
@@ -789,9 +834,33 @@ impl WorkspaceApp {
             TAB_CONTEXT_MENU_MARGIN,
         );
         let detached = self.detached_tabs.contains(&menu.tab_id);
+        let can_copy_session = self
+            .tab_by_id(menu.tab_id)
+            .is_some_and(|tab| tab.kind == TabKind::SshTerminal);
         let menu_body = context_menu_event_boundary(
             context_menu_content(&self.tokens)
                 .w(px(TAB_CONTEXT_MENU_WIDTH))
+                .when(can_copy_session, |menu_body| {
+                    menu_body
+                        .child(
+                            context_menu_item(
+                                &self.tokens,
+                                self.i18n.t("tabbar.copy_session"),
+                                ContextMenuItemKind::Plain,
+                                false,
+                                false,
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _event, window, cx| {
+                                    this.close_tab_context_menu();
+                                    this.duplicate_ssh_terminal_tab(menu.tab_id, window, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        )
+                        .child(context_menu_separator(&self.tokens))
+                })
                 .child(
                     context_menu_item(
                         &self.tokens,

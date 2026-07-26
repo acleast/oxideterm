@@ -480,6 +480,8 @@
       "select_theme": "테마 선택",
       "layout": "레이아웃",
       "layout_hint": "사이드바는 오른쪽 가장자리를 드래그하여 크기를 조정할 수 있습니다. 접기 버튼 (◧)을 사용하여 숨길 수 있습니다.",
+      "sidebar_auto_collapse": "사이드바 자동 축소",
+      "sidebar_auto_collapse_hint": "터미널이나 연결을 연 후에 사이드바를 자동으로 숨김",
       "theme_group_oxide": "Oxide 시리즈",
       "theme_group_classic": "클래식 / 기타",
       "theme_group_custom": "사용자 정의",

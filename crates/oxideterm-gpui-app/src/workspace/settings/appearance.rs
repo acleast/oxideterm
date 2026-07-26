@@ -122,6 +122,13 @@ impl WorkspaceApp {
                         cx,
                     ),
                 ),
+                self.appearance_checkbox_row(
+                    "settings_view.appearance.sidebar_auto_collapse",
+                    "settings_view.appearance.sidebar_auto_collapse_hint",
+                    settings.appearance.sidebar_auto_collapse,
+                    set_sidebar_auto_collapse,
+                    cx,
+                ),
                 self.appearance_row(
                     "settings_view.appearance.border_radius",
                     "settings_view.appearance.border_radius_hint",

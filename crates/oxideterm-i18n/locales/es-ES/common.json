@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "Cerrar pestañas a la derecha",
     "close_all_tabs": "Cerrar todas las pestañas",
     "copy_title": "Copiar título",
+    "copy_session": "Copiar sesión",
+    "copy_session_failed": "No se pudo copiar la sesión",
     "detach_to_window": "Mover a una nueva ventana",
     "return_to_main_window": "Volver a la ventana principal",
     "detached_tab_closed": "Esta pestaña se cerró.",

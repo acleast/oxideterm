@@ -44,6 +44,8 @@ pub struct AppearanceSettings {
     #[serde(default)]
     pub app_icon: AppIconVariant,
     pub sidebar_collapsed_default: bool,
+    #[serde(default = "default_sidebar_auto_collapse")]
+    pub sidebar_auto_collapse: bool,
     pub ui_density: UiDensity,
     pub border_radius: i64,
     #[serde(default = "default_ui_font_size")]
@@ -65,6 +67,7 @@ impl Default for AppearanceSettings {
         Self {
             app_icon: AppIconVariant::default(),
             sidebar_collapsed_default: false,
+            sidebar_auto_collapse: true,
             ui_density: UiDensity::Comfortable,
             border_radius: 6,
             ui_font_size: default_ui_font_size(),
@@ -86,6 +89,10 @@ pub const MAX_WINDOW_OPACITY: f64 = 1.0;
 
 fn default_ui_font_size() -> i64 {
     DEFAULT_UI_FONT_SIZE
+}
+
+fn default_sidebar_auto_collapse() -> bool {
+    true
 }
 
 fn default_show_window_titlebar() -> bool {

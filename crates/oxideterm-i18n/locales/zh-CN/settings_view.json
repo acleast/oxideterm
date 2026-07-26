@@ -480,6 +480,8 @@
       "select_theme": "选择主题",
       "layout": "布局",
       "layout_hint": "可以通过拖动右边缘调整侧边栏大小。使用折叠按钮 (◧) 隐藏它。",
+      "sidebar_auto_collapse": "自动收起侧边栏",
+      "sidebar_auto_collapse_hint": "打开终端或连接后自动隐藏侧边栏",
       "theme_group_oxide": "Oxide 系列",
       "theme_group_classic": "经典 / 其他",
       "theme_group_custom": "自定义",

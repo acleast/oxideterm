@@ -337,6 +337,21 @@
     },
     "typeLocal": "LOKAL",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "Geplante Eingabe",
+      "title": "Geplante Terminaleingabe",
+      "description": "Sendet den Text aus der Befehlsleiste mit Enter, auch wenn das Terminal im Hintergrund ist.",
+      "command_placeholder": "Zuerst Text in die Befehlsleiste eingeben",
+      "once": "Einmal",
+      "daily": "Täglich",
+      "run_in": "Ausführen in",
+      "tasks": "Geplante Aufgaben",
+      "empty": "Keine geplante Eingabe für dieses Terminal",
+      "save": "Aufgabe hinzufügen",
+      "saved": "Geplante Eingabe hinzugefügt",
+      "save_failed": "Geplante Eingabe konnte nicht hinzugefügt werden",
+      "command_required": "Text zum Senden eingeben"
+    },
     "privilege_helper": {
       "fill": "Passwort einfügen",
       "filling": "Füge ein...",

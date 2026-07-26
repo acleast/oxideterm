@@ -79,6 +79,7 @@ const TERMINAL_BEHAVIOR_KEYS: &[&str] = &[
 ];
 const APPEARANCE_KEYS: &[&str] = &[
     "sidebarCollapsedDefault",
+    "sidebarAutoCollapse",
     "uiDensity",
     "borderRadius",
     "uiFontFamily",

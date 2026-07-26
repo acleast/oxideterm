@@ -20,6 +20,10 @@ pub fn set_show_terminal_performance_overlay(settings: &mut PersistedSettings, v
     settings.terminal.show_fps_overlay = value;
 }
 
+pub fn set_sidebar_auto_collapse(settings: &mut PersistedSettings, value: bool) {
+    settings.appearance.sidebar_auto_collapse = value;
+}
+
 pub fn set_terminal_smooth_scroll(settings: &mut PersistedSettings, value: bool) {
     settings.terminal.smooth_scroll = value;
 }

@@ -54,6 +54,18 @@ fn ssh_config_matches_endpoint(config: &SshConfig, host: &str, port: u16, userna
 }
 
 impl WorkspaceApp {
+    fn auto_collapse_sidebar_after_terminal_open(&mut self, cx: &mut Context<Self>) {
+        if self
+            .settings_store
+            .settings()
+            .appearance
+            .sidebar_auto_collapse
+            && !self.sidebar_collapsed
+        {
+            self.set_sidebar_collapsed_with_motion(true, cx);
+        }
+    }
+
     pub(in crate::workspace) fn create_local_terminal_tab(
         &mut self,
         window: &mut Window,
@@ -101,6 +113,7 @@ impl WorkspaceApp {
         self.bind_terminal_location(tab_id, pane_id, session_id);
         self.main_window_tabs.active_tab_id = Some(tab_id);
         self.active_surface = ActiveSurface::Terminal;
+        self.auto_collapse_sidebar_after_terminal_open(cx);
         self.needs_active_pane_focus = true;
         pane.update(cx, |pane, cx| pane.focus(window, cx));
         self.reveal_active_tab(window);
@@ -141,6 +154,7 @@ impl WorkspaceApp {
         self.bind_terminal_location(tab_id, pane_id, session_id);
         self.main_window_tabs.active_tab_id = Some(tab_id);
         self.active_surface = ActiveSurface::Terminal;
+        self.auto_collapse_sidebar_after_terminal_open(cx);
         self.needs_active_pane_focus = true;
         pane.update(cx, |pane, cx| pane.focus(window, cx));
         self.reveal_active_tab(window);
@@ -182,6 +196,7 @@ impl WorkspaceApp {
         self.bind_terminal_location(tab_id, pane_id, session_id);
         self.main_window_tabs.active_tab_id = Some(tab_id);
         self.active_surface = ActiveSurface::Terminal;
+        self.auto_collapse_sidebar_after_terminal_open(cx);
         self.needs_active_pane_focus = true;
         pane.update(cx, |pane, cx| pane.focus(window, cx));
         self.reveal_active_tab(window);
@@ -646,9 +661,7 @@ impl WorkspaceApp {
         self.bind_terminal_location(tab_id, pane_id, session_id);
         self.main_window_tabs.active_tab_id = Some(tab_id);
         self.active_surface = ActiveSurface::Terminal;
-        if self.sidebar_collapsed {
-            self.set_sidebar_collapsed_with_motion(false, cx);
-        }
+        self.auto_collapse_sidebar_after_terminal_open(cx);
         self.needs_active_pane_focus = true;
         pane.update(cx, |pane, cx| pane.focus(window, cx));
         self.reveal_active_tab(window);

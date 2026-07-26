@@ -337,6 +337,21 @@
     },
     "typeLocal": "LOCAL",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "Saisie planifiée",
+      "title": "Saisie planifiée du terminal",
+      "description": "Envoie le texte de la barre de commande suivi d’Entrée, même si le terminal est en arrière-plan.",
+      "command_placeholder": "Saisissez d’abord le texte dans la barre de commande",
+      "once": "Une fois",
+      "daily": "Tous les jours",
+      "run_in": "Exécuter dans",
+      "tasks": "Tâches planifiées",
+      "empty": "Aucune saisie planifiée pour ce terminal",
+      "save": "Ajouter la tâche",
+      "saved": "Saisie planifiée ajoutée",
+      "save_failed": "Impossible d’ajouter la saisie planifiée",
+      "command_required": "Saisissez le texte à envoyer"
+    },
     "privilege_helper": {
       "fill": "Remplir le mot de passe",
       "filling": "Remplissage...",

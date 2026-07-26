@@ -173,6 +173,7 @@ impl WorkspaceApp {
             terminal_quick_commands_open: false,
             terminal_quick_commands_pinned: false,
             terminal_quick_command_pending: None,
+            scheduled_input: scheduled_input::ScheduledInputState::new(),
             terminal_cwd_tx,
             terminal_cwd_rx,
             terminal_cwd_picker: terminal_cwd::TerminalCwdPickerState::default(),

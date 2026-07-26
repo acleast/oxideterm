@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "關閉右側分頁",
     "close_all_tabs": "關閉所有分頁",
     "copy_title": "複製標題",
+    "copy_session": "複製會話",
+    "copy_session_failed": "複製會話失敗",
     "detach_to_window": "移到新視窗",
     "return_to_main_window": "移回主視窗",
     "detached_tab_closed": "此分頁已關閉。",

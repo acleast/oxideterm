@@ -480,6 +480,8 @@
       "select_theme": "Select theme",
       "layout": "Layout",
       "layout_hint": "Sidebar can be resized by dragging its right edge. Use the collapse button (◧) to hide it.",
+      "sidebar_auto_collapse": "Auto-Collapse Sidebar",
+      "sidebar_auto_collapse_hint": "Automatically hide the sidebar after opening a terminal or connection",
       "theme_group_oxide": "Oxide Series",
       "theme_group_classic": "Classic / Other",
       "theme_group_custom": "Custom",

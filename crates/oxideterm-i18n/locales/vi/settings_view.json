@@ -480,6 +480,8 @@
       "select_theme": "Chọn giao diện",
       "layout": "Bố cục",
       "layout_hint": "Có thể thay đổi kích thước thanh bên bằng cách kéo cạnh phải. Sử dụng nút thu gọn (◧) để ẩn.",
+      "sidebar_auto_collapse": "Tự động thu gọn thanh bên",
+      "sidebar_auto_collapse_hint": "Tự động ẩn thanh bên sau khi mở terminal hoặc kết nối",
       "theme_group_oxide": "Dòng Oxide",
       "theme_group_classic": "Cổ điển / Khác",
       "theme_group_custom": "Tùy chỉnh",

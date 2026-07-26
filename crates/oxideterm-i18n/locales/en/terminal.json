@@ -337,6 +337,21 @@
       "execute": "Run",
       "regenerate": "Retry"
     },
+    "scheduled_input": {
+      "open": "Scheduled input",
+      "title": "Scheduled terminal input",
+      "description": "Send the command-bar text followed by Enter, even when this terminal is in the background.",
+      "command_placeholder": "Enter text in the command bar first",
+      "once": "Once",
+      "daily": "Daily",
+      "run_in": "Run in",
+      "tasks": "Scheduled tasks",
+      "empty": "No scheduled input for this terminal",
+      "save": "Add task",
+      "saved": "Scheduled input added",
+      "save_failed": "Could not add scheduled input",
+      "command_required": "Enter text to send"
+    },
     "privilege_helper": {
       "fill": "Fill password",
       "filling": "Filling...",

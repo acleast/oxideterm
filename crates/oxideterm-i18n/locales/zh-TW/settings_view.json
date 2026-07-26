@@ -480,6 +480,8 @@
       "select_theme": "選擇主題",
       "layout": "版面配置",
       "layout_hint": "可拖曳側邊欄右側邊緣來調整大小。使用收合按鈕 (◧) 來隱藏它。",
+      "sidebar_auto_collapse": "自動收起側邊欄",
+      "sidebar_auto_collapse_hint": "開啟終端或連接後自動隱藏側邊欄",
       "theme_group_oxide": "Oxide 系列",
       "theme_group_classic": "經典 / 其他",
       "theme_group_custom": "自訂",

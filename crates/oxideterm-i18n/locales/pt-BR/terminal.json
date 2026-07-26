@@ -337,6 +337,21 @@
     },
     "typeLocal": "LOCAL",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "Entrada agendada",
+      "title": "Entrada agendada do terminal",
+      "description": "Envia o texto da barra de comandos seguido de Enter, mesmo com o terminal em segundo plano.",
+      "command_placeholder": "Digite primeiro o texto na barra de comandos",
+      "once": "Uma vez",
+      "daily": "Diariamente",
+      "run_in": "Executar em",
+      "tasks": "Tarefas agendadas",
+      "empty": "Nenhuma entrada agendada para este terminal",
+      "save": "Adicionar tarefa",
+      "saved": "Entrada agendada adicionada",
+      "save_failed": "Não foi possível adicionar a entrada agendada",
+      "command_required": "Digite o texto a enviar"
+    },
     "privilege_helper": {
       "fill": "Preencher senha",
       "filling": "Preenchendo...",

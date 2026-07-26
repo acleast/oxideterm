@@ -480,6 +480,8 @@
       "select_theme": "Design auswählen",
       "layout": "Layout",
       "layout_hint": "Die Seitenleiste kann durch Ziehen des rechten Rands angepasst werden. Verwenden Sie die Einklappen-Schaltfläche (◧) zum Ausblenden.",
+      "sidebar_auto_collapse": "Seitenleiste automatisch reduzieren",
+      "sidebar_auto_collapse_hint": "Seitenleiste nach Öffnen eines Terminals oder einer Verbindung automatisch ausblenden",
       "theme_group_oxide": "Oxide-Reihe",
       "theme_group_classic": "Klassisch / Andere",
       "theme_group_custom": "Benutzerdefiniert",

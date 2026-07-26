@@ -337,6 +337,21 @@
     },
     "typeLocal": "LOCAL",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "Entrada programada",
+      "title": "Entrada programada del terminal",
+      "description": "Envía el texto de la barra de comandos seguido de Intro aunque el terminal esté en segundo plano.",
+      "command_placeholder": "Introduce primero el texto en la barra de comandos",
+      "once": "Una vez",
+      "daily": "Diariamente",
+      "run_in": "Ejecutar en",
+      "tasks": "Tareas programadas",
+      "empty": "No hay entradas programadas para este terminal",
+      "save": "Añadir tarea",
+      "saved": "Entrada programada añadida",
+      "save_failed": "No se pudo añadir la entrada programada",
+      "command_required": "Introduce el texto que se enviará"
+    },
     "privilege_helper": {
       "fill": "Rellenar contraseña",
       "filling": "Rellenando...",

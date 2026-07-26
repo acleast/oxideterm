@@ -337,6 +337,21 @@
     },
     "typeLocal": "ローカル",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "予約入力",
+      "title": "ターミナル予約入力",
+      "description": "ターミナルがバックグラウンドでも、コマンドバーの文字列を入力して Enter を送信します。",
+      "command_placeholder": "先にコマンドバーへ文字列を入力してください",
+      "once": "1回",
+      "daily": "毎日",
+      "run_in": "実行まで",
+      "tasks": "予約タスク",
+      "empty": "このターミナルに予約入力はありません",
+      "save": "タスクを追加",
+      "saved": "予約入力を追加しました",
+      "save_failed": "予約入力を追加できませんでした",
+      "command_required": "送信する文字列を入力してください"
+    },
     "privilege_helper": {
       "fill": "パスワード入力",
       "filling": "入力中...",

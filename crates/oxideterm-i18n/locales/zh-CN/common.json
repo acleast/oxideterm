@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "关闭右侧标签页",
     "close_all_tabs": "关闭所有标签页",
     "copy_title": "复制标题",
+    "copy_session": "复制会话",
+    "copy_session_failed": "复制会话失败",
     "detach_to_window": "移到新窗口",
     "return_to_main_window": "移回主窗口",
     "detached_tab_closed": "此标签页已关闭。",

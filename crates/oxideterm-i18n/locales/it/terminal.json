@@ -337,6 +337,21 @@
     },
     "typeLocal": "LOCALE",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "Input pianificato",
+      "title": "Input pianificato del terminale",
+      "description": "Invia il testo della barra dei comandi seguito da Invio anche quando il terminale è in background.",
+      "command_placeholder": "Inserisci prima il testo nella barra dei comandi",
+      "once": "Una volta",
+      "daily": "Ogni giorno",
+      "run_in": "Esegui tra",
+      "tasks": "Attività pianificate",
+      "empty": "Nessun input pianificato per questo terminale",
+      "save": "Aggiungi attività",
+      "saved": "Input pianificato aggiunto",
+      "save_failed": "Impossibile aggiungere l’input pianificato",
+      "command_required": "Inserisci il testo da inviare"
+    },
     "privilege_helper": {
       "fill": "Inserisci password",
       "filling": "Inserimento...",

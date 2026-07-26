@@ -337,6 +337,21 @@
       "execute": "执行",
       "regenerate": "重试"
     },
+    "scheduled_input": {
+      "open": "定时输入",
+      "title": "终端定时输入",
+      "description": "到点后发送命令栏中的内容并按回车，即使终端处于后台也会执行。",
+      "command_placeholder": "请先在命令栏中输入要发送的内容",
+      "once": "一次性",
+      "daily": "每天",
+      "run_in": "延时执行",
+      "tasks": "定时任务",
+      "empty": "此终端暂无定时输入",
+      "save": "添加任务",
+      "saved": "已添加定时输入",
+      "save_failed": "添加定时输入失败",
+      "command_required": "请输入要发送的内容"
+    },
     "privilege_helper": {
       "fill": "填充密码",
       "filling": "填充中...",

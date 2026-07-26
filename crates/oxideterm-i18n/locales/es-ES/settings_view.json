@@ -480,6 +480,8 @@
       "select_theme": "Seleccionar tema",
       "layout": "Disposición",
       "layout_hint": "La barra lateral se puede redimensionar arrastrando el borde derecho. Usa el botón de contraer (◧) para ocultarla.",
+      "sidebar_auto_collapse": "Colapso automático de la barra lateral",
+      "sidebar_auto_collapse_hint": "Ocultar automáticamente la barra lateral después de abrir un terminal o conexión",
       "theme_group_oxide": "Serie Oxide",
       "theme_group_classic": "Clásico / Otros",
       "theme_group_custom": "Personalizado",

@@ -480,6 +480,8 @@
       "select_theme": "Sélectionner le thème",
       "layout": "Disposition",
       "layout_hint": "La barre latérale peut être redimensionnée en faisant glisser son bord droit. Utilisez le bouton de réduction (◧) pour la masquer.",
+      "sidebar_auto_collapse": "Réduction automatique de la barre latérale",
+      "sidebar_auto_collapse_hint": "Masquer automatiquement la barre latérale après l'ouverture d'un terminal ou d'une connexion",
       "theme_group_oxide": "Série Oxide",
       "theme_group_classic": "Classique / Autre",
       "theme_group_custom": "Personnalisé",

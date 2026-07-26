@@ -39,6 +39,7 @@ mod root {
     #[cfg(test)]
     pub(super) mod tests;
 }
+mod scheduled_input;
 mod selectable_text;
 mod selection_motion;
 mod session_icons;
@@ -756,6 +757,7 @@ pub(crate) struct WorkspaceApp {
     terminal_quick_commands_open: bool,
     terminal_quick_commands_pinned: bool,
     terminal_quick_command_pending: Option<String>,
+    scheduled_input: scheduled_input::ScheduledInputState,
     terminal_cwd_tx: std::sync::mpsc::Sender<terminal_cwd::TerminalCwdDelivery>,
     terminal_cwd_rx: std::sync::mpsc::Receiver<terminal_cwd::TerminalCwdDelivery>,
     terminal_cwd_picker: terminal_cwd::TerminalCwdPickerState,

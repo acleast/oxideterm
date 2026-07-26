@@ -337,6 +337,21 @@
     },
     "typeLocal": "本機",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "排程輸入",
+      "title": "終端排程輸入",
+      "description": "時間到後傳送命令列中的內容並按下 Enter，即使終端位於背景也會執行。",
+      "command_placeholder": "請先在命令列中輸入要傳送的內容",
+      "once": "單次",
+      "daily": "每天",
+      "run_in": "延後執行",
+      "tasks": "排程任務",
+      "empty": "此終端沒有排程輸入",
+      "save": "新增任務",
+      "saved": "已新增排程輸入",
+      "save_failed": "無法新增排程輸入",
+      "command_required": "請輸入要傳送的內容"
+    },
     "privilege_helper": {
       "fill": "填入密碼",
       "filling": "填入中...",

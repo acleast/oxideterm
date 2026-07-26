@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "右のタブを閉じる",
     "close_all_tabs": "すべてのタブを閉じる",
     "copy_title": "タイトルをコピー",
+    "copy_session": "セッションをコピー",
+    "copy_session_failed": "セッションをコピーできませんでした",
     "detach_to_window": "新しいウィンドウへ移動",
     "return_to_main_window": "メインウィンドウへ戻す",
     "detached_tab_closed": "このタブは閉じられました。",

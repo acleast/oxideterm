@@ -337,6 +337,21 @@
     },
     "typeLocal": "로컬",
     "typeSsh": "SSH",
+    "scheduled_input": {
+      "open": "예약 입력",
+      "title": "터미널 예약 입력",
+      "description": "터미널이 백그라운드에 있어도 명령 모음의 텍스트와 Enter를 전송합니다.",
+      "command_placeholder": "먼저 명령 모음에 텍스트를 입력하세요",
+      "once": "한 번",
+      "daily": "매일",
+      "run_in": "다음 시간 후 실행",
+      "tasks": "예약 작업",
+      "empty": "이 터미널에 예약 입력이 없습니다",
+      "save": "작업 추가",
+      "saved": "예약 입력을 추가했습니다",
+      "save_failed": "예약 입력을 추가하지 못했습니다",
+      "command_required": "전송할 텍스트를 입력하세요"
+    },
     "privilege_helper": {
       "fill": "비밀번호 입력",
       "filling": "입력 중...",

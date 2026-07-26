@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "오른쪽 탭 닫기",
     "close_all_tabs": "모든 탭 닫기",
     "copy_title": "제목 복사",
+    "copy_session": "세션 복사",
+    "copy_session_failed": "세션을 복사하지 못했습니다",
     "detach_to_window": "새 창으로 이동",
     "return_to_main_window": "메인 창으로 되돌리기",
     "detached_tab_closed": "이 탭은 닫혔습니다.",

@@ -1116,6 +1116,8 @@
     "close_tabs_to_right": "Tabs rechts schließen",
     "close_all_tabs": "Alle Tabs schließen",
     "copy_title": "Titel kopieren",
+    "copy_session": "Sitzung kopieren",
+    "copy_session_failed": "Sitzung konnte nicht kopiert werden",
     "detach_to_window": "In neues Fenster verschieben",
     "return_to_main_window": "Ins Hauptfenster zurückholen",
     "detached_tab_closed": "Dieser Tab wurde geschlossen.",
