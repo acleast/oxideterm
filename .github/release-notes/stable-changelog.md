@@ -5,13 +5,15 @@ section as the detailed changelog attached to the corresponding GitHub Release.
 
 ## 2.0.11
 
-OxideTerm 2.0.11 adds resilient SCP fallback and editor-aware Free Type Mode, improves IDE and terminal reliability, and avoids eager Metal memory allocation on macOS.
+OxideTerm 2.0.11 adds resilient SCP fallback, editor-aware Free Type Mode, and scheduled terminal input workflows, while improving IDE, terminal, and reconnect reliability.
 
 ### ✨ Highlights
 
 - Added legacy SCP as a compatibility transfer protocol for POSIX hosts, with an Auto mode that continues to prefer SFTP, explicit protocol settings, file and directory transfers, progress and cancellation, restart-aware retry behavior, and capability-gated plugin APIs.
 - Expanded Free Type Mode with configurable Copy, Cut, and Paste actions, matched-bracket selection, true movement or copying of command selections, and insertion from command history while keeping the remote line editor authoritative.
 - Validated ordinary, Emacs, and Vi command editing against real PTY-backed Bash, Zsh, and Fish sessions, and added opt-in Vim, Neovim, and Emacs adapters that expose bounded editor state without weakening alternate-screen or mouse-tracking protections.
+- Added scheduled terminal input with persisted tasks, reconnect-aware session rebinding, and reliable send-result handling.
+- Added terminal workflow actions for copying SSH sessions, automatic sidebar collapse settings, and expanded localization coverage.
 
 ### 🛠️ Fixes
 
