@@ -359,6 +359,8 @@ jobs:
       - name: Sign release assets
         shell: bash
         env:
+          MINISIGN_PRIVATE_KEY_B64: ${{ secrets.MINISIGN_PRIVATE_KEY_B64 }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VERSION: ${{ steps.release_meta.outputs.version }}
@@ -369,8 +371,31 @@ jobs:
 
           key_path="$(mktemp)"
           trap 'rm -f "${key_path}"' EXIT
-          printf '%s' "${TAURI_SIGNING_PRIVATE_KEY}" | base64 --decode > "${key_path}"
           chmod 600 "${key_path}"
+          signing_key_material="${MINISIGN_PRIVATE_KEY_B64:-${TAURI_SIGNING_PRIVATE_KEY:-}}"
+          signing_password="${MINISIGN_PASSWORD:-${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}}"
+
+          # GitHub secrets may contain either the complete minisign key file or
+          # a base64 wrapper around that file. Keep the key in a 0600 temporary
+          # file and validate the decoded format before minisign reads it.
+          if [[ -z "${signing_key_material}" ]]; then
+            echo "MINISIGN_PRIVATE_KEY_B64 or TAURI_SIGNING_PRIVATE_KEY is required for native updater releases." >&2
+            exit 1
+          elif [[ "${signing_key_material}" == *"untrusted comment: minisign"* ]]; then
+            printf '%s' "${signing_key_material}" > "${key_path}"
+          else
+            decoded_key_path="$(mktemp)"
+            trap 'rm -f "${key_path}" "${decoded_key_path}"' EXIT
+            if ! printf '%s' "${signing_key_material}" | base64 --decode > "${decoded_key_path}"; then
+              echo "The configured minisign secret must be a key file or base64-encoded key file." >&2
+              exit 1
+            fi
+            if ! grep -q '^untrusted comment: minisign' "${decoded_key_path}"; then
+              echo "The configured minisign secret decoded successfully but is not a minisign key file." >&2
+              exit 1
+            fi
+            mv "${decoded_key_path}" "${key_path}"
+          fi
 
           # Native and Tauri channel updaters both reject unsigned assets.
           mapfile -t assets < <(find dist-release -maxdepth 1 -type f \( \
@@ -392,8 +417,8 @@ jobs:
           for asset in "${assets[@]}"; do
             sig="${asset}.sig"
             trusted_comment="OxideTerm ${VERSION} $(basename "${asset}")"
-            if [[ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]]; then
-              printf '%s\n' "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD}" \
+            if [[ -n "${signing_password}" ]]; then
+              printf '%s\n' "${signing_password}" \
                 | minisign -S -s "${key_path}" -m "${asset}" -x "${sig}" -t "${trusted_comment}"
             else
               minisign -S -W -s "${key_path}" -m "${asset}" -x "${sig}" -t "${trusted_comment}"
