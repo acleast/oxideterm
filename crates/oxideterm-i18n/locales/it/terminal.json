@@ -350,7 +350,9 @@
       "save": "Aggiungi attività",
       "saved": "Input pianificato aggiunto",
       "save_failed": "Impossibile aggiungere l’input pianificato",
-      "command_required": "Inserisci il testo da inviare"
+      "command_required": "Inserisci il testo da inviare",
+      "at_time": "A un orario",
+      "command_input_placeholder": "Inserisci il comando da pianificare"
     },
     "privilege_helper": {
       "fill": "Inserisci password",

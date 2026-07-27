@@ -180,6 +180,49 @@ impl TerminalPane {
         } else {
             KittyKeyEventType::Press
         };
+        // Inline autosuggest: Up/Down cycles through multiple ghost text
+        // candidates; Right arrow accepts the currently shown suggestion.
+        // Only active at the shell prompt when the cursor is at the end of
+        // the typed input so shell history navigation still works elsewhere.
+        if self.terminal_accepts_input()
+            && autosuggest_mode_available(mode)
+            && self.autosuggest_prompt_active()
+            && self.input_tracker.state().is_cursor_at_end
+            && !self.ghost_text_candidates.is_empty()
+            && !modifiers.platform
+            && !modifiers.control
+            && !modifiers.alt
+            && !modifiers.shift
+        {
+            match key {
+                "down" | "arrowdown" => {
+                    let len = self.ghost_text_candidates.len();
+                    self.ghost_text_index = (self.ghost_text_index + 1) % len;
+                    cx.notify();
+                    return true;
+                }
+                "up" | "arrowup" => {
+                    let len = self.ghost_text_candidates.len();
+                    self.ghost_text_index = if self.ghost_text_index == 0 {
+                        len - 1
+                    } else {
+                        self.ghost_text_index - 1
+                    };
+                    cx.notify();
+                    return true;
+                }
+                "right" | "arrowright" => {
+                    let index = self
+                        .ghost_text_index
+                        .min(self.ghost_text_candidates.len() - 1);
+                    if let Some(ghost) = self.ghost_text_candidates.get(index).cloned() {
+                        self.send_user_protocol_bytes(ghost.as_bytes(), cx);
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
         if let Some(sequence) = configurable_key_escape_sequence(
             &event.keystroke,
             &mode,

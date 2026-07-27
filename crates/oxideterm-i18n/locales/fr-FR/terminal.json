@@ -350,7 +350,9 @@
       "save": "Ajouter la tâche",
       "saved": "Saisie planifiée ajoutée",
       "save_failed": "Impossible d’ajouter la saisie planifiée",
-      "command_required": "Saisissez le texte à envoyer"
+      "command_required": "Saisissez le texte à envoyer",
+      "at_time": "À une heure donnée",
+      "command_input_placeholder": "Saisissez la commande à planifier"
     },
     "privilege_helper": {
       "fill": "Remplir le mot de passe",

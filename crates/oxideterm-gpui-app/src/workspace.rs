@@ -301,7 +301,9 @@ use oxideterm_gpui_settings_view::{
     ActiveSurface, SettingsInput, SettingsSelect, SettingsSlider, SettingsTab,
 };
 use oxideterm_gpui_ui::select::{OverlayAnchor, SelectAnchorId, select_anchor_probe};
-use oxideterm_gpui_ui::text_input::{TextInputAnchor, TextInputAnchorId};
+use oxideterm_gpui_ui::text_input::{
+    TextInputAnchor, TextInputAnchorId, TextInputView, text_input, text_input_anchor_probe,
+};
 use oxideterm_gpui_ui::typography::{
     css_font_family_head as settings_css_font_family_head, gpui_font_family_name,
     tauri_ui_font_family as settings_ui_font_family,

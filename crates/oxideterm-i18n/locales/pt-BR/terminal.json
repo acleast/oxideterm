@@ -350,7 +350,9 @@
       "save": "Adicionar tarefa",
       "saved": "Entrada agendada adicionada",
       "save_failed": "Não foi possível adicionar a entrada agendada",
-      "command_required": "Digite o texto a enviar"
+      "command_required": "Digite o texto a enviar",
+      "at_time": "Em um horário",
+      "command_input_placeholder": "Digite o comando para agendar"
     },
     "privilege_helper": {
       "fill": "Preencher senha",

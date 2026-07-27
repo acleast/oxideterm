@@ -350,7 +350,9 @@
       "save": "添加任务",
       "saved": "已添加定时输入",
       "save_failed": "添加定时输入失败",
-      "command_required": "请输入要发送的内容"
+      "command_required": "请输入要发送的内容",
+      "at_time": "指定时间",
+      "command_input_placeholder": "输入要定时发送的命令"
     },
     "privilege_helper": {
       "fill": "填充密码",

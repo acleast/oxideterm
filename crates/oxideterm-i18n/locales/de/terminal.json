@@ -350,7 +350,9 @@
       "save": "Aufgabe hinzufügen",
       "saved": "Geplante Eingabe hinzugefügt",
       "save_failed": "Geplante Eingabe konnte nicht hinzugefügt werden",
-      "command_required": "Text zum Senden eingeben"
+      "command_required": "Text zum Senden eingeben",
+      "at_time": "Zu einer Uhrzeit",
+      "command_input_placeholder": "Zu planenden Befehl eingeben"
     },
     "privilege_helper": {
       "fill": "Passwort einfügen",

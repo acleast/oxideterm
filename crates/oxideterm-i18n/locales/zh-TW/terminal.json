@@ -350,7 +350,9 @@
       "save": "新增任務",
       "saved": "已新增排程輸入",
       "save_failed": "無法新增排程輸入",
-      "command_required": "請輸入要傳送的內容"
+      "command_required": "請輸入要傳送的內容",
+      "at_time": "指定時間",
+      "command_input_placeholder": "輸入要定時發送的命令"
     },
     "privilege_helper": {
       "fill": "填入密碼",

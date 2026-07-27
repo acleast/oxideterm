@@ -350,7 +350,9 @@
       "save": "Añadir tarea",
       "saved": "Entrada programada añadida",
       "save_failed": "No se pudo añadir la entrada programada",
-      "command_required": "Introduce el texto que se enviará"
+      "command_required": "Introduce el texto que se enviará",
+      "at_time": "A una hora",
+      "command_input_placeholder": "Introduce el comando que se programará"
     },
     "privilege_helper": {
       "fill": "Rellenar contraseña",

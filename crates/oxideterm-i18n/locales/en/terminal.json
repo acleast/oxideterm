@@ -350,7 +350,9 @@
       "save": "Add task",
       "saved": "Scheduled input added",
       "save_failed": "Could not add scheduled input",
-      "command_required": "Enter text to send"
+      "command_required": "Enter text to send",
+      "at_time": "At Time",
+      "command_input_placeholder": "Enter command to schedule"
     },
     "privilege_helper": {
       "fill": "Fill password",

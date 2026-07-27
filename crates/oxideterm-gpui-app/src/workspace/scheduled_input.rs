@@ -6,6 +6,7 @@ use chrono::{
 };
 use oxideterm_gpui_terminal::TerminalNoticeVariant;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use super::*;
 
@@ -18,14 +19,15 @@ const MINUTES_PER_DAY: i32 = 24 * 60;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScheduledInputRepeat {
     Once,
+    OnceAt,
     Daily,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct ScheduledInputTask {
     id: Uuid,
     session_id: TerminalSessionId,
-    command: String,
+    command: Zeroizing<String>,
     repeat: ScheduledInputRepeat,
     daily_minute: Option<u16>,
     next_run_at: DateTime<Utc>,
@@ -34,11 +36,13 @@ struct ScheduledInputTask {
 }
 
 pub(super) struct ScheduledInputState {
-    open: bool,
+    pub(super) open: bool,
     target_session_id: Option<TerminalSessionId>,
     repeat: ScheduledInputRepeat,
     once_delay_minutes: i64,
     daily_minute: u16,
+    pub(super) command_draft: Zeroizing<String>,
+    pub(super) command_focused: bool,
     tasks: Vec<ScheduledInputTask>,
     polling: bool,
 }
@@ -52,6 +56,8 @@ impl ScheduledInputState {
             repeat: ScheduledInputRepeat::Daily,
             once_delay_minutes: 5,
             daily_minute: (next_hour.hour() * 60) as u16,
+            command_draft: Zeroizing::new(String::new()),
+            command_focused: false,
             tasks: Vec::new(),
             polling: false,
         }
@@ -90,6 +96,8 @@ impl WorkspaceApp {
         if self.scheduled_input.open {
             self.scheduled_input.open = false;
             self.scheduled_input.target_session_id = None;
+            self.scheduled_input.command_focused = false;
+            self.scheduled_input.command_draft = Zeroizing::new(String::new());
             cx.notify();
             return;
         }
@@ -101,6 +109,10 @@ impl WorkspaceApp {
         };
         self.scheduled_input.target_session_id = Some(session_id);
         self.scheduled_input.open = true;
+        self.scheduled_input.command_draft =
+            Zeroizing::new(self.terminal_command_bar_draft.clone());
+        self.scheduled_input.command_focused = true;
+        self.terminal_command_bar_focused = false;
         self.terminal_command_suggestions_open = false;
         self.close_terminal_quick_commands_popover();
         cx.notify();
@@ -124,7 +136,7 @@ impl WorkspaceApp {
         cx.notify();
     }
 
-    fn add_scheduled_input_task(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn add_scheduled_input_task(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self.scheduled_input.target_session_id else {
             return;
         };
@@ -136,10 +148,14 @@ impl WorkspaceApp {
             );
             return;
         }
-        let command = self
-            .terminal_command_bar_draft
-            .trim_end_matches(['\r', '\n'])
-            .to_string();
+        // Scheduled command text may contain credentials. Keep the retained
+        // task and editable draft zeroizing, and never include either in logs.
+        let command = Zeroizing::new(
+            self.scheduled_input
+                .command_draft
+                .trim_end_matches(['\r', '\n'])
+                .to_string(),
+        );
         if command.trim().is_empty() {
             self.push_command_palette_toast(
                 self.i18n.t("terminal.scheduled_input.command_required"),
@@ -163,6 +179,18 @@ impl WorkspaceApp {
                 None,
                 now + chrono::Duration::minutes(self.scheduled_input.once_delay_minutes),
             ),
+            ScheduledInputRepeat::OnceAt => {
+                let minute = self.scheduled_input.daily_minute;
+                let Some(next) = next_daily_occurrence(minute, now) else {
+                    self.push_command_palette_toast(
+                        self.i18n.t("terminal.scheduled_input.save_failed"),
+                        None,
+                        TerminalNoticeVariant::Error,
+                    );
+                    return;
+                };
+                (Some(minute), next)
+            }
             ScheduledInputRepeat::Daily => {
                 let minute = self.scheduled_input.daily_minute;
                 let Some(next) = next_daily_occurrence(minute, now) else {
@@ -192,6 +220,7 @@ impl WorkspaceApp {
             None,
             TerminalNoticeVariant::Success,
         );
+        self.scheduled_input.command_draft = Zeroizing::new(String::new());
         cx.notify();
     }
 
@@ -265,7 +294,7 @@ impl WorkspaceApp {
             }
             let completed_at = Utc::now();
             match self.scheduled_input.tasks[index].repeat {
-                ScheduledInputRepeat::Once => {
+                ScheduledInputRepeat::Once | ScheduledInputRepeat::OnceAt => {
                     self.scheduled_input.tasks.remove(index);
                 }
                 ScheduledInputRepeat::Daily => {
@@ -303,12 +332,9 @@ impl WorkspaceApp {
             })
             .unwrap_or_default();
         let tasks_empty = tasks.is_empty();
-        let command = self.terminal_command_bar_draft.trim();
-        let command_label = if command.is_empty() {
-            self.i18n.t("terminal.scheduled_input.command_placeholder")
-        } else {
-            command.to_string()
-        };
+        let command_placeholder = self
+            .i18n
+            .t("terminal.scheduled_input.command_input_placeholder");
         let once_label = format!(
             "{} {} min",
             self.i18n.t("terminal.scheduled_input.run_in"),
@@ -320,6 +346,11 @@ impl WorkspaceApp {
             let task_id = task.id;
             let schedule = match task.repeat {
                 ScheduledInputRepeat::Once => self.i18n.t("terminal.scheduled_input.once"),
+                ScheduledInputRepeat::OnceAt => format!(
+                    "{} {}",
+                    self.i18n.t("terminal.scheduled_input.at_time"),
+                    format_daily_minute(task.daily_minute.unwrap_or_default())
+                ),
                 ScheduledInputRepeat::Daily => format!(
                     "{} {}",
                     self.i18n.t("terminal.scheduled_input.daily"),
@@ -348,7 +379,12 @@ impl WorkspaceApp {
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
-                            .child(div().truncate().text_size(px(12.0)).child(task.command))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(12.0))
+                                    .child(task.command.as_str().to_string()),
+                            )
                             .child(
                                 div()
                                     .text_size(px(10.0))
@@ -446,20 +482,66 @@ impl WorkspaceApp {
             )
             .child(
                 div()
+                    .id("scheduled-input-command")
                     .rounded(px(self.tokens.radii.md))
                     .border_1()
-                    .border_color(rgb(theme.border))
+                    .border_color(if self.scheduled_input.command_focused {
+                        rgba((theme.accent << 8) | 0x73)
+                    } else {
+                        rgb(theme.border)
+                    })
                     .bg(rgb(theme.bg))
                     .px(px(8.0))
                     .py(px(6.0))
-                    .font_family(settings_mono_font_family(self.settings_store.settings()))
-                    .text_size(px(12.0))
-                    .text_color(if command.is_empty() {
-                        rgb(theme.text_muted)
-                    } else {
-                        rgb(theme.text)
-                    })
-                    .child(command_label),
+                    .min_h(px(32.0))
+                    .cursor_text()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            this.scheduled_input.command_focused = true;
+                            this.ime_marked_text = None;
+                            window.focus(&this.focus_handle, cx);
+                            this.begin_ime_selection_from_mouse_down(
+                                WorkspaceImeTarget::ScheduledInput,
+                                event,
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(
+                        cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                            this.update_ime_selection_drag_from_mouse_move(event, window, cx);
+                        }),
+                    )
+                    .child(text_input_anchor_probe(
+                        WorkspaceImeTarget::ScheduledInput.anchor_id(),
+                        text_input(
+                            &self.tokens,
+                            TextInputView {
+                                value: self.scheduled_input.command_draft.as_str(),
+                                placeholder: command_placeholder,
+                                focused: self.scheduled_input.command_focused,
+                                caret_visible: self.new_connection_caret_visible,
+                                secret: false,
+                                selected_all: false,
+                                selected_range: self.ime_selected_range_for_target(
+                                    WorkspaceImeTarget::ScheduledInput,
+                                ),
+                                marked_text: self
+                                    .marked_text_for_target(WorkspaceImeTarget::ScheduledInput),
+                            },
+                        ),
+                        {
+                            let workspace = cx.entity();
+                            move |anchor, _window, cx| {
+                                let _ = workspace.update(cx, |this, cx| {
+                                    this.update_text_input_anchor(anchor, cx);
+                                });
+                            }
+                        },
+                    )),
             )
             .child(
                 div()
@@ -475,6 +557,14 @@ impl WorkspaceApp {
                         cx,
                     ))
                     .child(self.scheduled_input_choice_button(
+                        self.i18n.t("terminal.scheduled_input.at_time"),
+                        repeat == ScheduledInputRepeat::OnceAt,
+                        move |this, cx| {
+                            this.set_scheduled_input_repeat(ScheduledInputRepeat::OnceAt, cx)
+                        },
+                        cx,
+                    ))
+                    .child(self.scheduled_input_choice_button(
                         self.i18n.t("terminal.scheduled_input.daily"),
                         repeat == ScheduledInputRepeat::Daily,
                         move |this, cx| {
@@ -483,20 +573,25 @@ impl WorkspaceApp {
                         cx,
                     )),
             )
-            .child(if repeat == ScheduledInputRepeat::Once {
-                self.render_scheduled_input_stepper(
+            .child(match repeat {
+                ScheduledInputRepeat::Once => self.render_scheduled_input_stepper(
                     once_label,
                     |this, cx| this.adjust_scheduled_input_once_delay(-5, cx),
                     |this, cx| this.adjust_scheduled_input_once_delay(5, cx),
                     cx,
-                )
-            } else {
-                self.render_scheduled_input_stepper(
+                ),
+                ScheduledInputRepeat::OnceAt => self.render_scheduled_input_stepper(
+                    daily_label,
+                    |this, cx| this.adjust_scheduled_input_daily_time(-1, cx),
+                    |this, cx| this.adjust_scheduled_input_daily_time(1, cx),
+                    cx,
+                ),
+                ScheduledInputRepeat::Daily => self.render_scheduled_input_stepper(
                     daily_label,
                     |this, cx| this.adjust_scheduled_input_daily_time(-15, cx),
                     |this, cx| this.adjust_scheduled_input_daily_time(15, cx),
                     cx,
-                )
+                ),
             })
             .child(
                 div()

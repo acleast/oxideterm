@@ -42,6 +42,7 @@ pub(super) enum WorkspaceImeTarget {
     ShortcutsModalSearch,
     Search,
     TerminalCommandBar,
+    ScheduledInput,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
     TerminalProjectSearch,
@@ -119,6 +120,7 @@ impl WorkspaceImeTarget {
             Self::ShortcutsModalSearch => 5,
             Self::Search => 1,
             Self::TerminalCommandBar => 2,
+            Self::ScheduledInput => 4_500,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
             Self::TerminalProjectSearch => 19,
@@ -672,6 +674,10 @@ impl WorkspaceApp {
             return Some(WorkspaceImeTarget::TerminalCommandBar);
         }
 
+        if self.scheduled_input.open && self.scheduled_input.command_focused {
+            return Some(WorkspaceImeTarget::ScheduledInput);
+        }
+
         if self
             .terminal_cast_player
             .as_ref()
@@ -1087,6 +1093,7 @@ impl WorkspaceApp {
     ) -> Pixels {
         match target {
             WorkspaceImeTarget::TerminalCommandBar
+            | WorkspaceImeTarget::ScheduledInput
             | WorkspaceImeTarget::AiChatInput
             | WorkspaceImeTarget::AiMessageEdit => px(20.0),
             WorkspaceImeTarget::Settings(input) if input.accepts_newline() => {
@@ -1279,6 +1286,7 @@ impl WorkspaceApp {
     fn ime_target_font_family(&self, target: WorkspaceImeTarget) -> SharedString {
         match target {
             WorkspaceImeTarget::TerminalCommandBar
+            | WorkspaceImeTarget::ScheduledInput
             | WorkspaceImeTarget::Settings(
                 SettingsInput::TerminalCommandBarFocusHandoff
                 | SettingsInput::TerminalCommandSpecsJson
@@ -1322,6 +1330,10 @@ impl WorkspaceApp {
             WorkspaceImeTarget::TerminalCommandBar => self
                 .terminal_command_bar_focused
                 .then(|| self.terminal_command_bar_draft.clone()),
+            WorkspaceImeTarget::ScheduledInput => self
+                .scheduled_input
+                .open
+                .then(|| self.scheduled_input.command_draft.as_str().to_string()),
             WorkspaceImeTarget::TerminalCwdSearch => self
                 .terminal_cwd_picker
                 .open
@@ -1736,6 +1748,7 @@ impl WorkspaceApp {
             WorkspaceImeTarget::AiChatInput
                 | WorkspaceImeTarget::AiMessageEdit
                 | WorkspaceImeTarget::TerminalCommandBar
+                | WorkspaceImeTarget::ScheduledInput
         ) && !keystroke.modifiers.shift
         {
             return false;
@@ -2083,6 +2096,17 @@ impl WorkspaceApp {
                     );
                     self.terminal_command_suggestions_open = false;
                     self.terminal_command_suggestion_highlighted = None;
+                    self.new_connection_caret_visible = true;
+                    cx.notify();
+                }
+            }
+            WorkspaceImeTarget::ScheduledInput => {
+                if self.scheduled_input.open {
+                    replace_utf16(
+                        &mut self.scheduled_input.command_draft,
+                        replacement_range,
+                        text,
+                    );
                     self.new_connection_caret_visible = true;
                     cx.notify();
                 }
@@ -2631,6 +2655,7 @@ fn ime_target_accepts_newline(target: WorkspaceImeTarget) -> bool {
     match target {
         WorkspaceImeTarget::ReadOnlyText(_) => true,
         WorkspaceImeTarget::TerminalCommandBar => true,
+        WorkspaceImeTarget::ScheduledInput => true,
         WorkspaceImeTarget::Settings(input) => input.accepts_newline(),
         WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit => true,
         WorkspaceImeTarget::SessionManager(SessionManagerInput::OxideExportDescription) => true,

@@ -350,7 +350,9 @@
       "save": "タスクを追加",
       "saved": "予約入力を追加しました",
       "save_failed": "予約入力を追加できませんでした",
-      "command_required": "送信する文字列を入力してください"
+      "command_required": "送信する文字列を入力してください",
+      "at_time": "時刻指定",
+      "command_input_placeholder": "スケジュールするコマンドを入力"
     },
     "privilege_helper": {
       "fill": "パスワード入力",

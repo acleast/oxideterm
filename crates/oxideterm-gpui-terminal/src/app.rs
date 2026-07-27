@@ -290,6 +290,8 @@ pub struct TerminalPane {
     selected_command_mark_id: Option<String>,
     command_mark_id_aliases: HashMap<String, String>,
     input_tracker: TerminalInputTracker,
+    ghost_text_candidates: Vec<Zeroizing<String>>,
+    ghost_text_index: usize,
     privilege_prompt_tracker: PrivilegePromptTracker,
     command_fact_ledger: CommandFactLedger,
     recorder: Option<TerminalRecorder>,
@@ -419,6 +421,10 @@ fn command_mark_ui_available(enabled: bool, mode: TermMode) -> bool {
     // Command marks describe normal-screen scrollback. A full-screen application or terminal
     // mouse protocol owns the active grid, so stale shell ranges must not remain interactive.
     enabled && !mode.contains(TermMode::ALT_SCREEN) && !mode.intersects(TermMode::MOUSE_MODE)
+}
+
+fn autosuggest_mode_available(mode: TermMode) -> bool {
+    !mode.contains(TermMode::ALT_SCREEN) && !mode.intersects(TermMode::MOUSE_MODE)
 }
 
 include!("app_recording.rs");
@@ -674,6 +680,8 @@ impl TerminalPane {
             selected_command_mark_id: None,
             command_mark_id_aliases: HashMap::new(),
             input_tracker: TerminalInputTracker::default(),
+            ghost_text_candidates: Vec::new(),
+            ghost_text_index: 0,
             privilege_prompt_tracker: PrivilegePromptTracker::default(),
             command_fact_ledger: CommandFactLedger::default(),
             recorder: None,
@@ -934,9 +942,54 @@ impl TerminalPane {
             .autosuggest_ghost_text(&self.input_tracker.state())
     }
 
+    fn autosuggest_prompt_active(&self) -> bool {
+        let mode = self.terminal.lock().mode();
+        if !autosuggest_mode_available(mode) {
+            return false;
+        }
+        if self.shell_integration_status.detected {
+            return matches!(
+                self.shell_integration_status.state,
+                ShellIntegrationLifecycleState::Prompt | ShellIntegrationLifecycleState::Command
+            );
+        }
+
+        let state = self.input_tracker.state();
+        let query = state.value.trim_start();
+        if query.is_empty() || !state.is_cursor_at_end {
+            return false;
+        }
+        let Some(line) = self.line_text(self.absolute_cursor_line()) else {
+            return false;
+        };
+        let Some(query_start) = line.rfind(query) else {
+            return false;
+        };
+        let prompt = line[..query_start].trim_end();
+        prompt
+            .chars()
+            .last()
+            .is_some_and(|marker| matches!(marker, '$' | '#' | '%'))
+    }
+
     fn terminal_ghost_text(&self) -> Option<String> {
-        // Keep the terminal grid shell-owned; OxideTerm suggestions belong to the command bar.
-        self.privilege_prompt_inline_hint.clone()
+        // Show privilege prompt hints first, then fall back to fish-style
+        // inline command suggestions from the autosuggest command history.
+        // Up/Down cycles through multiple candidates; Right arrow accepts.
+        if let Some(hint) = &self.privilege_prompt_inline_hint {
+            return Some(hint.clone());
+        }
+        if self.terminal_accepts_input() && self.autosuggest_prompt_active() {
+            let index = self
+                .ghost_text_index
+                .min(self.ghost_text_candidates.len().saturating_sub(1));
+            return self
+                .ghost_text_candidates
+                .get(index)
+                .map(|text| text.as_str().to_string())
+                .filter(|text| !text.is_empty());
+        }
+        None
     }
 
     pub fn privilege_prompt_snapshot(&self) -> Option<PrivilegePromptSnapshot> {
@@ -1118,6 +1171,8 @@ impl TerminalPane {
         self.selected_command_mark_id = None;
         self.command_mark_id_aliases.clear();
         self.input_tracker.reset();
+        self.ghost_text_candidates.clear();
+        self.ghost_text_index = 0;
         self.privilege_prompt_tracker = PrivilegePromptTracker::default();
         self.command_fact_ledger = CommandFactLedger::default();
         self.last_pty_resize = Some(resize);
@@ -1342,6 +1397,8 @@ impl TerminalPane {
         if result.is_ok() {
             self.restore_live_output_after_user_input();
             self.input_tracker.reset();
+            self.ghost_text_candidates.clear();
+            self.ghost_text_index = 0;
             self.last_terminal_input = Instant::now();
             self.reset_cursor_blink();
             cx.notify();
@@ -2154,10 +2211,19 @@ impl TerminalPane {
         bytes: &[u8],
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let command = self.input_tracker.apply_bytes(bytes)?;
-        self.command_fact_ledger
-            .record_runtime_autosuggest_command(&command);
-        Some(command)
+        let command = self.input_tracker.apply_bytes(bytes);
+        if let Some(command) = command.as_deref() {
+            self.command_fact_ledger
+                .record_runtime_autosuggest_command(command);
+        }
+        self.ghost_text_candidates = self
+            .command_fact_ledger
+            .autosuggest_candidates(&self.input_tracker.state(), 8)
+            .into_iter()
+            .map(Zeroizing::new)
+            .collect();
+        self.ghost_text_index = 0;
+        command
     }
 
     fn observe_current_directory_submitted_command(
@@ -2514,6 +2580,13 @@ mod tests {
             true,
             TermMode::MOUSE_REPORT_CLICK
         ));
+    }
+
+    #[test]
+    fn autosuggest_is_hidden_while_an_interactive_surface_owns_input() {
+        assert!(autosuggest_mode_available(TermMode::empty()));
+        assert!(!autosuggest_mode_available(TermMode::ALT_SCREEN));
+        assert!(!autosuggest_mode_available(TermMode::MOUSE_MODE));
     }
 
     #[test]

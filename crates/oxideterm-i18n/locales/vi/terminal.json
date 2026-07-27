@@ -350,7 +350,9 @@
       "save": "Thêm tác vụ",
       "saved": "Đã thêm nội dung nhập theo lịch",
       "save_failed": "Không thể thêm nội dung nhập theo lịch",
-      "command_required": "Nhập nội dung cần gửi"
+      "command_required": "Nhập nội dung cần gửi",
+      "at_time": "Vào giờ",
+      "command_input_placeholder": "Nhập lệnh cần lên lịch"
     },
     "privilege_helper": {
       "fill": "Điền mật khẩu",

@@ -350,7 +350,9 @@
       "save": "작업 추가",
       "saved": "예약 입력을 추가했습니다",
       "save_failed": "예약 입력을 추가하지 못했습니다",
-      "command_required": "전송할 텍스트를 입력하세요"
+      "command_required": "전송할 텍스트를 입력하세요",
+      "at_time": "시간 지정",
+      "command_input_placeholder": "예약할 명령 입력"
     },
     "privilege_helper": {
       "fill": "비밀번호 입력",

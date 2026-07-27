@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use oxideterm_terminal::{
     TerminalCommandMark, TerminalCommandMarkClosedBy, TerminalCommandMarkConfidence,
-    TerminalCommandMarkDetectionSource,
+    TerminalCommandMarkDetectionSource, is_likely_secret_terminal_command,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,9 +97,38 @@ impl CommandFactLedger {
             .filter(|suffix| !suffix.is_empty())
     }
 
+    pub(crate) fn autosuggest_candidates(
+        &self,
+        state: &TerminalAutosuggestInputState,
+        limit: usize,
+    ) -> Vec<String> {
+        let query = state.value.trim_start();
+        if query.is_empty() || !state.is_cursor_at_end {
+            return Vec::new();
+        }
+        let mut seen = std::collections::HashSet::new();
+        self.autosuggest_records
+            .iter()
+            .rev()
+            .filter_map(|record| {
+                if record.command.starts_with(query) && record.command != query {
+                    let suffix = record.command[query.len()..].to_string();
+                    if !suffix.is_empty() && seen.insert(suffix.clone()) {
+                        Some(suffix)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .take(limit)
+            .collect()
+    }
+
     pub(crate) fn record_runtime_autosuggest_command(&mut self, command: &str) {
         let command = command.trim();
-        if command.is_empty() {
+        if command.is_empty() || is_likely_secret_terminal_command(command) {
             return;
         }
         let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -328,6 +357,16 @@ mod tests {
     }
 
     #[test]
+    fn command_fact_ledger_excludes_secret_bearing_autosuggest_commands() {
+        let mut ledger = CommandFactLedger::default();
+
+        ledger.record_runtime_autosuggest_command("TOKEN=top-secret deploy");
+        ledger.record_runtime_autosuggest_command("curl --password top-secret example.test");
+
+        assert!(ledger.autosuggest_records().is_empty());
+    }
+
+    #[test]
     fn command_fact_ledger_exposes_prefix_autosuggest_ghost_text() {
         let mut ledger = CommandFactLedger::default();
         ledger.record_runtime_autosuggest_command("git status");
@@ -356,6 +395,32 @@ mod tests {
                 is_cursor_at_end: false,
             }),
             None
+        );
+    }
+
+    #[test]
+    fn command_fact_ledger_returns_recent_unique_autosuggest_candidates() {
+        let mut ledger = CommandFactLedger::default();
+        ledger.record_runtime_autosuggest_command("git status");
+        ledger.record_runtime_autosuggest_command("git stash list");
+        ledger.record_runtime_autosuggest_command("git stage README.md");
+
+        let candidates = ledger.autosuggest_candidates(
+            &TerminalAutosuggestInputState {
+                value: "git sta".to_string(),
+                cursor_index: 7,
+                is_cursor_at_end: true,
+            },
+            8,
+        );
+
+        assert_eq!(
+            candidates,
+            vec![
+                "ge README.md".to_string(),
+                "sh list".to_string(),
+                "tus".to_string(),
+            ]
         );
     }
 }

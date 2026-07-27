@@ -887,6 +887,13 @@ impl WorkspaceApp {
             return;
         }
 
+        if self.scheduled_input.open
+            && self.scheduled_input.command_focused
+            && self.handle_scheduled_input_key(event, window, cx)
+        {
+            return;
+        }
+
         let close_panel_shortcut = crate::keybindings::keystroke_matches_action(
             &event.keystroke,
             "terminal.closePanel",
@@ -1697,6 +1704,33 @@ impl WorkspaceApp {
         let _ = cx.update_window(window.window_handle(), move |_root, _window, app| {
             app.bind_keys(bindings);
         });
+    }
+
+    fn handle_scheduled_input_key(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = event.keystroke.key.as_str();
+        let modifiers = &event.keystroke.modifiers;
+        match key {
+            "enter"
+                if !modifiers.shift
+                    && !modifiers.platform
+                    && !modifiers.alt
+                    && !modifiers.control =>
+            {
+                self.add_scheduled_input_task(cx);
+                true
+            }
+            "escape" if !modifiers.platform => {
+                self.scheduled_input.command_focused = false;
+                cx.notify();
+                true
+            }
+            _ => false,
+        }
     }
 
     pub(super) fn handle_terminal_command_bar_key(
