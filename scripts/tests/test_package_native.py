@@ -103,7 +103,7 @@ class WindowsInstallerScriptTests(unittest.TestCase):
 
         self.assertEqual(script.count(display_icon_entry), 2)
 
-    def test_stable_installer_detects_tauri_current_user_install(self) -> None:
+    def test_stable_installer_does_not_silently_upgrade_legacy_install(self) -> None:
         identity = package_native.release_identity("v2.0.0", "2.0.0")
         script = package_native.windows_installer_script(
             binary=Path("oxideterm-native.exe"),
@@ -114,17 +114,10 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             icon_path=Path(r"C:\icons\icon.ico"),
         )
 
-        self.assertIn('$LOCALAPPDATA\\OxideTerm\\oxideterm.exe', script)
-        self.assertIn('StrCpy $INSTDIR "$LOCALAPPDATA\\OxideTerm"', script)
-        self.assertIn('StrCpy $IsOxideUpdate "1"', script)
-        self.assertIn('StrCpy $IsLegacyUpgrade "1"', script)
-        self.assertIn('SetSilent silent', script)
-        self.assertIn(
-            'CreateShortcut "$SMPROGRAMS\\OxideTerm\\OxideTerm.lnk" '
-            '"$INSTDIR\\oxideterm-native.exe"',
-            script,
-        )
-        self.assertIn('IfFileExists "$DESKTOP\\OxideTerm.lnk"', script)
+        self.assertNotIn('$LOCALAPPDATA\\OxideTerm\\oxideterm.exe', script)
+        self.assertNotIn('IsLegacyUpgrade', script)
+        self.assertEqual(script.count('SetSilent silent'), 1)
+        self.assertIn('IfErrors normal_install_mode oxide_update_mode', script)
 
 
 class MacosBridgeArchiveTests(unittest.TestCase):
