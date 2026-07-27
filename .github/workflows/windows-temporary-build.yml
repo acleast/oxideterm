@@ -89,7 +89,7 @@ jobs:
           set -euo pipefail
           base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-", 1)[0])')"
           version="${base_version}-windows-test.${GITHUB_RUN_NUMBER}"
-          python3 scripts/release/bump_version.py "${version}"
+          python3 scripts/release/bump_version.py "${version}" --no-lock
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Package Windows x64 app
