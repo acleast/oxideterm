@@ -1013,6 +1013,9 @@ def windows_installer_script(
     return f"""
 Unicode true
 RequestExecutionLevel user
+!define MUI_ICON "{nsis_path(icon_path)}"
+!define MUI_UNICON "{nsis_path(icon_path)}"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\{binary.name}"
 !include MUI2.nsh
 !include FileFunc.nsh
 !include LogicLib.nsh

@@ -48,6 +48,13 @@ class WindowsInstallerScriptTests(unittest.TestCase):
         self.assertIn("WriteRegStr HKCU", script)
         self.assertIn('VIProductVersion "1.2.0.0"', script)
         self.assertIn('"ProductVersion" "1.2.0-gpui-preview.2"', script)
+        icon_path = package_native.nsis_path(Path(r"C:\icons\icon.ico"))
+        self.assertIn(f'!define MUI_ICON "{icon_path}"', script)
+        self.assertIn(f'!define MUI_UNICON "{icon_path}"', script)
+        self.assertIn(
+            r'!define MUI_FINISHPAGE_RUN "$INSTDIR\oxideterm-native.exe"',
+            script,
+        )
         self.assertIn("normal_install:", script)
         self.assertIn("!insertmacro MUI_PAGE_COMPONENTS", script)
         self.assertIn('Section "Application Files"', script)
