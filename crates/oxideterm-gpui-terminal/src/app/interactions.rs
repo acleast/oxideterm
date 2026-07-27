@@ -14,7 +14,8 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     FreeTypeDragAction, FreeTypeDragState, PendingTerminalEditorClipboard, ScrollbarDrag,
-    ScrollbarGeometry, TerminalContextMenu, TerminalPane, command_mark_ui_available,
+    ScrollbarGeometry, TerminalContextMenu, TerminalPane, autosuggest_mode_available,
+    command_mark_ui_available,
 };
 use crate::command_facts::TerminalAutosuggestInputState;
 use crate::terminal_ui::*;
