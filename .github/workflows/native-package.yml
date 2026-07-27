@@ -13,8 +13,6 @@ on:
         default: false
         type: boolean
   push:
-    branches:
-      - dev2
     tags:
       - 'v*'
       - 'native-v*'
