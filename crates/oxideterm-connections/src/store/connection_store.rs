@@ -196,9 +196,11 @@ impl ConnectionStore {
             .map(|conn| conn.options.clone())
             .unwrap_or_default();
         // Tauri preserves saved per-connection SSH options on edit and only
-        // overwrites the UI-exposed agent-forwarding bit. This keeps imported
+        // overwrites fields carried by the current form. This keeps imported
         // Tauri config tails such as compression/term_type from being dropped.
         options.agent_forwarding = request.agent_forwarding;
+        options.identity_agent = request.identity_agent;
+        options.agent_forwarding_socket = request.agent_forwarding_socket;
         options.legacy_ssh_compatibility = request.legacy_ssh_compatibility;
         let auth = self.materialize_auth(request.auth, existing_auth.as_ref())?;
         let proxy_chain = self.materialize_proxy_chain(request.proxy_chain)?;
@@ -242,6 +244,7 @@ impl ConnectionStore {
             },
             updated_at: Some(now),
             color: request.color,
+            icon_background_color: request.icon_background_color,
             icon,
             tags: request.tags,
             post_connect_command: None,
@@ -372,14 +375,32 @@ impl ConnectionStore {
     }
 
     pub fn move_to_group(&mut self, ids: &[String], group: Option<&str>) -> Result<usize> {
+        self.move_session_assets_to_group(ids, &[], group)
+    }
+
+    /// Moves a mixed Session Manager selection in one metadata save.
+    pub fn move_session_assets_to_group(
+        &mut self,
+        connection_ids: &[String],
+        remote_desktop_ids: &[String],
+        group: Option<&str>,
+    ) -> Result<usize> {
         let group = normalize_optional_group_name(group)?;
-        let id_set = ids.iter().collect::<HashSet<_>>();
+        let connection_id_set = connection_ids.iter().collect::<HashSet<_>>();
+        let remote_desktop_id_set = remote_desktop_ids.iter().collect::<HashSet<_>>();
         let now = Utc::now();
         let mut updated = 0;
         for conn in &mut self.data.connections {
-            if id_set.contains(&conn.id) {
+            if connection_id_set.contains(&conn.id) {
                 conn.group = group.clone();
                 conn.updated_at = Some(now);
+                updated += 1;
+            }
+        }
+        for profile in &mut self.data.remote_desktop_profiles {
+            if remote_desktop_id_set.contains(&profile.id) {
+                profile.group = group.clone();
+                profile.updated_at = now;
                 updated += 1;
             }
         }
@@ -447,6 +468,9 @@ impl ConnectionStore {
 
         profile.name = request.name.trim().to_string();
         profile.group = group;
+        profile.icon = normalize_optional_text(request.icon);
+        profile.color = normalize_optional_text(request.color);
+        profile.icon_background_color = normalize_optional_text(request.icon_background_color);
         profile.port_path = request.port_path.trim().to_string();
         profile.baud_rate = request.baud_rate.unwrap_or(115_200);
         profile.data_bits = request.data_bits.unwrap_or(8);
@@ -528,6 +552,9 @@ impl ConnectionStore {
 
         profile.name = request.name.trim().to_string();
         profile.group = group;
+        profile.icon = normalize_optional_text(request.icon);
+        profile.color = normalize_optional_text(request.color);
+        profile.icon_background_color = normalize_optional_text(request.icon_background_color);
         profile.host = request.host.trim().to_string();
         profile.port = request.port;
         profile.connect_on_open = request.connect_on_open.unwrap_or(false);
@@ -594,9 +621,17 @@ impl ConnectionStore {
         let old_credential_ref = existing
             .as_ref()
             .and_then(|profile| profile.credential_ref.clone());
+        if request.clear_credential
+            && (request.credential.is_some() || request.credential_ref.is_some())
+        {
+            bail!("Cannot replace and clear a remote desktop credential in one update");
+        }
         let requested_credential_ref = normalize_optional_text(request.credential_ref);
-        let mut credential_ref =
-            requested_credential_ref.or_else(|| old_credential_ref.clone());
+        let mut credential_ref = if request.clear_credential {
+            None
+        } else {
+            requested_credential_ref.or_else(|| old_credential_ref.clone())
+        };
         if request.credential.is_some() && credential_ref.is_none() {
             credential_ref = Some(remote_desktop_credential_ref(&id));
         }
@@ -613,6 +648,9 @@ impl ConnectionStore {
         });
         profile.name = request.name.trim().to_string();
         profile.group = group.clone();
+        profile.icon = normalize_optional_text(request.icon);
+        profile.color = normalize_optional_text(request.color);
+        profile.icon_background_color = normalize_optional_text(request.icon_background_color);
         profile.protocol = request.protocol;
         profile.host = request.host.trim().to_string();
         profile.port = request.port;
@@ -1543,6 +1581,8 @@ impl ConnectionStore {
                     username: non_empty(hop.username.trim(), "Proxy username")?.to_string(),
                     auth: self.materialize_auth(hop.auth, None)?,
                     agent_forwarding: hop.agent_forwarding,
+                    identity_agent: hop.identity_agent,
+                    agent_forwarding_socket: hop.agent_forwarding_socket,
                     legacy_ssh_compatibility: hop.legacy_ssh_compatibility,
                 })
             })
@@ -1647,6 +1687,8 @@ impl ConnectionStore {
                 username: non_empty(hop.username.trim(), "Proxy username")?.to_string(),
                 auth: hop_auth,
                 agent_forwarding: hop.agent_forwarding,
+                identity_agent: hop.identity_agent,
+                agent_forwarding_socket: hop.agent_forwarding_socket,
                 legacy_ssh_compatibility: hop.legacy_ssh_compatibility,
             });
         }

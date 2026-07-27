@@ -85,7 +85,7 @@ use oxideterm_gpui_ui::{
         select_separator, select_trigger_with_focus_visible,
     },
     separator::{SeparatorOrientation, separator},
-    slider::{SliderView, slider},
+    slider::{SliderView, slider, slider_pointer_percent},
     text_input::{
         TextInputContentAlign, TextInputView, text_caret, text_input, text_input_anchor_probe,
         text_input_value_segments, text_input_with_content_align,
@@ -175,6 +175,7 @@ mod cli_companion;
 mod connections_page;
 mod controls;
 mod general_terminal_pages;
+pub(in crate::workspace) use general_terminal_pages::SETTINGS_TERMINAL_CUSTOM_FONT_INPUT_WIDTH;
 mod highlight;
 mod ide_page;
 mod local_terminal;

@@ -8,6 +8,7 @@ use oxideterm_settings::{
     TerminalBackspaceSequence, TerminalDeleteSequence, TerminalEncoding, UiDensity, UpdateChannel,
     UpdateProxyMode, UpdateProxyProtocol,
 };
+pub use oxideterm_settings_model::theme_display_name;
 use oxideterm_theme::BUILT_IN_THEMES;
 
 use crate::{SettingsBackgroundTabIcon, SettingsSlider};
@@ -271,20 +272,6 @@ pub fn background_tab_options() -> &'static [(&'static str, &'static str, Settin
     ]
 }
 
-pub fn theme_display_name(id: &str) -> String {
-    id.split(['-', '_'])
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 pub const OXIDE_THEME_IDS: &[&str] = &[
     "azurite",
     "bismuth",
@@ -532,6 +519,7 @@ pub fn settings_slider_anchor_id(slider: SettingsSlider) -> SelectAnchorId {
         SettingsSlider::AppearanceBorderRadius => {
             SelectAnchorId::SettingsAppearanceBorderRadiusSlider
         }
+        SettingsSlider::OnboardingBorderRadius => SelectAnchorId::OnboardingBorderRadiusSlider,
         SettingsSlider::VersionMigrationBorderRadius => {
             SelectAnchorId::VersionMigrationBorderRadiusSlider
         }
@@ -671,15 +659,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migration_border_radius_slider_has_a_dedicated_anchor() {
+    fn modal_border_radius_sliders_have_dedicated_anchors() {
         let settings_anchor = settings_slider_anchor_id(SettingsSlider::AppearanceBorderRadius);
+        let onboarding_anchor = settings_slider_anchor_id(SettingsSlider::OnboardingBorderRadius);
         let migration_anchor =
             settings_slider_anchor_id(SettingsSlider::VersionMigrationBorderRadius);
 
         assert_eq!(
+            onboarding_anchor,
+            SelectAnchorId::OnboardingBorderRadiusSlider
+        );
+        assert_eq!(
             migration_anchor,
             SelectAnchorId::VersionMigrationBorderRadiusSlider
         );
+        assert_ne!(onboarding_anchor, settings_anchor);
+        assert_ne!(onboarding_anchor, migration_anchor);
         assert_ne!(migration_anchor, settings_anchor);
     }
 

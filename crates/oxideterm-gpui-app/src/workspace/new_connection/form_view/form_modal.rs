@@ -19,6 +19,7 @@ impl WorkspaceApp {
         let prompt_mode = mode == NewConnectionFormMode::SavedConnectionPrompt;
         let duplicate_mode = mode == NewConnectionFormMode::DuplicateTemplate;
         let edit_properties_mode = mode.submits_saved_connection_properties();
+        let remote_desktop_edit_mode = form.remote_desktop_profile_id.is_some();
         let drill_down_mode = self.drill_down_parent_node_id.is_some();
         let modal_max_height = f32::from(window.viewport_size().height)
             * self.tokens.metrics.modal_max_viewport_height_ratio;
@@ -55,8 +56,12 @@ impl WorkspaceApp {
         let remote_desktop_mode = remote_desktop_protocol.is_some();
         let ssh_submission_mode =
             !local_transport_mode && !remote_desktop_mode && !wsl_graphics_mode;
-        let shows_transport_selector =
-            !prompt_mode && !duplicate_mode && !edit_properties_mode && !drill_down_mode;
+        let shows_transport_selector = !prompt_mode
+            && !duplicate_mode
+            && !edit_properties_mode
+            && !remote_desktop_edit_mode
+            && !drill_down_mode;
+        let shows_icon_field = connection_icon_field_visible(mode, drill_down_mode, form.transport);
         let title = if drill_down_mode {
             self.i18n.t("ssh.drill_down.title")
         } else if prompt_mode {
@@ -66,7 +71,7 @@ impl WorkspaceApp {
         } else if duplicate_mode {
             self.i18n
                 .t("sessionManager.edit_properties.duplicate_title")
-        } else if edit_properties_mode {
+        } else if edit_properties_mode || remote_desktop_edit_mode {
             self.i18n.t("sessionManager.edit_properties.title")
         } else {
             self.i18n.t("ssh.form.title")
@@ -88,7 +93,7 @@ impl WorkspaceApp {
         } else if duplicate_mode {
             self.i18n
                 .t("sessionManager.edit_properties.duplicate_description")
-        } else if edit_properties_mode {
+        } else if edit_properties_mode || remote_desktop_edit_mode {
             self.i18n.t("sessionManager.edit_properties.description")
         } else if telnet_mode {
             self.i18n.t("modals.new_connection.telnet_description")
@@ -122,7 +127,9 @@ impl WorkspaceApp {
         {
             !form.host.trim().is_empty()
                 && !form.username.trim().is_empty()
-                && !form.password.is_empty()
+                && (remote_desktop_edit_mode
+                    || !form.password.is_empty()
+                    || form.saved_password_keychain_id.is_some())
                 && form.port.trim().parse::<u16>().is_ok_and(|port| port > 0)
         } else if remote_desktop_mode {
             !form.host.trim().is_empty()
@@ -155,7 +162,7 @@ impl WorkspaceApp {
                     modal_container(&self.tokens)
                 .w(px(if drill_down_mode {
                     TAURI_DRILL_DOWN_MODAL_WIDTH
-                } else if prompt_mode || edit_properties_mode {
+                } else if prompt_mode || edit_properties_mode || remote_desktop_edit_mode {
                     TAURI_EDIT_MODAL_WIDTH
                 } else if shows_transport_selector {
                     self.tokens.metrics.modal_width
@@ -642,13 +649,6 @@ impl WorkspaceApp {
                                             self.i18n.t("ssh.form.post_connect_command_hint"),
                                         ))
                                         .child(self.render_upstream_proxy_policy_section(form, cx))
-                                        .child(self.render_edit_icon_field(
-                                            &form.icon,
-                                            &form.color,
-                                            form.icon_picker_expanded,
-                                            cx,
-                                        ))
-                                        .child(self.render_edit_color_field(&form.color, cx))
                                 })
                                 // Legacy compatibility is a persisted connection property, so it
                                 // remains editable for both new and existing saved connections.
@@ -814,6 +814,30 @@ impl WorkspaceApp {
                                         })
                                 })
                                     })
+                                    .when(shows_icon_field, |content| {
+                                        content.child(self.render_edit_icon_field(
+                                            &form.icon,
+                                            &form.color,
+                                            &form.icon_background_color,
+                                            form.icon_picker_expanded,
+                                            cx,
+                                        ))
+                                        .child(self.render_edit_color_field(
+                                            self.i18n
+                                                .t("sessionManager.edit_properties.icon_color"),
+                                            &form.color,
+                                            NewConnectionField::Color,
+                                            cx,
+                                        ))
+                                        .child(self.render_edit_color_field(
+                                            self.i18n.t(
+                                                "sessionManager.edit_properties.icon_background_color",
+                                            ),
+                                            &form.icon_background_color,
+                                            NewConnectionField::IconBackgroundColor,
+                                            cx,
+                                        ))
+                                    })
                                 ),
                         )
                         )
@@ -902,6 +926,7 @@ impl WorkspaceApp {
                         )
                         .when(
                             edit_properties_mode
+                                || remote_desktop_edit_mode
                                 || self.saved_connection_prompt_action.is_some(),
                             |footer| {
                                 footer.child(self.render_connection_button(
@@ -920,13 +945,13 @@ impl WorkspaceApp {
                                     {
                                         self.i18n
                                             .t("sessionManager.edit_properties.save_and_reconnect")
-                                    } else if edit_properties_mode {
+                                    } else if edit_properties_mode || remote_desktop_edit_mode {
                                         self.i18n.t("sessionManager.edit_properties.save")
                                     } else {
                                         self.i18n.t("modals.new_connection.local_open")
                                     },
                                     true,
-                                    if edit_properties_mode
+                                    if (edit_properties_mode || remote_desktop_edit_mode)
                                         && self.saved_connection_prompt_action.is_none()
                                     {
                                         ConnectionButtonAction::Save
@@ -941,6 +966,7 @@ impl WorkspaceApp {
                         .when(
                             remote_desktop_mode
                                 && !edit_properties_mode
+                                && !remote_desktop_edit_mode
                                 && self.saved_connection_prompt_action.is_none(),
                             |footer| {
                                 footer

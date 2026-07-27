@@ -26,9 +26,12 @@ mod tests {
             proxy_chain: Vec::new(),
             upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
             color: None,
+            icon_background_color: None,
             icon: None,
             tags: Vec::new(),
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
             post_connect_command: None,
         }
@@ -268,6 +271,7 @@ mod tests {
             last_used_at: None,
             updated_at: None,
             color: None,
+            icon_background_color: None,
             icon: None,
             tags: Vec::new(),
             post_connect_command: None,
@@ -595,6 +599,8 @@ mod tests {
                 plaintext_password: Some(SecretString::from("jump-secret")),
             },
             agent_forwarding: true,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: true,
         }];
 
@@ -677,6 +683,8 @@ mod tests {
                 plaintext_password: Some(SecretString::from("jump-secret")),
             },
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
         }];
         store.upsert(req).unwrap();
@@ -970,6 +978,8 @@ mod tests {
                 plaintext_passphrase: Some(SecretString::from("jump-key-secret")),
             },
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
         }];
         store.upsert(req).unwrap();
@@ -993,6 +1003,8 @@ mod tests {
                 plaintext_passphrase: None,
             },
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
         }];
         store.upsert(update).unwrap();
@@ -1024,6 +1036,8 @@ mod tests {
                 plaintext_passphrase: Some(SecretString::from("jump-key-secret")),
             },
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
         }];
         store.upsert(req).unwrap();
@@ -1080,6 +1094,7 @@ mod tests {
             last_used_at: None,
             updated_at: None,
             color: None,
+            icon_background_color: None,
             icon: None,
             tags: Vec::new(),
             post_connect_command: None,
@@ -1497,6 +1512,8 @@ mod tests {
             jump_host: Some("legacy-jump".to_string()),
             term_type: Some("xterm-direct".to_string()),
             agent_forwarding: true,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: true,
             post_connect_command: Some("uname -a".to_string()),
         };
@@ -1618,6 +1635,9 @@ mod tests {
             id: "serial-1".to_string(),
             name: "Lab console".to_string(),
             group: Some("Lab".to_string()),
+            icon: Some("radio".to_string()),
+            color: Some("#fcd34d".to_string()),
+            icon_background_color: Some("#451a03".to_string()),
             port_path: "/dev/cu.usbserial-1".to_string(),
             baud_rate: 115_200,
             data_bits: 8,
@@ -1637,6 +1657,12 @@ mod tests {
         let value = serde_json::to_value(&data).unwrap();
 
         assert_eq!(value["serial_profiles"][0]["id"], "serial-1");
+        assert_eq!(value["serial_profiles"][0]["icon"], "radio");
+        assert_eq!(value["serial_profiles"][0]["color"], "#fcd34d");
+        assert_eq!(
+            value["serial_profiles"][0]["icon_background_color"],
+            "#451a03"
+        );
         assert_eq!(value["serial_profiles"][0]["flow_control"], "hardware");
         assert!(value["serial_profiles"][0].get("host").is_none());
         assert!(value["serial_profiles"][0].get("username").is_none());
@@ -1654,6 +1680,9 @@ mod tests {
             id: "telnet-1".to_string(),
             name: "Router console".to_string(),
             group: Some("Lab".to_string()),
+            icon: Some("network".to_string()),
+            color: Some("#86efac".to_string()),
+            icon_background_color: Some("#052e16".to_string()),
             host: "192.168.1.1".to_string(),
             port: 23,
             connect_on_open: true,
@@ -1669,6 +1698,12 @@ mod tests {
         let value = serde_json::to_value(&data).unwrap();
 
         assert_eq!(value["telnet_profiles"][0]["id"], "telnet-1");
+        assert_eq!(value["telnet_profiles"][0]["icon"], "network");
+        assert_eq!(value["telnet_profiles"][0]["color"], "#86efac");
+        assert_eq!(
+            value["telnet_profiles"][0]["icon_background_color"],
+            "#052e16"
+        );
         assert_eq!(value["telnet_profiles"][0]["host"], "192.168.1.1");
         assert!(value["telnet_profiles"][0].get("username").is_none());
         assert!(value["telnet_profiles"][0].get("auth").is_none());
@@ -1715,6 +1750,116 @@ mod tests {
         profile.baud_rate = 115_200;
         profile.port_path.clear();
         assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn non_ssh_asset_profiles_persist_custom_icons() {
+        let mut store = load_empty_store("asset-profile-icons");
+        let serial = store
+            .upsert_serial_profile(SaveSerialProfileRequest {
+                name: "Serial".to_string(),
+                icon: Some("radio".to_string()),
+                color: Some("#fcd34d".to_string()),
+                icon_background_color: Some("#451a03".to_string()),
+                port_path: "/dev/ttyUSB0".to_string(),
+                ..SaveSerialProfileRequest::default()
+            })
+            .unwrap();
+        let telnet = store
+            .upsert_telnet_profile(SaveTelnetProfileRequest {
+                name: "Telnet".to_string(),
+                icon: Some("network".to_string()),
+                color: Some("#86efac".to_string()),
+                icon_background_color: Some("#052e16".to_string()),
+                host: "telnet.example.com".to_string(),
+                port: 23,
+                ..SaveTelnetProfileRequest::default()
+            })
+            .unwrap();
+        let rdp = store
+            .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
+                name: "RDP".to_string(),
+                icon: Some("monitor".to_string()),
+                color: Some("#7dd3fc".to_string()),
+                icon_background_color: Some("#082f49".to_string()),
+                protocol: RemoteDesktopProtocol::Rdp,
+                host: "rdp.example.com".to_string(),
+                port: 3389,
+                ..SaveRemoteDesktopProfileRequest::default()
+            })
+            .unwrap();
+        let vnc = store
+            .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
+                name: "VNC".to_string(),
+                icon: Some("desktop".to_string()),
+                color: Some("#c4b5fd".to_string()),
+                icon_background_color: Some("#2e1065".to_string()),
+                protocol: RemoteDesktopProtocol::Vnc,
+                host: "vnc.example.com".to_string(),
+                port: 5900,
+                ..SaveRemoteDesktopProfileRequest::default()
+            })
+            .unwrap();
+
+        let store_path = store.path().to_path_buf();
+        let reloaded = ConnectionStore::load(store_path).unwrap();
+
+        assert_eq!(
+            reloaded
+                .serial_profiles()
+                .iter()
+                .find(|profile| profile.id == serial.id)
+                .and_then(|profile| profile.icon.as_deref()),
+            Some("radio")
+        );
+        assert_eq!(
+            reloaded
+                .serial_profiles()
+                .iter()
+                .find(|profile| profile.id == serial.id)
+                .and_then(|profile| profile.icon_background_color.as_deref()),
+            Some("#451a03")
+        );
+        assert_eq!(
+            reloaded
+                .telnet_profiles()
+                .iter()
+                .find(|profile| profile.id == telnet.id)
+                .and_then(|profile| profile.icon.as_deref()),
+            Some("network")
+        );
+        assert_eq!(
+            reloaded
+                .telnet_profiles()
+                .iter()
+                .find(|profile| profile.id == telnet.id)
+                .and_then(|profile| profile.icon_background_color.as_deref()),
+            Some("#052e16")
+        );
+        assert_eq!(
+            reloaded
+                .get_remote_desktop_profile(&rdp.id)
+                .and_then(|profile| profile.icon.as_deref()),
+            Some("monitor")
+        );
+        assert_eq!(
+            reloaded
+                .get_remote_desktop_profile(&rdp.id)
+                .and_then(|profile| profile.icon_background_color.as_deref()),
+            Some("#082f49")
+        );
+        assert_eq!(
+            reloaded
+                .get_remote_desktop_profile(&vnc.id)
+                .and_then(|profile| profile.icon.as_deref()),
+            Some("desktop")
+        );
+        assert_eq!(
+            reloaded
+                .get_remote_desktop_profile(&vnc.id)
+                .and_then(|profile| profile.icon_background_color.as_deref()),
+            Some("#2e1065")
+        );
     }
 
     #[test]
@@ -1941,6 +2086,7 @@ mod tests {
             last_used_at: None,
             updated_at: None,
             color: None,
+            icon_background_color: None,
             icon: None,
             tags: Vec::new(),
             post_connect_command: None,
@@ -2008,6 +2154,135 @@ mod tests {
                 .get_optional("remote-desktop:remote-invalid")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn remote_desktop_profile_update_preserves_options_and_controls_credential_lifecycle() {
+        let mut store = load_empty_store("remote-desktop-update");
+        let initial_options = oxideterm_remote_desktop::RemoteDesktopSessionOptions {
+            clipboard: oxideterm_remote_desktop::RemoteDesktopClipboardOptions {
+                text: false,
+                images: true,
+                files: true,
+            },
+            audio: oxideterm_remote_desktop::RemoteDesktopAudioOptions {
+                playback: false,
+                capture: true,
+            },
+            display: oxideterm_remote_desktop::RemoteDesktopDisplayOptions {
+                use_all_monitors: true,
+            },
+            vnc: oxideterm_remote_desktop::RemoteDesktopVncOptions {
+                security_policy:
+                    oxideterm_remote_desktop::RemoteDesktopVncSecurityPolicy::AllowLegacy,
+                session_mode: oxideterm_remote_desktop::RemoteDesktopVncSessionMode::Exclusive,
+                image_quality:
+                    oxideterm_remote_desktop::RemoteDesktopVncImageQuality::BestQuality,
+                compression: oxideterm_remote_desktop::RemoteDesktopVncCompression::High,
+            },
+        };
+        let created = store
+            .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
+                id: Some("remote-edit".to_string()),
+                name: "Original".to_string(),
+                protocol: RemoteDesktopProtocol::Rdp,
+                host: "old.example.com".to_string(),
+                port: 3389,
+                username: Some("operator".to_string()),
+                domain: Some("EXAMPLE".to_string()),
+                credential: Some(SecretString::from("original-secret")),
+                read_only: true,
+                session_options: initial_options,
+                ..SaveRemoteDesktopProfileRequest::default()
+            })
+            .unwrap();
+        let credential_ref = created.credential_ref.clone();
+
+        let updated = store
+            .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
+                id: Some(created.id.clone()),
+                name: "Updated".to_string(),
+                group: Some("Lab".to_string()),
+                protocol: RemoteDesktopProtocol::Rdp,
+                host: "new.example.com".to_string(),
+                port: 3390,
+                username: Some("admin".to_string()),
+                domain: created.domain.clone(),
+                read_only: created.read_only,
+                session_options: created.session_options,
+                ..SaveRemoteDesktopProfileRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(updated.created_at, created.created_at);
+        assert_eq!(updated.credential_ref, credential_ref);
+        assert_eq!(updated.session_options, initial_options);
+        assert_eq!(updated.domain.as_deref(), Some("EXAMPLE"));
+        assert!(updated.read_only);
+        assert_eq!(
+            store
+                .get_remote_desktop_credential(&updated.id)
+                .unwrap()
+                .unwrap(),
+            "original-secret"
+        );
+
+        let store_path = store.path().to_path_buf();
+        let mut store = ConnectionStore::load(store_path).unwrap();
+        let reloaded = store
+            .get_remote_desktop_profile(&updated.id)
+            .cloned()
+            .expect("updated remote desktop profile should reload");
+        assert_eq!(reloaded, updated);
+
+        let cleared = store
+            .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
+                id: Some(reloaded.id.clone()),
+                name: reloaded.name.clone(),
+                group: reloaded.group.clone(),
+                protocol: reloaded.protocol,
+                host: reloaded.host.clone(),
+                port: reloaded.port,
+                username: reloaded.username.clone(),
+                domain: reloaded.domain.clone(),
+                clear_credential: true,
+                read_only: reloaded.read_only,
+                session_options: reloaded.session_options,
+                ..SaveRemoteDesktopProfileRequest::default()
+            })
+            .unwrap();
+
+        assert!(cleared.credential_ref.is_none());
+        assert!(
+            store
+                .get_remote_desktop_credential(&cleared.id)
+                .unwrap()
+                .is_none()
+        );
+
+        store
+            .upsert(request("ssh-move", SavedAuth::Agent))
+            .unwrap();
+        assert_eq!(
+            store
+                .move_session_assets_to_group(
+                    &["ssh-move".to_string()],
+                    std::slice::from_ref(&cleared.id),
+                    Some("Moved"),
+                )
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store.get("ssh-move").and_then(|connection| connection.group.as_deref()),
+            Some("Moved")
+        );
+        assert_eq!(
+            store
+                .get_remote_desktop_profile(&cleared.id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Moved")
         );
     }
 

@@ -297,11 +297,58 @@ impl WorkspaceApp {
         secret: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        form_field(
-            &self.tokens,
-            label,
-            self.render_connection_input(value, placeholder, field, secret, cx),
-        )
+        let secret_visible = self
+            .new_connection_form
+            .as_ref()
+            .and_then(|form| connection_secret_field_visible(form, field));
+        let input = self.render_connection_input(
+            value,
+            placeholder,
+            field,
+            secret && !secret_visible.unwrap_or(false),
+            cx,
+        );
+        let control = if secret && let Some(visible) = secret_visible {
+            let icon = if visible {
+                LucideIcon::EyeOff
+            } else {
+                LucideIcon::Eye
+            };
+            div()
+                .relative()
+                .child(input)
+                .child(
+                    self.workspace_icon_action_button(
+                        icon,
+                        SECRET_VISIBILITY_ICON_SIZE,
+                        rgb(self.tokens.ui.text_muted),
+                        IconButtonOptions {
+                            hover_background: Some(rgba((self.tokens.ui.bg_hover << 8) | 0x99)),
+                            ..IconButtonOptions::opaque_toolbar(
+                                SECRET_VISIBILITY_BUTTON_SIZE,
+                                ButtonRadius::Sm,
+                            )
+                        },
+                        move |this, _event, _window, cx| {
+                            if let Some(form) = this.new_connection_form.as_mut()
+                                && toggle_connection_secret_field_visibility(form, field)
+                            {
+                                cx.notify();
+                            }
+                            cx.stop_propagation();
+                        },
+                        cx,
+                    )
+                    .absolute()
+                    .right(px(SECRET_VISIBILITY_BUTTON_OFFSET))
+                    .top(px(SECRET_VISIBILITY_BUTTON_OFFSET)),
+                )
+                .into_any_element()
+        } else {
+            input
+        };
+
+        form_field(&self.tokens, label, control)
     }
 
     pub(super) fn render_edit_saved_password_field(
@@ -341,14 +388,14 @@ impl WorkspaceApp {
                             &self.tokens,
                             self.render_loading_icon(
                                 "saved-password-loading",
-                                TAURI_PASSWORD_ICON_SIZE,
+                                SECRET_VISIBILITY_ICON_SIZE,
                                 rgb(self.tokens.ui.text_muted),
                             ),
                             IconButtonOptions {
                                 loading: true,
                                 hover_background: Some(rgba((self.tokens.ui.bg_hover << 8) | 0x99)),
                                 ..IconButtonOptions::opaque_toolbar(
-                                    TAURI_PASSWORD_ICON_BUTTON_SIZE,
+                                    SECRET_VISIBILITY_BUTTON_SIZE,
                                     ButtonRadius::Sm,
                                 )
                             },
@@ -362,14 +409,12 @@ impl WorkspaceApp {
                     } else {
                         self.workspace_icon_action_button(
                             icon,
-                            TAURI_PASSWORD_ICON_SIZE,
+                            SECRET_VISIBILITY_ICON_SIZE,
                             rgb(self.tokens.ui.text_muted),
                             IconButtonOptions {
                                 hover_background: Some(rgba((self.tokens.ui.bg_hover << 8) | 0x99)),
-                                // Tauri places the reveal affordance inside the
-                                // password input as an icon-only toolbar button.
                                 ..IconButtonOptions::opaque_toolbar(
-                                    TAURI_PASSWORD_ICON_BUTTON_SIZE,
+                                    SECRET_VISIBILITY_BUTTON_SIZE,
                                     ButtonRadius::Sm,
                                 )
                             },
@@ -381,8 +426,8 @@ impl WorkspaceApp {
                         )
                     }
                     .absolute()
-                    .right(px(TAURI_PASSWORD_ICON_BUTTON_OFFSET))
-                    .top(px(TAURI_PASSWORD_ICON_BUTTON_OFFSET)),
+                    .right(px(SECRET_VISIBILITY_BUTTON_OFFSET))
+                    .top(px(SECRET_VISIBILITY_BUTTON_OFFSET)),
                 ),
         )
     }
@@ -1296,13 +1341,15 @@ impl WorkspaceApp {
 
     pub(super) fn render_edit_color_field(
         &self,
+        label: String,
         value: &str,
+        field: NewConnectionField,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let swatch = parse_rgb24_hex(value).unwrap_or(TAURI_EDIT_COLOR_FALLBACK);
         form_field(
             &self.tokens,
-            self.i18n.t("sessionManager.edit_properties.color"),
+            label,
             div()
                 .flex()
                 .items_center()
@@ -1318,7 +1365,7 @@ impl WorkspaceApp {
                 .child(div().flex_1().child(self.render_connection_input(
                     value,
                     TAURI_EDIT_COLOR_FALLBACK_TEXT.to_string(),
-                    NewConnectionField::Color,
+                    field,
                     false,
                     cx,
                 )))
@@ -1331,9 +1378,15 @@ impl WorkspaceApp {
                         )
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _event, _window, cx| {
+                            cx.listener(move |this, _event, _window, cx| {
                                 if let Some(form) = this.new_connection_form.as_mut() {
-                                    form.color.clear();
+                                    match field {
+                                        NewConnectionField::Color => form.color.clear(),
+                                        NewConnectionField::IconBackgroundColor => {
+                                            form.icon_background_color.clear()
+                                        }
+                                        _ => {}
+                                    }
                                     clear_connection_selection(form);
                                 }
                                 cx.notify();
@@ -1348,11 +1401,15 @@ impl WorkspaceApp {
         &self,
         icon_value: &str,
         color_value: &str,
+        background_color_value: &str,
         expanded: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.tokens.ui;
         let preview_color = parse_rgb24_hex(color_value).unwrap_or(theme.accent);
+        let preview_background = parse_rgb24_hex(background_color_value)
+            .map(rgb)
+            .unwrap_or_else(|| rgba((preview_color << 8) | 0x22));
         let active_icon = session_icon_from_id(Some(icon_value)).unwrap_or(LucideIcon::Server);
         let mut grid = div().flex().flex_wrap().gap(px(self.tokens.spacing.two));
 
@@ -1419,7 +1476,7 @@ impl WorkspaceApp {
                                 .rounded(px(self.tokens.radii.md))
                                 .border_1()
                                 .border_color(rgb(theme.border))
-                                .bg(rgba((preview_color << 8) | 0x22))
+                                .bg(preview_background)
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -1804,7 +1861,12 @@ impl WorkspaceApp {
             .child(self.render_connection_field(
                 self.i18n.t("ssh.form.password"),
                 &form.password,
-                if protocol == oxideterm_remote_desktop::RemoteDesktopProtocol::Rdp {
+                if form.remote_desktop_profile_id.is_some()
+                    && form.saved_password_keychain_id.is_some()
+                {
+                    self.i18n
+                        .t("modals.new_connection.remote_desktop_password_keep_placeholder")
+                } else if protocol == oxideterm_remote_desktop::RemoteDesktopProtocol::Rdp {
                     self.i18n
                         .t("modals.new_connection.remote_desktop_password_placeholder")
                 } else {
@@ -1818,6 +1880,11 @@ impl WorkspaceApp {
                 self.i18n.t("ssh.form.save_password"),
                 form.save_password,
                 |form| form.save_password = !form.save_password,
+                cx,
+            ))
+            .child(self.render_connection_group_select(
+                self.i18n.t("ssh.form.group"),
+                &form.group,
                 cx,
             ))
             .when(

@@ -39,6 +39,18 @@ impl SessionManagerDisplayItem {
         }
     }
 
+    pub(super) fn selection_target(&self) -> Option<SessionManagerSelectionTarget> {
+        match self {
+            Self::Connection(connection) => Some(SessionManagerSelectionTarget::Connection(
+                connection.id.clone(),
+            )),
+            Self::RemoteDesktop(profile) => Some(SessionManagerSelectionTarget::RemoteDesktop(
+                profile.id.clone(),
+            )),
+            Self::SshConfig(_) | Self::Serial(_) | Self::Telnet(_) => None,
+        }
+    }
+
     pub(super) fn name(&self) -> &str {
         match self {
             Self::Connection(connection) => &connection.name,
@@ -184,9 +196,34 @@ impl SessionManagerDisplayItem {
                     .unwrap_or(LucideIcon::Server)
             }
             Self::SshConfig(_) => LucideIcon::FileTerminal,
-            Self::Serial(_) => LucideIcon::Radio,
-            Self::Telnet(_) => LucideIcon::Terminal,
-            Self::RemoteDesktop(_) => LucideIcon::Monitor,
+            Self::Serial(profile) => session_icons::session_icon_from_id(profile.icon.as_deref())
+                .unwrap_or(LucideIcon::Radio),
+            Self::Telnet(profile) => session_icons::session_icon_from_id(profile.icon.as_deref())
+                .unwrap_or(LucideIcon::Terminal),
+            Self::RemoteDesktop(profile) => {
+                session_icons::session_icon_from_id(profile.icon.as_deref())
+                    .unwrap_or(LucideIcon::Monitor)
+            }
+        }
+    }
+
+    pub(super) fn icon_color(&self) -> Option<&str> {
+        match self {
+            Self::Connection(connection) => connection.color.as_deref(),
+            Self::Serial(profile) => profile.color.as_deref(),
+            Self::Telnet(profile) => profile.color.as_deref(),
+            Self::RemoteDesktop(profile) => profile.color.as_deref(),
+            Self::SshConfig(_) => None,
+        }
+    }
+
+    pub(super) fn icon_background_color(&self) -> Option<&str> {
+        match self {
+            Self::Connection(connection) => connection.icon_background_color.as_deref(),
+            Self::Serial(profile) => profile.icon_background_color.as_deref(),
+            Self::Telnet(profile) => profile.icon_background_color.as_deref(),
+            Self::RemoteDesktop(profile) => profile.icon_background_color.as_deref(),
+            Self::SshConfig(_) => None,
         }
     }
 }
@@ -440,15 +477,12 @@ impl WorkspaceApp {
     ) -> Div {
         let theme = self.tokens.ui;
         let open_item = item.clone();
-        let selection_id = match &item {
-            SessionManagerDisplayItem::Connection(connection) => Some(connection.id.clone()),
-            _ => None,
-        };
+        let selection_target = item.selection_target();
         let open_button_item = item.clone();
         let last_used = format_last_used(item.last_used().as_deref(), &self.i18n);
-        let is_selected = selection_id
-            .as_deref()
-            .is_some_and(|id| self.session_manager.selected_ids.contains(id));
+        let is_selected = selection_target
+            .as_ref()
+            .is_some_and(|target| self.session_manager.selected_items.contains(target));
         self.session_manager_card_surface(self.tokens.radii.md, has_background)
             .min_w(px(MANAGER_RECENT_ITEM_MIN_WIDTH))
             .flex_basis(px(MANAGER_RECENT_ITEM_BASIS))
@@ -463,11 +497,11 @@ impl WorkspaceApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     match session_manager_item_pointer_action(
                         event.click_count,
-                        selection_id.is_some(),
+                        selection_target.is_some(),
                     ) {
                         SessionManagerItemPointerAction::Select => {
-                            if let Some(id) = selection_id.as_deref() {
-                                this.toggle_connection_selection(id);
+                            if let Some(target) = selection_target.clone() {
+                                this.toggle_session_selection(target);
                                 cx.notify();
                             }
                         }
@@ -565,10 +599,8 @@ impl WorkspaceApp {
     ) -> Div {
         let theme = self.tokens.ui;
         let open_item = item.clone();
-        let selection_id = match &item {
-            SessionManagerDisplayItem::Connection(connection) => Some(connection.id.clone()),
-            _ => None,
-        };
+        let selection_target = item.selection_target();
+        let checkbox_target = selection_target.clone();
         let subtitle = if matches!(item, SessionManagerDisplayItem::SshConfig(_)) {
             format!(
                 "{} · {}",
@@ -579,8 +611,9 @@ impl WorkspaceApp {
             item.subtitle()
         };
         // Keep the selected connection name aligned with the checkbox's accent treatment.
-        let is_selected = matches!(item, SessionManagerDisplayItem::Connection(_))
-            && self.session_manager.selected_ids.contains(item.id());
+        let is_selected = selection_target
+            .as_ref()
+            .is_some_and(|target| self.session_manager.selected_items.contains(target));
         self.session_manager_card_surface(self.tokens.radii.lg, has_background)
             .min_w(px(260.0))
             .flex_grow()
@@ -595,11 +628,11 @@ impl WorkspaceApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     match session_manager_item_pointer_action(
                         event.click_count,
-                        selection_id.is_some(),
+                        selection_target.is_some(),
                     ) {
                         SessionManagerItemPointerAction::Select => {
-                            if let Some(id) = selection_id.as_deref() {
-                                this.toggle_connection_selection(id);
+                            if let Some(target) = selection_target.clone() {
+                                this.toggle_session_selection(target);
                                 cx.notify();
                             }
                         }
@@ -610,22 +643,18 @@ impl WorkspaceApp {
                     }
                 }),
             )
-            .when(
-                matches!(item, SessionManagerDisplayItem::Connection(_)),
-                |card| {
-                    let id = item.id().to_string();
-                    card.child(
-                        checkbox(&self.tokens, String::new(), is_selected).on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _event, _window, cx| {
-                                this.toggle_connection_selection(&id);
-                                cx.notify();
-                                cx.stop_propagation();
-                            }),
-                        ),
-                    )
-                },
-            )
+            .when_some(checkbox_target, |card, target| {
+                card.child(
+                    checkbox(&self.tokens, String::new(), is_selected).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.toggle_session_selection(target.clone());
+                            cx.notify();
+                            cx.stop_propagation();
+                        }),
+                    ),
+                )
+            })
             .child(self.render_session_manager_item_icon(&item, theme.text))
             .child(
                 div()
@@ -984,10 +1013,8 @@ impl WorkspaceApp {
     ) -> Div {
         let theme = self.tokens.ui;
         let open_item = item.clone();
-        let selection_id = match &item {
-            SessionManagerDisplayItem::Connection(connection) => Some(connection.id.clone()),
-            _ => None,
-        };
+        let selection_target = item.selection_target();
+        let checkbox_target = selection_target.clone();
         let last_used = item.last_used();
         let subtitle = if matches!(item, SessionManagerDisplayItem::SshConfig(_)) {
             format!(
@@ -999,15 +1026,15 @@ impl WorkspaceApp {
             item.subtitle()
         };
         // List rows mirror the card view so selection feedback is consistent.
-        let is_selected = matches!(item, SessionManagerDisplayItem::Connection(_))
-            && self.session_manager.selected_ids.contains(item.id());
-        let selection = if let SessionManagerDisplayItem::Connection(connection) = &item {
-            let id = connection.id.clone();
+        let is_selected = selection_target
+            .as_ref()
+            .is_some_and(|target| self.session_manager.selected_items.contains(target));
+        let selection = if let Some(target) = checkbox_target {
             checkbox(&self.tokens, String::new(), is_selected)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _event, _window, cx| {
-                        this.toggle_connection_selection(&id);
+                        this.toggle_session_selection(target.clone());
                         cx.notify();
                         cx.stop_propagation();
                     }),
@@ -1036,11 +1063,11 @@ impl WorkspaceApp {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     match session_manager_item_pointer_action(
                         event.click_count,
-                        selection_id.is_some(),
+                        selection_target.is_some(),
                     ) {
                         SessionManagerItemPointerAction::Select => {
-                            if let Some(id) = selection_id.as_deref() {
-                                this.toggle_connection_selection(id);
+                            if let Some(target) = selection_target.clone() {
+                                this.toggle_session_selection(target);
                                 cx.notify();
                             }
                         }
@@ -1093,30 +1120,25 @@ impl WorkspaceApp {
         item: &SessionManagerDisplayItem,
         text: u32,
     ) -> Div {
-        let bg = match item {
-            SessionManagerDisplayItem::Connection(connection) => connection
-                .color
-                .as_deref()
-                .and_then(parse_hex_color)
-                .map(|color| rgba((color << 8) | 0x33))
-                .unwrap_or_else(|| rgba(0x0ea5e933)),
-            SessionManagerDisplayItem::SshConfig(_) => rgba(0x8b5cf633),
-            SessionManagerDisplayItem::Serial(_) => rgba(0xf59e0b33),
-            SessionManagerDisplayItem::Telnet(_) => rgba(0x22c55e33),
-            SessionManagerDisplayItem::RemoteDesktop(_) => rgba(0x0ea5e933),
+        let (default_background, default_foreground) = match item {
+            SessionManagerDisplayItem::Connection(_)
+            | SessionManagerDisplayItem::RemoteDesktop(_) => (0x0ea5e933, 0x7dd3fc),
+            SessionManagerDisplayItem::SshConfig(_) => (0x8b5cf633, 0xc4b5fd),
+            SessionManagerDisplayItem::Serial(_) => (0xf59e0b33, 0xfcd34d),
+            SessionManagerDisplayItem::Telnet(_) => (0x22c55e33, 0x86efac),
         };
-        let fg = match item {
-            SessionManagerDisplayItem::Connection(connection) => connection
-                .color
-                .as_deref()
-                .and_then(parse_hex_color)
-                .map(rgb)
-                .unwrap_or_else(|| rgb(0x7dd3fc)),
-            SessionManagerDisplayItem::SshConfig(_) => rgb(0xc4b5fd),
-            SessionManagerDisplayItem::Serial(_) => rgb(0xfcd34d),
-            SessionManagerDisplayItem::Telnet(_) => rgb(0x86efac),
-            SessionManagerDisplayItem::RemoteDesktop(_) => rgb(0x7dd3fc),
-        };
+        let configured_foreground = item.icon_color().and_then(parse_hex_color);
+        // Older assets used one accent for both layers; keep that appearance
+        // until an explicit background is selected.
+        let bg = item
+            .icon_background_color()
+            .and_then(parse_hex_color)
+            .map(rgb)
+            .or_else(|| configured_foreground.map(|color| rgba((color << 8) | 0x33)))
+            .unwrap_or_else(|| rgba(default_background));
+        let fg = configured_foreground
+            .map(rgb)
+            .unwrap_or_else(|| rgb(default_foreground));
         div()
             .w(px(MANAGER_ROW_ICON_SIZE))
             .h(px(MANAGER_ROW_ICON_SIZE))
@@ -1310,6 +1332,7 @@ impl WorkspaceApp {
             }
             SessionManagerDisplayItem::RemoteDesktop(profile) => {
                 let open_id = profile.id.clone();
+                let edit_id = profile.id.clone();
                 let menu_id = profile.id;
                 div()
                     .w(px(MANAGER_ROW_ACTIONS_WIDTH))
@@ -1326,6 +1349,18 @@ impl WorkspaceApp {
                         has_background,
                         move |this, _event, window, cx| {
                             this.open_saved_remote_desktop_profile(&open_id, window, cx);
+                            cx.stop_propagation();
+                        },
+                        cx,
+                    ))
+                    .child(self.render_row_icon_button(
+                        LucideIcon::Pencil,
+                        MANAGER_ROW_ACTION_BUTTON,
+                        MANAGER_ROW_ACTION_ICON_SIZE,
+                        rgb(self.tokens.ui.text),
+                        has_background,
+                        move |this, _event, window, cx| {
+                            this.open_saved_remote_desktop_profile_editor(&edit_id, window, cx);
                             cx.stop_propagation();
                         },
                         cx,
@@ -1363,9 +1398,10 @@ impl WorkspaceApp {
             SessionManagerRowActionTarget::Connection(_) => {
                 MANAGER_ROW_ACTION_MENU_CONNECTION_HEIGHT
             }
-            SessionManagerRowActionTarget::Serial(_)
-            | SessionManagerRowActionTarget::Telnet(_)
-            | SessionManagerRowActionTarget::RemoteDesktop(_) => {
+            SessionManagerRowActionTarget::RemoteDesktop(_) => {
+                MANAGER_ROW_ACTION_MENU_EDITABLE_PROFILE_HEIGHT
+            }
+            SessionManagerRowActionTarget::Serial(_) | SessionManagerRowActionTarget::Telnet(_) => {
                 MANAGER_ROW_ACTION_MENU_PROFILE_HEIGHT
             }
         };
@@ -1417,6 +1453,29 @@ impl WorkspaceApp {
                     has_background,
                     move |this, _event, window, cx| {
                         this.duplicate_connection(&duplicate_id, window, cx);
+                        cx.stop_propagation();
+                    },
+                    cx,
+                ))
+                .child(dropdown_menu_separator(&self.tokens));
+        }
+
+        if let SessionManagerRowActionTarget::RemoteDesktop(id) = &menu.target {
+            let edit_id = id.clone();
+            popup = popup
+                .child(self.render_session_manager_menu_action(
+                    dropdown_menu_item(
+                        &self.tokens,
+                        self.i18n.t("sessionManager.actions.edit"),
+                        DropdownMenuItemKind::Plain,
+                        false,
+                        false,
+                    ),
+                    false,
+                    false,
+                    has_background,
+                    move |this, _event, window, cx| {
+                        this.open_saved_remote_desktop_profile_editor(&edit_id, window, cx);
                         cx.stop_propagation();
                     },
                     cx,

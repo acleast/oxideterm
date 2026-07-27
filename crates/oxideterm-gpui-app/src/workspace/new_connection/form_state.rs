@@ -1,8 +1,9 @@
 use std::fmt;
 
 use oxideterm_connections::{
-    AuthType, ConnectionInfo, PrivilegeCredentialKind, SavedUpstreamProxyProtocol,
-    TransportUsernameTransition, transport_port_replacement, transport_username_transition,
+    AuthType, ConnectionInfo, PrivilegeCredentialKind, RemoteDesktopProfile,
+    SavedUpstreamProxyProtocol, TransportUsernameTransition, transport_port_replacement,
+    transport_username_transition,
 };
 pub(in crate::workspace) use oxideterm_connections::{
     ConnectionTransport as NewConnectionTransport, RDP_DEFAULT_PORT_TEXT, SSH_DEFAULT_PORT_TEXT,
@@ -130,6 +131,24 @@ pub(in crate::workspace) fn new_connection_form_mode(
     }
 }
 
+pub(in crate::workspace) fn connection_icon_field_visible(
+    mode: NewConnectionFormMode,
+    drill_down_mode: bool,
+    transport: NewConnectionTransport,
+) -> bool {
+    // Only persisted session assets expose custom icons in this shared form.
+    mode != NewConnectionFormMode::SavedConnectionPrompt
+        && !drill_down_mode
+        && matches!(
+            transport,
+            NewConnectionTransport::Ssh
+                | NewConnectionTransport::Serial
+                | NewConnectionTransport::Telnet
+                | NewConnectionTransport::Rdp
+                | NewConnectionTransport::Vnc
+        )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::workspace) enum NewConnectionSelect {
     Group,
@@ -175,6 +194,7 @@ pub(in crate::workspace) enum NewConnectionField {
     Group,
     PostConnectCommand,
     Color,
+    IconBackgroundColor,
     JumpHost,
     JumpPort,
     JumpUsername,
@@ -339,6 +359,8 @@ pub(in crate::workspace) struct NewConnectionProxyHop {
     pub(in crate::workspace) cert_path: String,
     pub(in crate::workspace) passphrase: String,
     pub(in crate::workspace) agent_forwarding: bool,
+    pub(in crate::workspace) identity_agent: Option<String>,
+    pub(in crate::workspace) agent_forwarding_socket: Option<String>,
     pub(in crate::workspace) legacy_ssh_compatibility: bool,
 }
 
@@ -357,6 +379,11 @@ impl fmt::Debug for NewConnectionProxyHop {
             .field("cert_path", &self.cert_path)
             .field("passphrase", &"[redacted secret]")
             .field("agent_forwarding", &self.agent_forwarding)
+            .field("identity_agent_configured", &self.identity_agent.is_some())
+            .field(
+                "agent_forwarding_socket_configured",
+                &self.agent_forwarding_socket.is_some(),
+            )
             .field("legacy_ssh_compatibility", &self.legacy_ssh_compatibility)
             .finish()
     }
@@ -376,6 +403,8 @@ impl NewConnectionProxyHop {
             cert_path: String::new(),
             passphrase: String::new(),
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
         }
     }
@@ -405,6 +434,8 @@ impl NewConnectionProxyHop {
         self.cert_path = connection.cert_path.clone().unwrap_or_default();
         self.managed_key_id = connection.managed_key_id.clone().unwrap_or_default();
         self.agent_forwarding = connection.agent_forwarding;
+        self.identity_agent = connection.identity_agent.clone();
+        self.agent_forwarding_socket = connection.agent_forwarding_socket.clone();
         self.legacy_ssh_compatibility = connection.legacy_ssh_compatibility;
     }
 }
@@ -419,6 +450,8 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) auth_tab: SshAuthTab,
     pub(in crate::workspace) password: String,
     pub(in crate::workspace) remote_desktop_session_options: RemoteDesktopSessionOptions,
+    /// Identifies an existing RDP/VNC asset without overloading SSH edit state.
+    pub(in crate::workspace) remote_desktop_profile_id: Option<String>,
     pub(in crate::workspace) saved_password_keychain_id: Option<String>,
     pub(in crate::workspace) password_loaded: bool,
     pub(in crate::workspace) password_visible: bool,
@@ -428,10 +461,12 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) managed_key_id: String,
     pub(in crate::workspace) cert_path: String,
     pub(in crate::workspace) passphrase: String,
+    pub(in crate::workspace) passphrase_visible: bool,
     pub(in crate::workspace) save_password: bool,
     pub(in crate::workspace) group: String,
     pub(in crate::workspace) post_connect_command: String,
     pub(in crate::workspace) color: String,
+    pub(in crate::workspace) icon_background_color: String,
     pub(in crate::workspace) icon: String,
     pub(in crate::workspace) icon_picker_expanded: bool,
     pub(in crate::workspace) tags: Vec<String>,
@@ -449,6 +484,8 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) upstream_proxy_remote_dns: bool,
     pub(in crate::workspace) upstream_proxy_no_proxy: String,
     pub(in crate::workspace) agent_forwarding: bool,
+    pub(in crate::workspace) identity_agent: Option<String>,
+    pub(in crate::workspace) agent_forwarding_socket: Option<String>,
     pub(in crate::workspace) legacy_ssh_compatibility: bool,
     pub(in crate::workspace) agent_available: Option<bool>,
     pub(in crate::workspace) save_connection: bool,
@@ -484,6 +521,7 @@ impl fmt::Debug for NewConnectionForm {
                 "remote_desktop_session_options",
                 &self.remote_desktop_session_options,
             )
+            .field("remote_desktop_profile_id", &self.remote_desktop_profile_id)
             .field(
                 "saved_password_keychain_id",
                 &self.saved_password_keychain_id,
@@ -496,10 +534,12 @@ impl fmt::Debug for NewConnectionForm {
             .field("managed_key_id", &self.managed_key_id)
             .field("cert_path", &self.cert_path)
             .field("passphrase", &"[redacted secret]")
+            .field("passphrase_visible", &self.passphrase_visible)
             .field("save_password", &self.save_password)
             .field("group", &self.group)
             .field("post_connect_command", &self.post_connect_command)
             .field("color", &self.color)
+            .field("icon_background_color", &self.icon_background_color)
             .field("icon", &self.icon)
             .field("icon_picker_expanded", &self.icon_picker_expanded)
             .field("tags", &self.tags)
@@ -520,6 +560,11 @@ impl fmt::Debug for NewConnectionForm {
             .field("upstream_proxy_remote_dns", &self.upstream_proxy_remote_dns)
             .field("upstream_proxy_no_proxy", &self.upstream_proxy_no_proxy)
             .field("agent_forwarding", &self.agent_forwarding)
+            .field("identity_agent_configured", &self.identity_agent.is_some())
+            .field(
+                "agent_forwarding_socket_configured",
+                &self.agent_forwarding_socket.is_some(),
+            )
             .field("legacy_ssh_compatibility", &self.legacy_ssh_compatibility)
             .field("agent_available", &self.agent_available)
             .field("save_connection", &self.save_connection)
@@ -553,6 +598,7 @@ impl Default for NewConnectionForm {
             auth_tab: SshAuthTab::Password,
             password: String::new(),
             remote_desktop_session_options: RemoteDesktopSessionOptions::default(),
+            remote_desktop_profile_id: None,
             saved_password_keychain_id: None,
             password_loaded: true,
             password_visible: false,
@@ -562,10 +608,12 @@ impl Default for NewConnectionForm {
             managed_key_id: String::new(),
             cert_path: String::new(),
             passphrase: String::new(),
+            passphrase_visible: false,
             save_password: false,
             group: String::new(),
             post_connect_command: String::new(),
             color: String::new(),
+            icon_background_color: String::new(),
             icon: String::new(),
             icon_picker_expanded: false,
             tags: Vec::new(),
@@ -583,6 +631,8 @@ impl Default for NewConnectionForm {
             upstream_proxy_remote_dns: true,
             upstream_proxy_no_proxy: String::new(),
             agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
             agent_available: None,
             save_connection: false,
@@ -602,6 +652,63 @@ impl Default for NewConnectionForm {
             serial_profile_name: String::new(),
             telnet_profile_name: String::new(),
         }
+    }
+}
+
+pub(in crate::workspace) fn form_from_remote_desktop_profile(
+    profile: &RemoteDesktopProfile,
+    ungrouped_label: String,
+) -> NewConnectionForm {
+    // Editing carries only the keychain reference; the credential value is never loaded.
+    NewConnectionForm {
+        transport: match profile.protocol {
+            oxideterm_remote_desktop::RemoteDesktopProtocol::Rdp => NewConnectionTransport::Rdp,
+            oxideterm_remote_desktop::RemoteDesktopProtocol::Vnc => NewConnectionTransport::Vnc,
+        },
+        name: profile.name.clone(),
+        host: profile.host.clone(),
+        port: profile.port.to_string(),
+        username: profile.username.clone().unwrap_or_default(),
+        remote_desktop_session_options: profile.session_options,
+        remote_desktop_profile_id: Some(profile.id.clone()),
+        saved_password_keychain_id: profile.credential_ref.clone(),
+        save_password: profile.credential_ref.is_some(),
+        group: profile.group.clone().unwrap_or(ungrouped_label),
+        icon: profile.icon.clone().unwrap_or_default(),
+        color: profile.color.clone().unwrap_or_default(),
+        icon_background_color: profile.icon_background_color.clone().unwrap_or_default(),
+        focused_field: NewConnectionField::Name,
+        ..NewConnectionForm::default()
+    }
+}
+
+/// Returns the presentation-only visibility state for primary credential fields.
+pub(in crate::workspace) fn connection_secret_field_visible(
+    form: &NewConnectionForm,
+    field: NewConnectionField,
+) -> Option<bool> {
+    match field {
+        NewConnectionField::Password => Some(form.password_visible),
+        NewConnectionField::Passphrase => Some(form.passphrase_visible),
+        _ => None,
+    }
+}
+
+/// Toggles visibility without changing or copying the underlying secret draft.
+pub(in crate::workspace) fn toggle_connection_secret_field_visibility(
+    form: &mut NewConnectionForm,
+    field: NewConnectionField,
+) -> bool {
+    match field {
+        NewConnectionField::Password => {
+            form.password_visible = !form.password_visible;
+            true
+        }
+        NewConnectionField::Passphrase => {
+            form.passphrase_visible = !form.passphrase_visible;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -878,6 +985,7 @@ pub(in crate::workspace) fn current_connection_field_mut(
         NewConnectionField::UpstreamProxyUsername => &mut form.upstream_proxy_username,
         NewConnectionField::UpstreamProxyPassword => &mut form.upstream_proxy_password,
         NewConnectionField::Color => &mut form.color,
+        NewConnectionField::IconBackgroundColor => &mut form.icon_background_color,
         NewConnectionField::JumpHost => {
             &mut form
                 .jump_server_form
@@ -960,6 +1068,7 @@ pub(in crate::workspace) fn current_connection_field(form: &NewConnectionForm) -
         NewConnectionField::UpstreamProxyUsername => &form.upstream_proxy_username,
         NewConnectionField::UpstreamProxyPassword => &form.upstream_proxy_password,
         NewConnectionField::Color => &form.color,
+        NewConnectionField::IconBackgroundColor => &form.icon_background_color,
         NewConnectionField::JumpHost => {
             &form
                 .jump_server_form
@@ -1091,8 +1200,15 @@ pub(in crate::workspace) fn text_from_keystroke(keystroke: &gpui::Keystroke) -> 
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use gpui::{Keystroke, Modifiers};
-    use oxideterm_connections::{AuthType, ConnectionInfo, SavedUpstreamProxyPolicy};
+    use oxideterm_connections::{
+        AuthType, ConnectionInfo, RemoteDesktopProfile, SavedUpstreamProxyPolicy,
+    };
+    use oxideterm_remote_desktop::{
+        RemoteDesktopAudioOptions, RemoteDesktopClipboardOptions, RemoteDesktopDisplayOptions,
+        RemoteDesktopProtocol,
+    };
 
     use super::{
         NewConnectionField, NewConnectionForm, NewConnectionFormMode, NewConnectionProxyHop,
@@ -1103,11 +1219,13 @@ mod tests {
         SshAuthFamily, SshAuthTab, SshKeyAuthSource, TELNET_DEFAULT_PORT_TEXT,
         VNC_DEFAULT_PORT_TEXT, apply_remote_desktop_vnc_preference, apply_transport_default_port,
         apply_transport_default_username, auth_family_from_tab, auth_tab_from_key_source,
-        backspace_current_connection_field, default_auth_tab_for_family,
-        insert_text_into_current_connection_field, key_source_from_tab, new_connection_form_mode,
-        next_connection_field, remote_desktop_feature_supported,
-        remote_desktop_vnc_preference_selected, select_current_connection_field,
-        text_from_keystroke, toggle_remote_desktop_feature,
+        backspace_current_connection_field, connection_icon_field_visible,
+        connection_secret_field_visible, default_auth_tab_for_family,
+        form_from_remote_desktop_profile, insert_text_into_current_connection_field,
+        key_source_from_tab, new_connection_form_mode, next_connection_field,
+        remote_desktop_feature_supported, remote_desktop_vnc_preference_selected,
+        select_current_connection_field, text_from_keystroke,
+        toggle_connection_secret_field_visibility, toggle_remote_desktop_feature,
     };
 
     fn keystroke(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
@@ -1116,6 +1234,158 @@ mod tests {
             key: key.to_string(),
             key_char: key_char.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn primary_secret_visibility_is_hidden_and_toggles_independently() {
+        let mut form = NewConnectionForm::default();
+
+        assert_eq!(
+            connection_secret_field_visible(&form, NewConnectionField::Password),
+            Some(false)
+        );
+        assert_eq!(
+            connection_secret_field_visible(&form, NewConnectionField::Passphrase),
+            Some(false)
+        );
+        assert!(toggle_connection_secret_field_visibility(
+            &mut form,
+            NewConnectionField::Password
+        ));
+        assert_eq!(
+            connection_secret_field_visible(&form, NewConnectionField::Password),
+            Some(true)
+        );
+        assert_eq!(
+            connection_secret_field_visible(&form, NewConnectionField::Passphrase),
+            Some(false)
+        );
+        assert!(toggle_connection_secret_field_visibility(
+            &mut form,
+            NewConnectionField::Passphrase
+        ));
+        assert_eq!(
+            connection_secret_field_visible(&form, NewConnectionField::Passphrase),
+            Some(true)
+        );
+        assert!(!toggle_connection_secret_field_visibility(
+            &mut form,
+            NewConnectionField::Host
+        ));
+    }
+
+    #[test]
+    fn visible_secret_drafts_remain_redacted_from_debug_output() {
+        let form = NewConnectionForm {
+            password: "password-value".to_string(),
+            password_visible: true,
+            passphrase: "passphrase-value".to_string(),
+            passphrase_visible: true,
+            ..NewConnectionForm::default()
+        };
+
+        let debug_output = format!("{form:?}");
+
+        assert!(!debug_output.contains("password-value"));
+        assert!(!debug_output.contains("passphrase-value"));
+        assert!(debug_output.contains("[redacted secret]"));
+    }
+
+    #[test]
+    fn remote_desktop_edit_form_restores_options_without_loading_secret() {
+        let session_options = RemoteDesktopSessionOptions {
+            clipboard: RemoteDesktopClipboardOptions {
+                text: false,
+                images: false,
+                files: true,
+            },
+            audio: RemoteDesktopAudioOptions {
+                playback: false,
+                capture: true,
+            },
+            display: RemoteDesktopDisplayOptions {
+                use_all_monitors: true,
+            },
+            vnc: RemoteDesktopVncOptions {
+                security_policy: RemoteDesktopVncSecurityPolicy::AllowLegacy,
+                session_mode: RemoteDesktopVncSessionMode::Exclusive,
+                image_quality: RemoteDesktopVncImageQuality::BestQuality,
+                compression: RemoteDesktopVncCompression::High,
+            },
+        };
+        let now = Utc::now();
+        let profile = RemoteDesktopProfile {
+            id: "remote-1".to_string(),
+            name: "Lab desktop".to_string(),
+            group: Some("Lab".to_string()),
+            icon: Some("cloud".to_string()),
+            color: Some("#7dd3fc".to_string()),
+            icon_background_color: Some("#082f49".to_string()),
+            protocol: RemoteDesktopProtocol::Rdp,
+            host: "rdp.example.com".to_string(),
+            port: 3389,
+            username: Some("operator".to_string()),
+            domain: Some("EXAMPLE".to_string()),
+            credential_ref: Some("remote-desktop:remote-1".to_string()),
+            read_only: true,
+            session_options,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        };
+
+        let form = form_from_remote_desktop_profile(&profile, "Ungrouped".to_string());
+
+        assert_eq!(form.remote_desktop_profile_id.as_deref(), Some("remote-1"));
+        assert_eq!(form.transport, NewConnectionTransport::Rdp);
+        assert_eq!(form.name, "Lab desktop");
+        assert_eq!(form.host, "rdp.example.com");
+        assert_eq!(form.port, "3389");
+        assert_eq!(form.username, "operator");
+        assert_eq!(form.group, "Lab");
+        assert_eq!(form.icon, "cloud");
+        assert_eq!(form.color, "#7dd3fc");
+        assert_eq!(form.icon_background_color, "#082f49");
+        assert_eq!(form.remote_desktop_session_options, session_options);
+        assert_eq!(
+            form.saved_password_keychain_id.as_deref(),
+            Some("remote-desktop:remote-1")
+        );
+        assert!(form.save_password);
+        assert!(form.password.is_empty());
+    }
+
+    #[test]
+    fn custom_icon_field_is_available_for_all_five_session_assets() {
+        for transport in [
+            NewConnectionTransport::Ssh,
+            NewConnectionTransport::Serial,
+            NewConnectionTransport::Telnet,
+            NewConnectionTransport::Rdp,
+            NewConnectionTransport::Vnc,
+        ] {
+            assert!(connection_icon_field_visible(
+                NewConnectionFormMode::NewConnection,
+                false,
+                transport
+            ));
+        }
+
+        assert!(!connection_icon_field_visible(
+            NewConnectionFormMode::NewConnection,
+            false,
+            NewConnectionTransport::WslGraphics
+        ));
+        assert!(!connection_icon_field_visible(
+            NewConnectionFormMode::SavedConnectionPrompt,
+            false,
+            NewConnectionTransport::Ssh
+        ));
+        assert!(!connection_icon_field_visible(
+            NewConnectionFormMode::NewConnection,
+            true,
+            NewConnectionTransport::Ssh
+        ));
     }
 
     #[test]
@@ -1313,18 +1583,20 @@ mod tests {
             &vnc.capabilities,
             RemoteDesktopSessionFeature::ClipboardText
         ));
+        // VNC advertises client-side extension support here; the negotiated
+        // session capabilities still gate features unsupported by a server.
         for feature in [
             RemoteDesktopSessionFeature::ClipboardImages,
             RemoteDesktopSessionFeature::ClipboardFiles,
             RemoteDesktopSessionFeature::AudioPlayback,
-            RemoteDesktopSessionFeature::AudioCapture,
             RemoteDesktopSessionFeature::MultiMonitor,
         ] {
-            assert!(!remote_desktop_feature_supported(
-                &vnc.capabilities,
-                feature
-            ));
+            assert!(remote_desktop_feature_supported(&vnc.capabilities, feature));
         }
+        assert!(!remote_desktop_feature_supported(
+            &vnc.capabilities,
+            RemoteDesktopSessionFeature::AudioCapture
+        ));
     }
 
     #[test]
@@ -1592,9 +1864,12 @@ mod tests {
             created_at: "2026-06-15T00:00:00Z".to_string(),
             last_used_at: None,
             color: None,
+            icon_background_color: None,
             icon: None,
             tags: Vec::new(),
             agent_forwarding: true,
+            identity_agent: None,
+            agent_forwarding_socket: None,
             legacy_ssh_compatibility: true,
             post_connect_command: None,
         };
