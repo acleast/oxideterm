@@ -1,0 +1,149 @@
+name: Windows Temporary Build
+
+on:
+  push:
+    branches:
+      - 'dev2'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Git branch, tag, or commit to build'
+        required: true
+        default: 'dev2'
+        type: string
+      retention_days:
+        description: 'Artifact retention period'
+        required: true
+        default: '7'
+        type: choice
+        options:
+          - '3'
+          - '7'
+          - '14'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-temporary-build-${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows x64 temporary installer
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout requested source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+
+      - name: Install Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: 1.94.1
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: windows-temporary-x86_64-pc-windows-msvc
+          cache-on-failure: false
+
+      - name: Install NSIS
+        shell: pwsh
+        env:
+          NSIS_VERSION: '3.12'
+          NSIS_ARCHIVE_SHA256: '56581f90db321581c5381193d796fffcf2d24b2f8fed2160a6c6a3baa67f2c4f'
+        run: |
+          $archiveName = "nsis-$env:NSIS_VERSION.zip"
+          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+          $downloadUrl = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$env:NSIS_VERSION/$archiveName"
+          curl.exe --fail --location --retry 3 --retry-all-errors `
+            --output $archivePath $downloadUrl
+
+          $archiveHash = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()
+          if ($archiveHash -ne $env:NSIS_ARCHIVE_SHA256) {
+            throw "NSIS archive checksum mismatch: $archiveHash"
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP "nsis-$env:NSIS_VERSION-portable"
+          Expand-Archive -Path $archivePath -DestinationPath $extractRoot -Force
+          $nsisBin = Join-Path $extractRoot "nsis-$env:NSIS_VERSION"
+          if (-not (Test-Path (Join-Path $nsisBin 'makensis.exe'))) {
+            throw 'makensis.exe is missing from the verified NSIS archive.'
+          }
+          $nsisBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Prepare isolated temporary version
+        id: package_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"].split("-", 1)[0])')"
+          version="${base_version}-windows-test.${GITHUB_RUN_NUMBER}"
+          python3 scripts/release/bump_version.py "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Package Windows x64 app
+        env:
+          OXIDETERM_VERSION: ${{ steps.package_version.outputs.version }}
+        run: python scripts/release/package_native.py x86_64-pc-windows-msvc
+
+      - name: Verify native package contents
+        run: >-
+          python scripts/release/verify_native_package.py
+          --target x86_64-pc-windows-msvc
+          --version ${{ steps.package_version.outputs.version }}
+          --dist dist
+
+      - name: Collect build metadata and checksums
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+          PACKAGE_VERSION: ${{ steps.package_version.outputs.version }}
+        run: |
+          $output = 'temporary-build'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          $artifacts = Get-ChildItem -Path dist -File |
+            Where-Object { $_.Extension -in @('.exe', '.zip') }
+          if ($artifacts.Count -eq 0) {
+            throw 'No Windows package was produced.'
+          }
+          Copy-Item $artifacts.FullName -Destination $output
+
+          Get-ChildItem -Path $output -File |
+            Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_.Path))" } |
+            Set-Content "$output/SHA256SUMS.txt"
+
+          $commit = (git rev-parse HEAD).Trim()
+          @(
+            "source_ref=$env:SOURCE_REF"
+            "commit=$commit"
+            "version=$env:PACKAGE_VERSION"
+            "workflow_run=$env:GITHUB_RUN_ID"
+          ) | Set-Content "$output/BUILD_INFO.txt"
+
+          '### Windows temporary build' | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Source: ``$env:SOURCE_REF``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Commit: ``$commit``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Version: ``$env:PACKAGE_VERSION``" | Add-Content $env:GITHUB_STEP_SUMMARY
+          '- Installs as: `OxideTerm Preview`' | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload temporary Windows build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OxideTerm-Windows-temporary-${{ github.run_number }}
+          path: temporary-build/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+          compression-level: 0
