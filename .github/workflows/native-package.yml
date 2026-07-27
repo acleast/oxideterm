@@ -356,75 +356,6 @@ jobs:
           echo "generate_release_notes=false" >> "${GITHUB_OUTPUT}"
           echo "body_path=release-notes.md" >> "${GITHUB_OUTPUT}"
 
-      - name: Sign release assets
-        shell: bash
-        env:
-          MINISIGN_PRIVATE_KEY_B64: ${{ secrets.MINISIGN_PRIVATE_KEY_B64 }}
-          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          VERSION: ${{ steps.release_meta.outputs.version }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y minisign
-
-          key_path="$(mktemp)"
-          trap 'rm -f "${key_path}"' EXIT
-          chmod 600 "${key_path}"
-          signing_key_material="${MINISIGN_PRIVATE_KEY_B64:-${TAURI_SIGNING_PRIVATE_KEY:-}}"
-          signing_password="${MINISIGN_PASSWORD:-${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}}"
-
-          # GitHub secrets may contain either the complete minisign key file or
-          # a base64 wrapper around that file. Keep the key in a 0600 temporary
-          # file and validate the decoded format before minisign reads it.
-          if [[ -z "${signing_key_material}" ]]; then
-            echo "MINISIGN_PRIVATE_KEY_B64 or TAURI_SIGNING_PRIVATE_KEY is required for native updater releases." >&2
-            exit 1
-          elif [[ "${signing_key_material}" == *"untrusted comment: minisign"* ]]; then
-            printf '%s' "${signing_key_material}" > "${key_path}"
-          else
-            decoded_key_path="$(mktemp)"
-            trap 'rm -f "${key_path}" "${decoded_key_path}"' EXIT
-            if ! printf '%s' "${signing_key_material}" | base64 --decode > "${decoded_key_path}"; then
-              echo "The configured minisign secret must be a key file or base64-encoded key file." >&2
-              exit 1
-            fi
-            if ! grep -q '^untrusted comment: minisign' "${decoded_key_path}"; then
-              echo "The configured minisign secret decoded successfully but is not a minisign key file." >&2
-              exit 1
-            fi
-            mv "${decoded_key_path}" "${key_path}"
-          fi
-
-          # Native and Tauri channel updaters both reject unsigned assets.
-          mapfile -t assets < <(find dist-release -maxdepth 1 -type f \( \
-            -name '*.app.zip' -o \
-            -name '*.dmg' -o \
-            -name '*.tar.gz' -o \
-            -name '*.zip' -o \
-            -name '*.exe' -o \
-            -name '*.AppImage' -o \
-            -name '*.deb' -o \
-            -name '*.rpm' \
-          \) | sort -u)
-
-          if [[ "${#assets[@]}" -eq 0 ]]; then
-            echo "No native release assets found to sign." >&2
-            exit 1
-          fi
-
-          for asset in "${assets[@]}"; do
-            sig="${asset}.sig"
-            trusted_comment="OxideTerm ${VERSION} $(basename "${asset}")"
-            if [[ -n "${signing_password}" ]]; then
-              printf '%s\n' "${signing_password}" \
-                | minisign -S -s "${key_path}" -m "${asset}" -x "${sig}" -t "${trusted_comment}"
-            else
-              minisign -S -W -s "${key_path}" -m "${asset}" -x "${sig}" -t "${trusted_comment}"
-            fi
-          done
-
       - name: Generate release checksums
         shell: bash
         run: |
@@ -459,7 +390,6 @@ jobs:
             dist-release/*.AppImage
             dist-release/*.deb
             dist-release/*.rpm
-            dist-release/*.sig
             dist-release/sha256sums.txt
           tag_name: ${{ steps.release_meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
@@ -475,7 +405,8 @@ jobs:
     name: Generate updater manifest
     needs: release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.upload_release)
+    # This fork does not use in-app updates; no signing key or latest.json is published.
+    if: false
     permissions:
       contents: write
     steps:
@@ -614,7 +545,7 @@ jobs:
       - release
       - publish-updater
     runs-on: ubuntu-latest
-    if: needs.release.outputs.prerelease == 'true' && (startsWith(needs.release.outputs.tag, 'gpui-v') || contains(needs.release.outputs.version, 'gpui-preview') || contains(needs.release.outputs.version, 'native-preview') || contains(needs.release.outputs.version, 'rustnative-preview'))
+    if: false
     permissions:
       contents: write
     steps:
@@ -691,11 +622,9 @@ jobs:
 
   cleanup-sigs:
     name: Remove signature helper assets
-    needs:
-      - release
-      - publish-updater
+    needs: release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.upload_release)
+    if: false
     permissions:
       contents: write
     steps:
@@ -723,10 +652,7 @@ jobs:
 
   validate-release-assets:
     name: Validate release assets
-    needs:
-      - release
-      - publish-updater
-      - cleanup-sigs
+    needs: release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.upload_release)
     permissions:
@@ -758,7 +684,6 @@ jobs:
             }
 
             const expected = [
-              'latest.json',
               'sha256sums.txt',
               `OxideTerm_${version}_macos_arm64.app.zip`,
               `OxideTerm_${version}_macos_arm64.dmg`,
@@ -779,11 +704,6 @@ jobs:
               throw new Error(`Release ${tag} is missing asset(s): ${missing.join(', ')}`);
             }
 
-            const leakedSigs = [...names].filter((name) => name.endsWith('.sig'));
-            if (leakedSigs.length > 0) {
-              throw new Error(`Release ${tag} still exposes signature helper asset(s): ${leakedSigs.join(', ')}`);
-            }
-
             const checksumAsset = release.assets.find((asset) => asset.name === 'sha256sums.txt');
             const response = await fetch(checksumAsset.browser_download_url);
             if (!response.ok) {
@@ -791,7 +711,7 @@ jobs:
             }
             const checksumText = await response.text();
             const checksumMissing = expected
-              .filter((name) => name !== 'latest.json' && name !== 'sha256sums.txt')
+              .filter((name) => name !== 'sha256sums.txt')
               .filter((name) => !checksumText.includes(`  ${name}`));
             if (checksumMissing.length > 0) {
               throw new Error(`sha256sums.txt is missing asset checksum(s): ${checksumMissing.join(', ')}`);

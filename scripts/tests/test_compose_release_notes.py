@@ -41,6 +41,7 @@ class ComposeReleaseNotesTests(unittest.TestCase):
         self.assertIn("OxideTerm_2.0.0_macos_arm64.dmg", notes)
         self.assertNotIn("OxideTerm_2.0.0_macos_x64.dmg", notes)
         self.assertNotIn("OxideTerm_2.0.0_linux", notes)
+        self.assertNotIn("signatures", notes)
         self.assertNotIn("RELEASE_DOWNLOADS", notes)
         self.assertNotIn("# Stable", notes)
         self.assertNotIn("## 2.0.0", notes)

@@ -66,7 +66,7 @@ def stable_download_table(version: str, tag: str) -> str:
             f"| **Windows** | {link('Setup (.exe)', 'windows_x64')} | {link('Setup (.exe)', 'windows_arm64')} |",
             f"| **macOS** | Not available | {link('DMG (Apple Silicon)', 'macos_arm64')} |",
             "",
-            "Portable archives, signatures, and `sha256sums.txt` remain available in the release assets below.",
+            "Portable archives and `sha256sums.txt` remain available in the release assets below.",
         ]
     )
 
