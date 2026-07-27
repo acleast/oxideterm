@@ -22,6 +22,7 @@ OxideTerm 2.0.12 substantially expands native remote desktop and SSH Agent workf
 - Kept file-manager path completion navigation intact and added a terminal setting for recognizing local file paths as clickable links.
 - Made keybindings explicitly removable without forcing a replacement shortcut.
 - Corrected the cloud-sync automatic-upload toggle so the form reflects and saves the selected behavior consistently.
+- Restored the Windows installer application icon and kept manual installations interactive instead of silently replacing an existing legacy installation.
 
 ### 🧰 Release Maintenance
 
