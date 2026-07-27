@@ -51,14 +51,7 @@ def stable_download_table(version: str, tag: str) -> str:
     filenames = {
         "windows_x64": f"OxideTerm_{version}_windows_x64-setup.exe",
         "windows_arm64": f"OxideTerm_{version}_windows_arm64-setup.exe",
-        "macos_x64": f"OxideTerm_{version}_macos_x64.dmg",
         "macos_arm64": f"OxideTerm_{version}_macos_arm64.dmg",
-        "linux_x64_appimage": f"OxideTerm_{version}_linux_x64.AppImage",
-        "linux_x64_deb": f"OxideTerm_{version}_linux_x64.deb",
-        "linux_x64_rpm": f"OxideTerm_{version}_linux_x64.rpm",
-        "linux_arm64_appimage": f"OxideTerm_{version}_linux_arm64.AppImage",
-        "linux_arm64_deb": f"OxideTerm_{version}_linux_arm64.deb",
-        "linux_arm64_rpm": f"OxideTerm_{version}_linux_arm64.rpm",
     }
 
     def link(label: str, key: str) -> str:
@@ -71,8 +64,7 @@ def stable_download_table(version: str, tag: str) -> str:
             "| Operating system | x64 | ARM64 |",
             "|---|---|---|",
             f"| **Windows** | {link('Setup (.exe)', 'windows_x64')} | {link('Setup (.exe)', 'windows_arm64')} |",
-            f"| **macOS** | {link('DMG (Intel)', 'macos_x64')} | {link('DMG (Apple Silicon)', 'macos_arm64')} |",
-            f"| **Linux** | {link('AppImage', 'linux_x64_appimage')} · {link('DEB', 'linux_x64_deb')} · {link('RPM', 'linux_x64_rpm')} | {link('AppImage', 'linux_arm64_appimage')} · {link('DEB', 'linux_arm64_deb')} · {link('RPM', 'linux_arm64_rpm')} |",
+            f"| **macOS** | Not available | {link('DMG (Apple Silicon)', 'macos_arm64')} |",
             "",
             "Portable archives, signatures, and `sha256sums.txt` remain available in the release assets below.",
         ]
