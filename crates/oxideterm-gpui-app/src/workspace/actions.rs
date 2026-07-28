@@ -888,7 +888,7 @@ impl WorkspaceApp {
         }
 
         if self.scheduled_input.open
-            && self.scheduled_input.command_focused
+            && (self.scheduled_input.command_focused || self.scheduled_input.time_focused)
             && self.handle_scheduled_input_key(event, window, cx)
         {
             return;
@@ -1706,7 +1706,7 @@ impl WorkspaceApp {
         });
     }
 
-    fn handle_scheduled_input_key(
+    pub(super) fn handle_scheduled_input_key(
         &mut self,
         event: &KeyDownEvent,
         _window: &mut Window,
@@ -1714,22 +1714,77 @@ impl WorkspaceApp {
     ) -> bool {
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
-        match key {
-            "enter"
-                if !modifiers.shift
-                    && !modifiers.platform
-                    && !modifiers.alt
-                    && !modifiers.control =>
-            {
-                self.add_scheduled_input_task(cx);
-                true
+
+        // When the time field is focused, handle time-specific keys.
+        if self.scheduled_input.time_focused {
+            match key {
+                "enter" if !modifiers.platform && !modifiers.control && !modifiers.alt => {
+                    self.commit_scheduled_input_time_draft(cx);
+                    true
+                }
+                "escape" if !modifiers.platform => {
+                    self.scheduled_input.time_focused = false;
+                    self.scheduled_input.time_draft.clear();
+                    self.ime_marked_text = None;
+                    cx.notify();
+                    true
+                }
+                "backspace" if !modifiers.platform && !modifiers.control => {
+                    self.scheduled_input.time_draft.pop();
+                    self.ime_marked_text = None;
+                    cx.notify();
+                    true
+                }
+                "up" | "down" | "left" | "right" if !modifiers.platform && !modifiers.control => {
+                    // Consume navigation keys so they do not reach the terminal.
+                    true
+                }
+                _ => false,
             }
-            "escape" if !modifiers.platform => {
-                self.scheduled_input.command_focused = false;
-                cx.notify();
-                true
+        } else {
+            // Command field focused.
+            match key {
+                "enter"
+                    if !modifiers.shift
+                        && !modifiers.platform
+                        && !modifiers.alt
+                        && !modifiers.control =>
+                {
+                    self.add_scheduled_input_task(cx);
+                    true
+                }
+                "escape" if !modifiers.platform => {
+                    self.scheduled_input.command_focused = false;
+                    cx.notify();
+                    true
+                }
+                "backspace" if !modifiers.platform && !modifiers.control => {
+                    let changed = self.scheduled_input.command_draft.pop().is_some()
+                        || self.ime_marked_text.take().is_some();
+                    if changed {
+                        cx.notify();
+                    }
+                    true
+                }
+                "space" | " " if !modifiers.platform && !modifiers.control && !modifiers.alt => {
+                    let target = WorkspaceImeTarget::ScheduledInput;
+                    let replacement_range = self.ime_selection_range_for_target(target);
+                    let caret = replacement_range
+                        .as_ref()
+                        .map(|range| range.start + " ".encode_utf16().count());
+                    self.clear_ime_selection();
+                    self.replace_ime_target_text(target, replacement_range, " ", cx);
+                    if let Some(caret) = caret {
+                        self.set_ime_selection_from_anchor(target, caret, caret);
+                    }
+                    true
+                }
+                "up" | "down" | "left" | "right" if !modifiers.platform && !modifiers.control => {
+                    // Consume navigation keys so they do not reach the terminal.
+                    true
+                }
+                _ => false,
             }
-            _ => false,
         }
     }
 

@@ -43,6 +43,8 @@ pub(super) struct ScheduledInputState {
     daily_minute: u16,
     pub(super) command_draft: Zeroizing<String>,
     pub(super) command_focused: bool,
+    pub(super) time_focused: bool,
+    pub(super) time_draft: String,
     tasks: Vec<ScheduledInputTask>,
     polling: bool,
 }
@@ -58,6 +60,8 @@ impl ScheduledInputState {
             daily_minute: (next_hour.hour() * 60) as u16,
             command_draft: Zeroizing::new(String::new()),
             command_focused: false,
+            time_focused: false,
+            time_draft: String::new(),
             tasks: Vec::new(),
             polling: false,
         }
@@ -97,6 +101,8 @@ impl WorkspaceApp {
             self.scheduled_input.open = false;
             self.scheduled_input.target_session_id = None;
             self.scheduled_input.command_focused = false;
+            self.scheduled_input.time_focused = false;
+            self.scheduled_input.time_draft.clear();
             self.scheduled_input.command_draft = Zeroizing::new(String::new());
             cx.notify();
             return;
@@ -112,6 +118,8 @@ impl WorkspaceApp {
         self.scheduled_input.command_draft =
             Zeroizing::new(self.terminal_command_bar_draft.clone());
         self.scheduled_input.command_focused = true;
+        self.scheduled_input.time_focused = false;
+        self.scheduled_input.time_draft.clear();
         self.terminal_command_bar_focused = false;
         self.terminal_command_suggestions_open = false;
         self.close_terminal_quick_commands_popover();
@@ -133,6 +141,23 @@ impl WorkspaceApp {
         self.scheduled_input.daily_minute = (i32::from(self.scheduled_input.daily_minute)
             + delta_minutes)
             .rem_euclid(MINUTES_PER_DAY) as u16;
+        cx.notify();
+    }
+
+    pub(super) fn set_scheduled_input_time_focused(&mut self, cx: &mut Context<Self>) {
+        self.scheduled_input.time_focused = true;
+        self.scheduled_input.command_focused = false;
+        self.scheduled_input.time_draft = format_daily_minute(self.scheduled_input.daily_minute);
+        self.ime_marked_text = None;
+        cx.notify();
+    }
+
+    pub(super) fn commit_scheduled_input_time_draft(&mut self, cx: &mut Context<Self>) {
+        if let Some(minute) = parse_daily_minute(&self.scheduled_input.time_draft) {
+            self.scheduled_input.daily_minute = minute;
+        }
+        self.scheduled_input.time_focused = false;
+        self.scheduled_input.time_draft.clear();
         cx.notify();
     }
 
@@ -340,7 +365,6 @@ impl WorkspaceApp {
             self.i18n.t("terminal.scheduled_input.run_in"),
             self.scheduled_input.once_delay_minutes
         );
-        let daily_label = format_daily_minute(self.scheduled_input.daily_minute);
         let mut task_list = div().flex().flex_col().gap(px(6.0));
         for task in tasks {
             let task_id = task.id;
@@ -484,12 +508,6 @@ impl WorkspaceApp {
                 div()
                     .id("scheduled-input-command")
                     .rounded(px(self.tokens.radii.md))
-                    .border_1()
-                    .border_color(if self.scheduled_input.command_focused {
-                        rgba((theme.accent << 8) | 0x73)
-                    } else {
-                        rgb(theme.border)
-                    })
                     .bg(rgb(theme.bg))
                     .px(px(8.0))
                     .py(px(6.0))
@@ -580,14 +598,12 @@ impl WorkspaceApp {
                     |this, cx| this.adjust_scheduled_input_once_delay(5, cx),
                     cx,
                 ),
-                ScheduledInputRepeat::OnceAt => self.render_scheduled_input_stepper(
-                    daily_label,
+                ScheduledInputRepeat::OnceAt => self.render_scheduled_input_time_control(
                     |this, cx| this.adjust_scheduled_input_daily_time(-1, cx),
                     |this, cx| this.adjust_scheduled_input_daily_time(1, cx),
                     cx,
                 ),
-                ScheduledInputRepeat::Daily => self.render_scheduled_input_stepper(
-                    daily_label,
+                ScheduledInputRepeat::Daily => self.render_scheduled_input_time_control(
                     |this, cx| this.adjust_scheduled_input_daily_time(-15, cx),
                     |this, cx| this.adjust_scheduled_input_daily_time(15, cx),
                     cx,
@@ -728,10 +744,136 @@ impl WorkspaceApp {
             )
             .into_any_element()
     }
+    fn render_scheduled_input_time_control(
+        &self,
+        decrement: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        increment: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.tokens.ui;
+        let time_focused = self.scheduled_input.time_focused;
+        let daily_label = format_daily_minute(self.scheduled_input.daily_minute);
+        let time_draft = self.scheduled_input.time_draft.clone();
+
+        let center = if time_focused {
+            div().flex_1().min_w(px(0.0)).child(text_input_anchor_probe(
+                WorkspaceImeTarget::ScheduledInputTime.anchor_id(),
+                text_input(
+                    &self.tokens,
+                    TextInputView {
+                        value: &time_draft,
+                        placeholder: "HH:MM".to_string(),
+                        focused: true,
+                        caret_visible: self.new_connection_caret_visible,
+                        secret: false,
+                        selected_all: false,
+                        selected_range: self
+                            .ime_selected_range_for_target(WorkspaceImeTarget::ScheduledInputTime),
+                        marked_text: self
+                            .marked_text_for_target(WorkspaceImeTarget::ScheduledInputTime),
+                    },
+                ),
+                {
+                    let workspace = cx.entity();
+                    move |anchor, _window, cx| {
+                        let _ = workspace.update(cx, |this, cx| {
+                            this.update_text_input_anchor(anchor, cx);
+                        });
+                    }
+                },
+            ))
+        } else {
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_size(px(12.0))
+                .text_color(rgb(theme.text))
+                .cursor_text()
+                .child(daily_label)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, window, cx| {
+                        this.set_scheduled_input_time_focused(cx);
+                        window.focus(&this.focus_handle, cx);
+                    }),
+                )
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .id("scheduled-input-time-decrement")
+                    .size(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(self.tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .cursor_pointer()
+                    .child("−")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            if this.scheduled_input.time_focused {
+                                this.commit_scheduled_input_time_draft(cx);
+                            }
+                            decrement(this, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .child(center)
+            .child(
+                div()
+                    .id("scheduled-input-time-increment")
+                    .size(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(self.tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .cursor_pointer()
+                    .child("+")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            if this.scheduled_input.time_focused {
+                                this.commit_scheduled_input_time_draft(cx);
+                            }
+                            increment(this, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 fn format_daily_minute(minute: u16) -> String {
     format!("{:02}:{:02}", minute / 60, minute % 60)
+}
+
+fn parse_daily_minute(text: &str) -> Option<u16> {
+    let text = text.trim();
+    let (h, m) = if let Some((h, m)) = text.split_once(':') {
+        (h, m)
+    } else if text.len() <= 2 {
+        (text, "0")
+    } else {
+        text.split_at(2)
+    };
+    let h: u16 = h.trim().parse().ok()?;
+    let m: u16 = m.trim().parse().ok()?;
+    if h < 24 && m < 60 {
+        Some(h * 60 + m)
+    } else {
+        None
+    }
 }
 
 fn next_daily_occurrence(minute: u16, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -765,6 +907,21 @@ mod tests {
     fn daily_minute_wraps_and_formats() {
         assert_eq!(format_daily_minute(0), "00:00");
         assert_eq!(format_daily_minute(23 * 60 + 45), "23:45");
+    }
+
+    #[test]
+    fn parse_daily_minute_accepts_hh_mm() {
+        assert_eq!(parse_daily_minute("00:00"), Some(0));
+        assert_eq!(parse_daily_minute("9:30"), Some(9 * 60 + 30));
+        assert_eq!(parse_daily_minute("23:59"), Some(23 * 60 + 59));
+        assert_eq!(parse_daily_minute("  08:05  "), Some(8 * 60 + 5));
+    }
+
+    #[test]
+    fn parse_daily_minute_rejects_invalid() {
+        assert_eq!(parse_daily_minute("24:00"), None);
+        assert_eq!(parse_daily_minute("12:60"), None);
+        assert_eq!(parse_daily_minute("abc"), None);
     }
 
     #[test]

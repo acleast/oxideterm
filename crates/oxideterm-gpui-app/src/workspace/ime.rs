@@ -43,6 +43,7 @@ pub(super) enum WorkspaceImeTarget {
     Search,
     TerminalCommandBar,
     ScheduledInput,
+    ScheduledInputTime,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
     TerminalProjectSearch,
@@ -121,6 +122,7 @@ impl WorkspaceImeTarget {
             Self::Search => 1,
             Self::TerminalCommandBar => 2,
             Self::ScheduledInput => 4_500,
+            Self::ScheduledInputTime => 4_501,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
             Self::TerminalProjectSearch => 19,
@@ -677,6 +679,9 @@ impl WorkspaceApp {
         if self.scheduled_input.open && self.scheduled_input.command_focused {
             return Some(WorkspaceImeTarget::ScheduledInput);
         }
+        if self.scheduled_input.open && self.scheduled_input.time_focused {
+            return Some(WorkspaceImeTarget::ScheduledInputTime);
+        }
 
         if self
             .terminal_cast_player
@@ -1094,6 +1099,7 @@ impl WorkspaceApp {
         match target {
             WorkspaceImeTarget::TerminalCommandBar
             | WorkspaceImeTarget::ScheduledInput
+            | WorkspaceImeTarget::ScheduledInputTime
             | WorkspaceImeTarget::AiChatInput
             | WorkspaceImeTarget::AiMessageEdit => px(20.0),
             WorkspaceImeTarget::Settings(input) if input.accepts_newline() => {
@@ -1334,6 +1340,10 @@ impl WorkspaceApp {
                 .scheduled_input
                 .open
                 .then(|| self.scheduled_input.command_draft.as_str().to_string()),
+            WorkspaceImeTarget::ScheduledInputTime => self
+                .scheduled_input
+                .open
+                .then(|| self.scheduled_input.time_draft.clone()),
             WorkspaceImeTarget::TerminalCwdSearch => self
                 .terminal_cwd_picker
                 .open
@@ -2108,6 +2118,17 @@ impl WorkspaceApp {
                 if self.scheduled_input.open {
                     replace_utf16(
                         &mut self.scheduled_input.command_draft,
+                        replacement_range,
+                        text,
+                    );
+                    self.new_connection_caret_visible = true;
+                    cx.notify();
+                }
+            }
+            WorkspaceImeTarget::ScheduledInputTime => {
+                if self.scheduled_input.open {
+                    replace_utf16(
+                        &mut self.scheduled_input.time_draft,
                         replacement_range,
                         text,
                     );
