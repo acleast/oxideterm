@@ -463,6 +463,12 @@ impl WorkspaceApp {
                     SidebarActionKind::NewConnection,
                     cx,
                 ));
+        } else if panel_section == SidebarSection::Connections {
+            header = header.child(self.render_sidebar_action(
+                LucideIcon::LayoutList,
+                SidebarActionKind::OpenSessionManager,
+                cx,
+            ));
         }
         header.into_any_element()
     }
@@ -480,6 +486,9 @@ impl WorkspaceApp {
                 ActiveSessionSidebarViewMode::Focus => self.i18n.t("sidebar.tooltips.switch_tree"),
             },
             SidebarActionKind::NewConnection => self.i18n.t("sidebar.tooltips.new_connection"),
+            SidebarActionKind::OpenSessionManager => {
+                self.i18n.t("sidebar.panels.open_session_manager")
+            }
         };
 
         let toggle_focus_active = action == SidebarActionKind::ToggleSessionView
@@ -513,6 +522,9 @@ impl WorkspaceApp {
                         }
                         SidebarActionKind::NewConnection => {
                             this.open_new_connection_form(window, cx)
+                        }
+                        SidebarActionKind::OpenSessionManager => {
+                            this.open_session_manager_tab(window, cx)
                         }
                     }
                     cx.stop_propagation();
@@ -1470,6 +1482,7 @@ pub(in crate::workspace) fn notification_sidebar_row_signatures(
 pub(in crate::workspace) enum SidebarActionKind {
     ToggleSessionView,
     NewConnection,
+    OpenSessionManager,
 }
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+use super::state::should_collapse_primary_sidebar_section;
 use super::*;
 use gpui::StatefulInteractiveElement;
 use std::{
@@ -358,10 +359,25 @@ impl WorkspaceApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {
-                    if section == SidebarSection::Settings {
+                    if matches!(
+                        section,
+                        SidebarSection::Sessions | SidebarSection::Connections
+                    ) {
+                        this.active_surface = ActiveSurface::Terminal;
+                        if should_collapse_primary_sidebar_section(
+                            this.sidebar_collapsed,
+                            this.effective_sidebar_panel_section(),
+                            section,
+                        ) {
+                            // Match the Tauri activity bar: clicking the
+                            // currently visible section collapses only the UI
+                            // panel and does not alter session/node lifetime.
+                            this.toggle_sidebar(cx);
+                        } else {
+                            this.set_sidebar_section(section, cx);
+                        }
+                    } else if section == SidebarSection::Settings {
                         this.open_settings(window, cx);
-                    } else if section == SidebarSection::Connections {
-                        this.open_session_manager_tab(window, cx);
                     } else if section == SidebarSection::Terminal {
                         this.open_connection_runtime_tab(
                             ConnectionRuntimeSection::Overview,
@@ -414,7 +430,7 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn activity_icon_tooltip(&self, section: SidebarSection) -> String {
         match section {
             SidebarSection::Sessions => self.i18n.t("sidebar.panels.sessions"),
-            SidebarSection::Connections => self.i18n.t("sidebar.panels.open_session_manager"),
+            SidebarSection::Connections => self.i18n.t("sidebar.panels.session_manager"),
             SidebarSection::Sftp => self.i18n.t("sidebar.panels.sftp"),
             SidebarSection::Forwards => self.i18n.t("forwards.table.title"),
             SidebarSection::Terminal => self.i18n.t("sidebar.panels.runtime_overview"),

@@ -9,6 +9,14 @@ fn should_collapse_context_sidebar_panel(
     sidebar_visible && active_panel == requested_panel
 }
 
+pub(in crate::workspace) fn should_collapse_primary_sidebar_section(
+    sidebar_collapsed: bool,
+    active_section: SidebarSection,
+    requested_section: SidebarSection,
+) -> bool {
+    !sidebar_collapsed && active_section == requested_section
+}
+
 pub(in crate::workspace) fn context_sidebar_panel_visible(
     sidebar_collapsed: bool,
     zen_mode: bool,
@@ -425,6 +433,25 @@ mod tests {
             false,
             ContextSidebarPanel::HostTools,
             ContextSidebarPanel::HostTools,
+        ));
+    }
+
+    #[test]
+    fn primary_sidebar_section_click_collapses_only_the_visible_active_section() {
+        assert!(should_collapse_primary_sidebar_section(
+            false,
+            SidebarSection::Connections,
+            SidebarSection::Connections,
+        ));
+        assert!(!should_collapse_primary_sidebar_section(
+            false,
+            SidebarSection::Sessions,
+            SidebarSection::Connections,
+        ));
+        assert!(!should_collapse_primary_sidebar_section(
+            true,
+            SidebarSection::Connections,
+            SidebarSection::Connections,
         ));
     }
 
