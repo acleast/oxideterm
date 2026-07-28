@@ -1759,11 +1759,15 @@ impl WorkspaceApp {
             }
             "tab" => {
                 if self.terminal_command_suggestions_open {
-                    let suggestions = self.terminal_command_bar_visible_suggestions(cx);
-                    let index = self.terminal_command_suggestion_highlighted.unwrap_or(0);
-                    if let Some(suggestion) = suggestions.get(index) {
-                        self.accept_terminal_command_suggestion(suggestion, cx);
-                        return true;
+                    // Only accept when the user has explicitly highlighted a row.
+                    // When the dropdown auto-opens on typing, nothing is selected
+                    // by default; Tab passes through instead of accepting row 0.
+                    if let Some(index) = self.terminal_command_suggestion_highlighted {
+                        let suggestions = self.terminal_command_bar_visible_suggestions(cx);
+                        if let Some(suggestion) = suggestions.get(index) {
+                            self.accept_terminal_command_suggestion(suggestion, cx);
+                            return true;
+                        }
                     }
                 }
                 false

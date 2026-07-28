@@ -2094,7 +2094,11 @@ impl WorkspaceApp {
                         replacement_range,
                         text,
                     );
-                    self.terminal_command_suggestions_open = false;
+                    // Auto-open the completion dropdown when the user types and
+                    // there are matches.  Nothing is highlighted by default;
+                    // the user presses Up/Down to select a row.  The render
+                    // layer hides the popover when command_suggestions is empty.
+                    self.terminal_command_suggestions_open = true;
                     self.terminal_command_suggestion_highlighted = None;
                     self.new_connection_caret_visible = true;
                     cx.notify();
