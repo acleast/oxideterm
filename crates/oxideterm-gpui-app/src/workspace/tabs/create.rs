@@ -1158,10 +1158,9 @@ impl WorkspaceApp {
         self.main_window_tabs.active_tab_id = Some(tab_id);
         self.active_surface = ActiveSurface::Settings;
         self.needs_active_pane_focus = false;
-        if self.sidebar_collapsed {
-            self.set_sidebar_collapsed_with_motion(false, cx);
-        }
-        self.persist_sidebar_settings();
+        // Do not expand the primary sidebar when opening Settings — the
+        // settings surface has its own navigation panel (render_settings_nav)
+        // and does not rely on the session/connection sidebar.
         self.reveal_active_tab(window);
         if self.settings_page.active_tab == SettingsTab::General {
             self.refresh_cli_companion_status(cx);
