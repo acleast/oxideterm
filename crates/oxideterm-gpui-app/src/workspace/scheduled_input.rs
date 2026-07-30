@@ -45,6 +45,8 @@ pub(super) struct ScheduledInputState {
     pub(super) command_focused: bool,
     pub(super) time_focused: bool,
     pub(super) time_draft: String,
+    pub(super) delay_focused: bool,
+    pub(super) delay_draft: String,
     tasks: Vec<ScheduledInputTask>,
     polling: bool,
 }
@@ -62,6 +64,8 @@ impl ScheduledInputState {
             command_focused: false,
             time_focused: false,
             time_draft: String::new(),
+            delay_focused: false,
+            delay_draft: String::new(),
             tasks: Vec::new(),
             polling: false,
         }
@@ -103,6 +107,8 @@ impl WorkspaceApp {
             self.scheduled_input.command_focused = false;
             self.scheduled_input.time_focused = false;
             self.scheduled_input.time_draft.clear();
+            self.scheduled_input.delay_focused = false;
+            self.scheduled_input.delay_draft.clear();
             self.scheduled_input.command_draft = Zeroizing::new(String::new());
             cx.notify();
             return;
@@ -120,6 +126,8 @@ impl WorkspaceApp {
         self.scheduled_input.command_focused = true;
         self.scheduled_input.time_focused = false;
         self.scheduled_input.time_draft.clear();
+        self.scheduled_input.delay_focused = false;
+        self.scheduled_input.delay_draft.clear();
         self.terminal_command_bar_focused = false;
         self.terminal_command_suggestions_open = false;
         self.close_terminal_quick_commands_popover();
@@ -158,6 +166,24 @@ impl WorkspaceApp {
         }
         self.scheduled_input.time_focused = false;
         self.scheduled_input.time_draft.clear();
+        cx.notify();
+    }
+
+    pub(super) fn set_scheduled_input_delay_focused(&mut self, cx: &mut Context<Self>) {
+        self.scheduled_input.delay_focused = true;
+        self.scheduled_input.command_focused = false;
+        self.scheduled_input.delay_draft = self.scheduled_input.once_delay_minutes.to_string();
+        self.ime_marked_text = None;
+        cx.notify();
+    }
+
+    pub(super) fn commit_scheduled_input_delay_draft(&mut self, cx: &mut Context<Self>) {
+        if let Some(minutes) = parse_delay_minutes(&self.scheduled_input.delay_draft) {
+            self.scheduled_input.once_delay_minutes =
+                minutes.clamp(MIN_ONCE_DELAY_MINUTES, MAX_ONCE_DELAY_MINUTES);
+        }
+        self.scheduled_input.delay_focused = false;
+        self.scheduled_input.delay_draft.clear();
         cx.notify();
     }
 
@@ -360,11 +386,6 @@ impl WorkspaceApp {
         let command_placeholder = self
             .i18n
             .t("terminal.scheduled_input.command_input_placeholder");
-        let once_label = format!(
-            "{} {} min",
-            self.i18n.t("terminal.scheduled_input.run_in"),
-            self.scheduled_input.once_delay_minutes
-        );
         let mut task_list = div().flex().flex_col().gap(px(6.0));
         for task in tasks {
             let task_id = task.id;
@@ -592,8 +613,7 @@ impl WorkspaceApp {
                     )),
             )
             .child(match repeat {
-                ScheduledInputRepeat::Once => self.render_scheduled_input_stepper(
-                    once_label,
+                ScheduledInputRepeat::Once => self.render_scheduled_input_delay_control(
                     |this, cx| this.adjust_scheduled_input_once_delay(-5, cx),
                     |this, cx| this.adjust_scheduled_input_once_delay(5, cx),
                     cx,
@@ -689,61 +709,6 @@ impl WorkspaceApp {
             .into_any_element()
     }
 
-    fn render_scheduled_input_stepper(
-        &self,
-        label: String,
-        decrement: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        increment: impl Fn(&mut Self, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = self.tokens.ui;
-        div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .child(
-                div()
-                    .id("scheduled-input-decrement")
-                    .size(px(28.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(self.tokens.radii.md))
-                    .border_1()
-                    .border_color(rgb(theme.border))
-                    .cursor_pointer()
-                    .child("−")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            decrement(this, cx);
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .child(div().text_size(px(12.0)).child(label))
-            .child(
-                div()
-                    .id("scheduled-input-increment")
-                    .size(px(28.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(self.tokens.radii.md))
-                    .border_1()
-                    .border_color(rgb(theme.border))
-                    .cursor_pointer()
-                    .child("+")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            increment(this, cx);
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
-            .into_any_element()
-    }
     fn render_scheduled_input_time_control(
         &self,
         decrement: impl Fn(&mut Self, &mut Context<Self>) + 'static,
@@ -852,10 +817,128 @@ impl WorkspaceApp {
             )
             .into_any_element()
     }
+    fn render_scheduled_input_delay_control(
+        &self,
+        decrement: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        increment: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.tokens.ui;
+        let delay_focused = self.scheduled_input.delay_focused;
+        let delay_label = format!(
+            "{} {} min",
+            self.i18n.t("terminal.scheduled_input.run_in"),
+            self.scheduled_input.once_delay_minutes
+        );
+        let delay_draft = self.scheduled_input.delay_draft.clone();
+
+        let center = if delay_focused {
+            div().flex_1().min_w(px(0.0)).child(text_input_anchor_probe(
+                WorkspaceImeTarget::ScheduledInputDelay.anchor_id(),
+                text_input(
+                    &self.tokens,
+                    TextInputView {
+                        value: &delay_draft,
+                        placeholder: "min".to_string(),
+                        focused: true,
+                        caret_visible: self.new_connection_caret_visible,
+                        secret: false,
+                        selected_all: false,
+                        selected_range: self
+                            .ime_selected_range_for_target(WorkspaceImeTarget::ScheduledInputDelay),
+                        marked_text: self
+                            .marked_text_for_target(WorkspaceImeTarget::ScheduledInputDelay),
+                    },
+                ),
+                {
+                    let workspace = cx.entity();
+                    move |anchor, _window, cx| {
+                        let _ = workspace.update(cx, |this, cx| {
+                            this.update_text_input_anchor(anchor, cx);
+                        });
+                    }
+                },
+            ))
+        } else {
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_size(px(12.0))
+                .text_color(rgb(theme.text))
+                .cursor_text()
+                .child(delay_label)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, window, cx| {
+                        this.set_scheduled_input_delay_focused(cx);
+                        window.focus(&this.focus_handle, cx);
+                    }),
+                )
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .id("scheduled-input-delay-decrement")
+                    .size(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(self.tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .cursor_pointer()
+                    .child("−")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            if this.scheduled_input.delay_focused {
+                                this.commit_scheduled_input_delay_draft(cx);
+                            }
+                            decrement(this, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .child(center)
+            .child(
+                div()
+                    .id("scheduled-input-delay-increment")
+                    .size(px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(self.tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .cursor_pointer()
+                    .child("+")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            if this.scheduled_input.delay_focused {
+                                this.commit_scheduled_input_delay_draft(cx);
+                            }
+                            increment(this, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 fn format_daily_minute(minute: u16) -> String {
     format!("{:02}:{:02}", minute / 60, minute % 60)
+}
+
+fn parse_delay_minutes(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let n: i64 = text.parse().ok()?;
+    if n > 0 { Some(n) } else { None }
 }
 
 fn parse_daily_minute(text: &str) -> Option<u16> {
@@ -907,6 +990,20 @@ mod tests {
     fn daily_minute_wraps_and_formats() {
         assert_eq!(format_daily_minute(0), "00:00");
         assert_eq!(format_daily_minute(23 * 60 + 45), "23:45");
+    }
+
+    #[test]
+    fn parse_delay_minutes_accepts_positive() {
+        assert_eq!(parse_delay_minutes("5"), Some(5));
+        assert_eq!(parse_delay_minutes("  120  "), Some(120));
+        assert_eq!(parse_delay_minutes("1"), Some(1));
+    }
+
+    #[test]
+    fn parse_delay_minutes_rejects_invalid() {
+        assert_eq!(parse_delay_minutes("0"), None);
+        assert_eq!(parse_delay_minutes("-5"), None);
+        assert_eq!(parse_delay_minutes("abc"), None);
     }
 
     #[test]

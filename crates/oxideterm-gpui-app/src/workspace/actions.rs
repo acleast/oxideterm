@@ -888,7 +888,9 @@ impl WorkspaceApp {
         }
 
         if self.scheduled_input.open
-            && (self.scheduled_input.command_focused || self.scheduled_input.time_focused)
+            && (self.scheduled_input.command_focused
+                || self.scheduled_input.time_focused
+                || self.scheduled_input.delay_focused)
             && self.handle_scheduled_input_key(event, window, cx)
         {
             return;
@@ -1731,6 +1733,32 @@ impl WorkspaceApp {
                 }
                 "backspace" if !modifiers.platform && !modifiers.control => {
                     self.scheduled_input.time_draft.pop();
+                    self.ime_marked_text = None;
+                    cx.notify();
+                    true
+                }
+                "up" | "down" | "left" | "right" if !modifiers.platform && !modifiers.control => {
+                    // Consume navigation keys so they do not reach the terminal.
+                    true
+                }
+                _ => false,
+            }
+        } else if self.scheduled_input.delay_focused {
+            // When the delay field is focused, handle delay-specific keys.
+            match key {
+                "enter" if !modifiers.platform && !modifiers.control && !modifiers.alt => {
+                    self.commit_scheduled_input_delay_draft(cx);
+                    true
+                }
+                "escape" if !modifiers.platform => {
+                    self.scheduled_input.delay_focused = false;
+                    self.scheduled_input.delay_draft.clear();
+                    self.ime_marked_text = None;
+                    cx.notify();
+                    true
+                }
+                "backspace" if !modifiers.platform && !modifiers.control => {
+                    self.scheduled_input.delay_draft.pop();
                     self.ime_marked_text = None;
                     cx.notify();
                     true

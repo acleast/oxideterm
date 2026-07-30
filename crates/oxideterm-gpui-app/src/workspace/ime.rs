@@ -44,6 +44,7 @@ pub(super) enum WorkspaceImeTarget {
     TerminalCommandBar,
     ScheduledInput,
     ScheduledInputTime,
+    ScheduledInputDelay,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
     TerminalProjectSearch,
@@ -123,6 +124,7 @@ impl WorkspaceImeTarget {
             Self::TerminalCommandBar => 2,
             Self::ScheduledInput => 4_500,
             Self::ScheduledInputTime => 4_501,
+            Self::ScheduledInputDelay => 4_502,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
             Self::TerminalProjectSearch => 19,
@@ -1100,6 +1102,7 @@ impl WorkspaceApp {
             WorkspaceImeTarget::TerminalCommandBar
             | WorkspaceImeTarget::ScheduledInput
             | WorkspaceImeTarget::ScheduledInputTime
+            | WorkspaceImeTarget::ScheduledInputDelay
             | WorkspaceImeTarget::AiChatInput
             | WorkspaceImeTarget::AiMessageEdit => px(20.0),
             WorkspaceImeTarget::Settings(input) if input.accepts_newline() => {
@@ -1344,6 +1347,10 @@ impl WorkspaceApp {
                 .scheduled_input
                 .open
                 .then(|| self.scheduled_input.time_draft.clone()),
+            WorkspaceImeTarget::ScheduledInputDelay => self
+                .scheduled_input
+                .open
+                .then(|| self.scheduled_input.delay_draft.clone()),
             WorkspaceImeTarget::TerminalCwdSearch => self
                 .terminal_cwd_picker
                 .open
@@ -2129,6 +2136,17 @@ impl WorkspaceApp {
                 if self.scheduled_input.open {
                     replace_utf16(
                         &mut self.scheduled_input.time_draft,
+                        replacement_range,
+                        text,
+                    );
+                    self.new_connection_caret_visible = true;
+                    cx.notify();
+                }
+            }
+            WorkspaceImeTarget::ScheduledInputDelay => {
+                if self.scheduled_input.open {
+                    replace_utf16(
+                        &mut self.scheduled_input.delay_draft,
                         replacement_range,
                         text,
                     );

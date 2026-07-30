@@ -477,7 +477,9 @@ impl Render for WorkspaceApp {
                     window.prevent_default();
                     cx.stop_propagation();
                 } else if this.scheduled_input_popover_open()
-                    && (this.scheduled_input.command_focused || this.scheduled_input.time_focused)
+                    && (this.scheduled_input.command_focused
+                        || this.scheduled_input.time_focused
+                        || this.scheduled_input.delay_focused)
                     && this.handle_scheduled_input_key(event, window, cx)
                 {
                     window.prevent_default();
