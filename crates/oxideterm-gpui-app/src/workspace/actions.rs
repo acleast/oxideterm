@@ -891,8 +891,8 @@ impl WorkspaceApp {
             && (self.scheduled_input.command_focused
                 || self.scheduled_input.time_focused
                 || self.scheduled_input.delay_focused)
-            && self.handle_scheduled_input_key(event, window, cx)
         {
+            self.handle_scheduled_input_key(event, window, cx);
             return;
         }
 

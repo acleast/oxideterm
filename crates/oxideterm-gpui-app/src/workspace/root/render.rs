@@ -480,8 +480,8 @@ impl Render for WorkspaceApp {
                     && (this.scheduled_input.command_focused
                         || this.scheduled_input.time_focused
                         || this.scheduled_input.delay_focused)
-                    && this.handle_scheduled_input_key(event, window, cx)
                 {
+                    this.handle_scheduled_input_key(event, window, cx);
                     window.prevent_default();
                     cx.stop_propagation();
                 } else if this.forward_remote_desktop_key_from_capture(event, cx) {

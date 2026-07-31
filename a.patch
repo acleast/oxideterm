@@ -1,0 +1,576 @@
+diff --git a/src/components/terminal/LocalTerminalView.tsx b/src/components/terminal/LocalTerminalView.tsx
+index 1c288f0d..94564006 100644
+--- a/src/components/terminal/LocalTerminalView.tsx
++++ b/src/components/terminal/LocalTerminalView.tsx
+@@ -47,6 +47,7 @@ import {
+   notifyTerminalOutput,
+   updateTerminalReadiness,
+   registerTerminalCommandMarkCreator,
++  getCwd,
+ } from '../../lib/terminalRegistry';
+ import {
+   cleanupTerminalCommandMarks,
+@@ -290,6 +291,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
+   const autosuggestRecorder = useTerminalAutosuggestRecorder({
+     terminalKind: 'local_terminal',
+     localShellHistory: terminalSettings.autosuggest?.localShellHistory ?? true,
++    paneId: effectivePaneId,
+   });
+   const autosuggestRecorderRef = useRef(autosuggestRecorder);
+   autosuggestRecorderRef.current = autosuggestRecorder;
+@@ -742,6 +744,7 @@ export const LocalTerminalView: React.FC<LocalTerminalViewProps> = ({
+       term,
+       paneId: effectivePaneId,
+       sessionId,
++      getCwd: () => getCwd(effectivePaneId),
+     });
+     const osc133Disposable = term.parser.registerOscHandler(133, shellIntegrationController.handleOsc133);
+     const osc633Disposable = term.parser.registerOscHandler(633, shellIntegrationController.handleOsc633);
+diff --git a/src/components/terminal/TerminalCompletionOverlay.tsx b/src/components/terminal/TerminalCompletionOverlay.tsx
+index acfa8da9..0174ff36 100644
+--- a/src/components/terminal/TerminalCompletionOverlay.tsx
++++ b/src/components/terminal/TerminalCompletionOverlay.tsx
+@@ -78,7 +78,7 @@ export const TerminalCompletionOverlay: React.FC<TerminalCompletionOverlayProps>
+             aria-selected={highlighted}
+             className={[
+               'grid h-[28px] w-full grid-cols-[minmax(0,1fr)_32px] items-center border-0 bg-transparent p-0 text-left text-[15px] leading-none tracking-normal outline-none transition-colors',
+-              highlighted ? 'bg-[#2d303a]' : 'hover:bg-[#24262d]',
++              highlighted ? 'bg-[#0f86d1]' : 'hover:bg-[#24262d]',
+             ].join(' ')}
+             onMouseEnter={() => onHoverIndex(index)}
+             onMouseDown={(event) => {
+@@ -87,8 +87,8 @@ export const TerminalCompletionOverlay: React.FC<TerminalCompletionOverlayProps>
+             }}
+           >
+             <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre px-[6px] text-[#d8d8d8]">
+-              <span className="text-[#f0f0f0]">{currentInput}</span>
+-              {suffix && <span className="text-[#d8d8d8]">{suffix}</span>}
++              <span className={highlighted ? 'text-white' : 'text-[#f0f0f0]'}>{currentInput}</span>
++              {suffix && <span className={highlighted ? 'text-white' : 'text-[#d8d8d8]'}>{suffix}</span>}
+             </span>
+             <span
+               aria-hidden="true"
+diff --git a/src/components/terminal/TerminalView.tsx b/src/components/terminal/TerminalView.tsx
+index b228e7a1..a86edc68 100644
+--- a/src/components/terminal/TerminalView.tsx
++++ b/src/components/terminal/TerminalView.tsx
+@@ -39,6 +39,7 @@ import {
+   notifyTerminalOutput,
+   updateTerminalReadiness,
+   registerTerminalCommandMarkCreator,
++  getCwd,
+ } from '../../lib/terminalRegistry';
+ import {
+   cleanupTerminalCommandMarks,
+@@ -205,6 +206,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+   const lastRemoteResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+   const wsRef = useRef<WebSocket | null>(null);
+   const smartCopyDisposableRef = useRef<{ dispose: () => void } | null>(null);
++  const completionOverlayRef = useRef<ReturnType<typeof useTerminalCompletionOverlay> | null>(null);
+   const trzszControllerRef = useRef<TrzszController | null>(null);
+   const highlightEngineRef = useRef<HighlightEngine | null>(null);
+   const runtimeDisabledHighlightRulesRef = useRef<Map<string, string>>(new Map());
+@@ -690,6 +692,73 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+     });
+   }, []);
+ 
++  const handleCompletionOverlayKeyEvent = useCallback((event: KeyboardEvent): boolean => {
++    if (event.type !== 'keydown') return true;
++
++    const overlay = completionOverlayRef.current;
++    if (!overlay || !overlay.open) return true;
++
++    const key = event.key || event.code;
++    const code = event.code || event.key;
++
++    switch (key) {
++      case 'ArrowDown':
++      case 'Down':
++        overlay.moveHighlight(1);
++        event.preventDefault();
++        event.stopPropagation();
++        return false;
++      case 'ArrowUp':
++      case 'Up':
++        overlay.moveHighlight(-1);
++        event.preventDefault();
++        event.stopPropagation();
++        return false;
++      case 'Tab':
++        if (overlay.accept()) {
++          event.preventDefault();
++          event.stopPropagation();
++          return false;
++        }
++        return true;
++      case 'Escape':
++      case 'Esc':
++        overlay.close();
++        event.preventDefault();
++        event.stopPropagation();
++        return false;
++      default:
++        break;
++    }
++
++    switch (code) {
++      case 'ArrowDown':
++        overlay.moveHighlight(1);
++        event.preventDefault();
++        event.stopPropagation();
++        return false;
++      case 'ArrowUp':
++        overlay.moveHighlight(-1);
++        event.preventDefault();
++        event.stopPropagation();
++        return false;
++      case 'Tab':
++        if (overlay.accept()) {
++          event.preventDefault();
++          event.stopPropagation();
++          return false;
++        }
++        return true;
++      case 'Escape':
++        overlay.close();
++        event.preventDefault();
++        event.stopPropagation();
++        return false;
++      default:
++        return true;
++    }
++  }, []);
++
+   const transformTerminalOutput = useCallback((payload: Uint8Array) => {
+     return terminalOutputDecoderRef.current.transform(payload);
+   }, []);
+@@ -754,6 +823,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+   const autosuggestRecorder = useTerminalAutosuggestRecorder({
+     terminalKind: 'terminal',
+     localShellHistory: terminalSettings.autosuggest?.localShellHistory ?? true,
++    paneId: effectivePaneId,
+   });
+   const autosuggestRecorderRef = useRef(autosuggestRecorder);
+   autosuggestRecorderRef.current = autosuggestRecorder;
+@@ -1759,6 +1829,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+       paneId: effectivePaneId,
+       sessionId,
+       nodeId,
++      getCwd: () => getCwd(effectivePaneId),
+     });
+     const osc133Disposable = term.parser.registerOscHandler(133, shellIntegrationController.handleOsc133);
+     const osc633Disposable = term.parser.registerOscHandler(633, shellIntegrationController.handleOsc633);
+@@ -1898,6 +1969,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+       isCopyOnSelectEnabled: () => useSettingsStore.getState().settings.terminal.copyOnSelect,
+       isMiddleClickPasteEnabled: () => useSettingsStore.getState().settings.terminal.middleClickPaste,
+       onPasteShortcut: handlePasteShortcut,
++      onKeyEvent: handleCompletionOverlayKeyEvent,
+       container: containerRef.current,
+     });
+     selectionGestureRef.current = installShiftSelectionGuard(
+@@ -2635,6 +2707,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+   const completionOverlay = useTerminalCompletionOverlay({
+     enabled: terminalSettings.autosuggest?.nativeCompletionOverlay ?? true,
+     isActive,
++    paneId: effectivePaneId,
+     getInputState: autosuggestRecorder.getInputState,
+     acceptCompletion: autosuggestRecorder.acceptCompletion,
+     sendInput: (suffix) => {
+@@ -2642,7 +2715,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+       sendProgrammaticTerminalInput(suffix, 'text');
+     },
+   });
+-  const completionOverlayRef = useRef(completionOverlay);
+   completionOverlayRef.current = completionOverlay;
+ 
+   const sendFormattedTerminalInput = useCallback((input: string): boolean => {
+@@ -2704,43 +2776,14 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
+    */
+   useEffect(() => {
+     if (!isActive) return;
+-    const container = containerRef.current;
+-    if (!container) return;
+ 
+     const handleKeyDown = (event: KeyboardEvent) => {
+-      const overlay = completionOverlayRef.current;
+-      if (!overlay || !overlay.open) return;
+-
+-      switch (event.key) {
+-        case 'ArrowDown':
+-          overlay.moveHighlight(1);
+-          event.preventDefault();
+-          event.stopPropagation();
+-          break;
+-        case 'ArrowUp':
+-          overlay.moveHighlight(-1);
+-          event.preventDefault();
+-          event.stopPropagation();
+-          break;
+-        case 'Tab':
+-          if (overlay.accept()) {
+-            event.preventDefault();
+-            event.stopPropagation();
+-          }
+-          break;
+-        case 'Escape':
+-          overlay.close();
+-          event.preventDefault();
+-          event.stopPropagation();
+-          break;
+-        default:
+-          break;
+-      }
++      handleCompletionOverlayKeyEvent(event);
+     };
+ 
+-    container.addEventListener('keydown', handleKeyDown, true);
+-    return () => container.removeEventListener('keydown', handleKeyDown, true);
+-  }, [isActive]);
++    window.addEventListener('keydown', handleKeyDown, true);
++    return () => window.removeEventListener('keydown', handleKeyDown, true);
++  }, [handleCompletionOverlayKeyEvent, isActive]);
+ 
+   /**
+    * Handle container click - focus terminal and update active pane
+diff --git a/src/hooks/useTerminalAutosuggestRecorder.ts b/src/hooks/useTerminalAutosuggestRecorder.ts
+index 8e04c8d9..c3fa1bcd 100644
+--- a/src/hooks/useTerminalAutosuggestRecorder.ts
++++ b/src/hooks/useTerminalAutosuggestRecorder.ts
+@@ -9,23 +9,25 @@ import {
+   TerminalAutosuggestInputTracker,
+ } from '@/lib/terminal/autosuggest';
+ import type { TerminalAutosuggestInputState } from '@/lib/terminal/autosuggest';
++import { getCwd } from '@/lib/terminalRegistry';
+ 
+ type TerminalKind = 'terminal' | 'local_terminal';
+ 
+ export function useTerminalAutosuggestRecorder(options: {
+   terminalKind: TerminalKind;
+   localShellHistory: boolean;
++  paneId: string;
+ }) {
+-  const { terminalKind, localShellHistory } = options;
++  const { terminalKind, localShellHistory, paneId } = options;
+   const trackerRef = useRef(new TerminalAutosuggestInputTracker());
+ 
+   const observeInput = useCallback((data: string) => {
+     const result = trackerRef.current.applyData(data);
+     if (result.completedCommand) {
+-      recordTerminalAutosuggestCommand(result.completedCommand, 'runtime');
++      recordTerminalAutosuggestCommand(result.completedCommand, 'runtime', getCwd(paneId));
+     }
+     return result;
+-  }, []);
++  }, [paneId]);
+ 
+   const resetInput = useCallback(() => {
+     trackerRef.current.reset();
+@@ -57,7 +59,7 @@ export function useTerminalAutosuggestRecorder(options: {
+     return () => {
+       cancelled = true;
+     };
+-  }, [localShellHistory, terminalKind]);
++  }, [localShellHistory, paneId, terminalKind]);
+ 
+   return { observeInput, resetInput, getInputState, acceptCompletion };
+ }
+diff --git a/src/hooks/useTerminalCompletionOverlay.ts b/src/hooks/useTerminalCompletionOverlay.ts
+index da14e317..4e091052 100644
+--- a/src/hooks/useTerminalCompletionOverlay.ts
++++ b/src/hooks/useTerminalCompletionOverlay.ts
+@@ -7,17 +7,19 @@ import {
+   type TerminalAutosuggestCandidate,
+   type TerminalAutosuggestInputState,
+ } from '@/lib/terminal/autosuggest';
++import { getCwd } from '@/lib/terminalRegistry';
+ 
+ const COMPLETION_LIMIT = 8;
+ 
+ export function useTerminalCompletionOverlay(options: {
+   enabled: boolean;
+   isActive: boolean;
++  paneId: string;
+   getInputState: () => TerminalAutosuggestInputState;
+   acceptCompletion: (text: string) => void;
+   sendInput: (suffix: string) => void;
+ }) {
+-  const { enabled, isActive, getInputState, acceptCompletion, sendInput } = options;
++  const { enabled, isActive, paneId, getInputState, acceptCompletion, sendInput } = options;
+   const [candidates, setCandidates] = useState<TerminalAutosuggestCandidate[]>([]);
+   const [highlightedIndex, setHighlightedIndexState] = useState(0);
+   const lastInputRef = useRef<TerminalAutosuggestInputState>(getInputState());
+@@ -27,6 +29,7 @@ export function useTerminalCompletionOverlay(options: {
+   const refresh = useCallback(() => {
+     const input = getInputState();
+     lastInputRef.current = input;
++    const cwd = getCwd(paneId);
+ 
+     if (!enabled || !isActive || !input.isCursorAtEnd) {
+       setCandidates([]);
+@@ -42,7 +45,7 @@ export function useTerminalCompletionOverlay(options: {
+     }
+ 
+     const lowerQuery = query.toLowerCase();
+-    const nextCandidates = getTerminalAutosuggestCandidates(query, COMPLETION_LIMIT)
++    const nextCandidates = getTerminalAutosuggestCandidates(query, COMPLETION_LIMIT, cwd)
+       .filter((candidate) => {
+         const lowerCommand = candidate.command.toLowerCase();
+         return lowerCommand.startsWith(lowerQuery) && lowerCommand !== lowerQuery;
+@@ -52,7 +55,7 @@ export function useTerminalCompletionOverlay(options: {
+       if (nextCandidates.length === 0) return 0;
+       return Math.min(current, nextCandidates.length - 1);
+     });
+-  }, [enabled, getInputState, isActive]);
++  }, [enabled, getInputState, isActive, paneId]);
+ 
+   useEffect(() => {
+     refresh();
+diff --git a/src/lib/terminal/autosuggest/history.ts b/src/lib/terminal/autosuggest/history.ts
+index 1557f3cd..5ca2418b 100644
+--- a/src/lib/terminal/autosuggest/history.ts
++++ b/src/lib/terminal/autosuggest/history.ts
+@@ -8,6 +8,7 @@ import type { TerminalAutosuggestCandidate } from './types';
+ type HistoryEntry = {
+   command: string;
+   source: TerminalAutosuggestCandidate['source'];
++  cwd: string | null;
+   lastUsedAt: number;
+   uses: number;
+   sequence: number;
+@@ -21,16 +22,28 @@ function normalizeCommand(command: string): string {
+   return command.replace(/\s+/g, ' ').trim();
+ }
+ 
++function normalizeCwd(cwd: string | null | undefined): string | null {
++  const normalized = cwd?.trim().replace(/\/+$/, '');
++  return normalized || null;
++}
++
++function entryKey(command: string, cwd: string | null): string {
++  return `${cwd ?? '*'}\0${command}`;
++}
++
+ function putCommand(
+   command: string,
+   source: TerminalAutosuggestCandidate['source'],
+   lastUsedAt = Date.now(),
+   countUse = true,
++  cwd?: string | null,
+ ): void {
+   const normalized = normalizeCommand(command);
+   if (!normalized || normalized.length > 2000 || isLikelySecretCommand(normalized)) return;
+ 
+-  const existing = entries.get(normalized);
++  const normalizedCwd = normalizeCwd(cwd);
++  const key = entryKey(normalized, normalizedCwd);
++  const existing = entries.get(key);
+   if (existing) {
+     existing.lastUsedAt = Math.max(existing.lastUsedAt, lastUsedAt);
+     existing.sequence = ++sequenceCounter;
+@@ -40,24 +53,36 @@ function putCommand(
+     return;
+   }
+ 
+-  entries.set(normalized, { command: normalized, source, lastUsedAt, uses: 1, sequence: ++sequenceCounter });
++  entries.set(key, {
++    command: normalized,
++    source,
++    cwd: normalizedCwd,
++    lastUsedAt,
++    uses: 1,
++    sequence: ++sequenceCounter,
++  });
+   if (entries.size > MAX_HISTORY) {
+     const oldest = [...entries.values()].sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0];
+-    if (oldest) entries.delete(oldest.command);
++    if (oldest) entries.delete(entryKey(oldest.command, oldest.cwd));
+   }
+ }
+ 
+-export function recordTerminalAutosuggestCommand(command: string, source: TerminalAutosuggestCandidate['source'] = 'runtime'): void {
+-  putCommand(command, source);
++export function recordTerminalAutosuggestCommand(
++  command: string,
++  source: TerminalAutosuggestCandidate['source'] = 'runtime',
++  cwd?: string | null,
++): void {
++  putCommand(command, source, Date.now(), true, cwd);
+ }
+ 
+ export function importTerminalAutosuggestCommands(
+   commands: Iterable<string>,
+   source: TerminalAutosuggestCandidate['source'],
++  cwd?: string | null,
+ ): void {
+   let offset = 0;
+   for (const command of commands) {
+-    putCommand(command, source, Date.now() - offset, false);
++    putCommand(command, source, Date.now() - offset, false, cwd);
+     offset += 1;
+   }
+ }
+@@ -87,30 +112,55 @@ function fuzzyScore(command: string, query: string): number {
+   return qi === lowerQuery.length ? score : 0;
+ }
+ 
+-export function getTerminalAutosuggestCandidates(query: string, limit = 8): TerminalAutosuggestCandidate[] {
++export function getTerminalAutosuggestCandidates(
++  query: string,
++  limit = 8,
++  cwd?: string | null,
++): TerminalAutosuggestCandidate[] {
+   const trimmed = query.trimStart();
++  const normalizedCwd = normalizeCwd(cwd);
+ 
+   seedFromAiLedger();
+   const now = Date.now();
+   const candidates: TerminalAutosuggestCandidate[] = [];
+   for (const entry of entries.values()) {
++    const cwdMatches = !entry.cwd || !normalizedCwd || entry.cwd === normalizedCwd;
++    if (!cwdMatches) continue;
++
+     const fuzzy = fuzzyScore(entry.command, trimmed);
+     if (trimmed && (fuzzy <= 0 || entry.command === trimmed)) continue;
+     const recency = Math.max(0, 200 - Math.floor((now - entry.lastUsedAt) / 60_000));
+-    const score = (trimmed ? fuzzy + recency + entry.uses * 5 : recency + entry.uses * 5) + entry.sequence / 1_000_000;
+-    candidates.push({ command: entry.command, source: entry.source, lastUsedAt: entry.lastUsedAt, score });
++    const cwdBonus = normalizedCwd && entry.cwd === normalizedCwd ? 600 : 0;
++    const score = (trimmed ? fuzzy + recency + entry.uses * 5 : recency + entry.uses * 5)
++      + cwdBonus
++      + entry.sequence / 1_000_000;
++    candidates.push({
++      command: entry.command,
++      source: entry.source,
++      cwd: entry.cwd,
++      lastUsedAt: entry.lastUsedAt,
++      score,
++    });
+   }
+ 
+-  return candidates
+-    .sort((a, b) => b.score - a.score || b.lastUsedAt - a.lastUsedAt || a.command.localeCompare(b.command))
+-    .slice(0, limit);
++  const seenCommands = new Set<string>();
++  const sorted = candidates
++    .sort((a, b) => b.score - a.score || b.lastUsedAt - a.lastUsedAt || a.command.localeCompare(b.command));
++  const unique: TerminalAutosuggestCandidate[] = [];
++  for (const candidate of sorted) {
++    if (seenCommands.has(candidate.command)) continue;
++    seenCommands.add(candidate.command);
++    unique.push(candidate);
++    if (unique.length >= limit) break;
++  }
++  return unique;
+ }
+ 
+-export function getTerminalAutosuggestion(input: string): string | null {
++export function getTerminalAutosuggestion(input: string, cwd?: string | null): string | null {
+   const query = input.trimStart();
+   if (!query) return null;
+   const leading = input.slice(0, input.length - query.length);
+-  const candidate = getTerminalAutosuggestCandidates(query, 1)[0];
++  const candidate = getTerminalAutosuggestCandidates(query, 1, cwd)[0];
+   if (!candidate || !candidate.command.startsWith(query) || candidate.command === query) return null;
+   return `${leading}${candidate.command}`.slice(input.length);
+ }
+diff --git a/src/lib/terminal/autosuggest/inputTracker.ts b/src/lib/terminal/autosuggest/inputTracker.ts
+index e528508e..66a0fb2b 100644
+--- a/src/lib/terminal/autosuggest/inputTracker.ts
++++ b/src/lib/terminal/autosuggest/inputTracker.ts
+@@ -131,6 +131,9 @@ export class TerminalAutosuggestInputTracker {
+   }
+ 
+   private applyEscapeSequence(sequence: string): number {
++    if (sequence.startsWith('\x1b[A') || sequence.startsWith('\x1bOA') || sequence.startsWith('\x1b[B') || sequence.startsWith('\x1bOB')) {
++      return 3;
++    }
+     if (sequence.startsWith('\x1b[D') || sequence.startsWith('\x1bOD')) {
+       this.cursorIndex = Math.max(0, this.cursorIndex - 1);
+       this.dirty = true;
+diff --git a/src/lib/terminal/autosuggest/types.ts b/src/lib/terminal/autosuggest/types.ts
+index 2a16b81e..2645e641 100644
+--- a/src/lib/terminal/autosuggest/types.ts
++++ b/src/lib/terminal/autosuggest/types.ts
+@@ -11,6 +11,7 @@ export interface TerminalAutosuggestSettings {
+ export interface TerminalAutosuggestCandidate {
+   command: string;
+   source: 'runtime' | 'local-history' | 'ai-ledger';
++  cwd?: string | null;
+   lastUsedAt: number;
+   score: number;
+ }
+diff --git a/src/lib/terminal/completion/historyProvider.ts b/src/lib/terminal/completion/historyProvider.ts
+index 08707e40..05e85437 100644
+--- a/src/lib/terminal/completion/historyProvider.ts
++++ b/src/lib/terminal/completion/historyProvider.ts
+@@ -5,9 +5,9 @@ import { getTerminalAutosuggestCandidates, isLikelySecretCommand } from '@/lib/t
+ import type { CommandBarCompletion, CommandBarCompletionProvider } from './types';
+ import { classifyCommandRisk, riskScorePenalty } from './risk';
+ 
+-export const historyProvider: CommandBarCompletionProvider = ({ input, allowEmptyHistory }) => {
++export const historyProvider: CommandBarCompletionProvider = ({ input, context, allowEmptyHistory }) => {
+   if (!input.trim() && !allowEmptyHistory) return [];
+-  const candidates = getTerminalAutosuggestCandidates(input, 8);
++  const candidates = getTerminalAutosuggestCandidates(input, 8, context.cwd);
+   return candidates
+     .filter((candidate) => !isLikelySecretCommand(candidate.command))
+     .map<CommandBarCompletion>((candidate) => {
+diff --git a/src/test/lib/terminalAutosuggest.test.ts b/src/test/lib/terminalAutosuggest.test.ts
+index ec28d916..30d8f228 100644
+--- a/src/test/lib/terminalAutosuggest.test.ts
++++ b/src/test/lib/terminalAutosuggest.test.ts
+@@ -38,6 +38,20 @@ describe('terminal autosuggest', () => {
+     expect(tracker.getState().value).toBe('');
+   });
+ 
++  it('ignores up and down arrow escape sequences in the input tracker', () => {
++    const tracker = new TerminalAutosuggestInputTracker();
++
++    tracker.applyData('git st');
++    expect(tracker.applyData('\x1b[A')).toMatchObject({ changed: false });
++    expect(tracker.applyData('\x1b[B')).toMatchObject({ changed: false });
++
++    expect(tracker.getState()).toMatchObject({
++      value: 'git st',
++      cursorIndex: 6,
++      isCursorAtEnd: true,
++    });
++  });
++
+   it('only offers suffix ghost text for prefix matches', () => {
+     recordTerminalAutosuggestCommand('git status');
+     recordTerminalAutosuggestCommand('git stash list');
+@@ -58,6 +72,33 @@ describe('terminal autosuggest', () => {
+     ]);
+   });
+ 
++  it('keeps cwd-scoped runtime commands out of other directories', () => {
++    recordTerminalAutosuggestCommand('pnpm dev', 'runtime', '/work/app-a');
++    recordTerminalAutosuggestCommand('pnpm build', 'runtime', '/work/app-b');
++    recordTerminalAutosuggestCommand('pnpm install', 'local-history');
++
++    expect(getTerminalAutosuggestCandidates('pnpm', 10, '/work/app-a').map((match) => match.command)).toEqual([
++      'pnpm dev',
++      'pnpm install',
++    ]);
++    expect(getTerminalAutosuggestCandidates('pnpm', 10, '/work/app-b').map((match) => match.command)).toEqual([
++      'pnpm build',
++      'pnpm install',
++    ]);
++  });
++
++  it('prefers cwd-specific history over global history for the same command', () => {
++    recordTerminalAutosuggestCommand('make test', 'local-history');
++    recordTerminalAutosuggestCommand('make test', 'runtime', '/work/project');
++
++    const [match] = getTerminalAutosuggestCandidates('make', 10, '/work/project');
++
++    expect(match).toMatchObject({
++      command: 'make test',
++      cwd: '/work/project',
++    });
++  });
++
+   it('returns recent history when the query is empty', () => {
+     recordTerminalAutosuggestCommand('git status');
+     recordTerminalAutosuggestCommand('ls -la');
