@@ -684,6 +684,9 @@ impl WorkspaceApp {
         if self.scheduled_input.open && self.scheduled_input.time_focused {
             return Some(WorkspaceImeTarget::ScheduledInputTime);
         }
+        if self.scheduled_input.open && self.scheduled_input.delay_focused {
+            return Some(WorkspaceImeTarget::ScheduledInputDelay);
+        }
 
         if self
             .terminal_cast_player

@@ -515,8 +515,8 @@ impl WorkspaceApp {
                                 }),
                                 "terminal-command-scheduled-input",
                                 self.i18n.t("terminal.scheduled_input.open"),
-                                |this, _event, _window, cx| {
-                                    this.toggle_scheduled_input_popover(cx);
+                                |this, _event, window, cx| {
+                                    this.toggle_scheduled_input_popover(window, cx);
                                     cx.stop_propagation();
                                 },
                                 cx,

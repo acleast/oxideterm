@@ -100,7 +100,11 @@ impl WorkspaceApp {
             .count()
     }
 
-    pub(super) fn toggle_scheduled_input_popover(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn toggle_scheduled_input_popover(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.scheduled_input.open {
             self.scheduled_input.open = false;
             self.scheduled_input.target_session_id = None;
@@ -131,12 +135,24 @@ impl WorkspaceApp {
         self.terminal_command_bar_focused = false;
         self.terminal_command_suggestions_open = false;
         self.close_terminal_quick_commands_popover();
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
-    fn set_scheduled_input_repeat(&mut self, repeat: ScheduledInputRepeat, cx: &mut Context<Self>) {
+    fn set_scheduled_input_repeat(
+        &mut self,
+        repeat: ScheduledInputRepeat,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scheduled_input.repeat = repeat;
-        cx.notify();
+        match repeat {
+            ScheduledInputRepeat::Once => self.set_scheduled_input_delay_focused(cx),
+            ScheduledInputRepeat::OnceAt | ScheduledInputRepeat::Daily => {
+                self.set_scheduled_input_time_focused(cx);
+            }
+        }
+        window.focus(&self.focus_handle, cx);
     }
 
     fn adjust_scheduled_input_once_delay(&mut self, delta: i64, cx: &mut Context<Self>) {
@@ -155,8 +171,17 @@ impl WorkspaceApp {
     pub(super) fn set_scheduled_input_time_focused(&mut self, cx: &mut Context<Self>) {
         self.scheduled_input.time_focused = true;
         self.scheduled_input.command_focused = false;
+        self.scheduled_input.delay_focused = false;
+        self.scheduled_input.delay_draft.clear();
         self.scheduled_input.time_draft = format_daily_minute(self.scheduled_input.daily_minute);
         self.ime_marked_text = None;
+        // The time field only renders as a text input once `time_focused` is
+        // true, so its anchor bounds are still missing on the click frame.
+        // Seed the caret explicitly instead of letting IME selection resolve
+        // from absent geometry, which leaves the platform text owner on the
+        // terminal and sends typed characters to the shell.
+        let caret = self.scheduled_input.time_draft.encode_utf16().count();
+        self.set_ime_selection_from_anchor(WorkspaceImeTarget::ScheduledInputTime, caret, caret);
         cx.notify();
     }
 
@@ -172,8 +197,13 @@ impl WorkspaceApp {
     pub(super) fn set_scheduled_input_delay_focused(&mut self, cx: &mut Context<Self>) {
         self.scheduled_input.delay_focused = true;
         self.scheduled_input.command_focused = false;
+        self.scheduled_input.time_focused = false;
+        self.scheduled_input.time_draft.clear();
         self.scheduled_input.delay_draft = self.scheduled_input.once_delay_minutes.to_string();
         self.ime_marked_text = None;
+        // Same deferred-render caveat as the time field above.
+        let caret = self.scheduled_input.delay_draft.encode_utf16().count();
+        self.set_ime_selection_from_anchor(WorkspaceImeTarget::ScheduledInputDelay, caret, caret);
         cx.notify();
     }
 
@@ -512,8 +542,8 @@ impl WorkspaceApp {
                             ))
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _event, _window, cx| {
-                                    this.toggle_scheduled_input_popover(cx);
+                                cx.listener(|this, _event, window, cx| {
+                                    this.toggle_scheduled_input_popover(window, cx);
                                     cx.stop_propagation();
                                 }),
                             ),
@@ -538,6 +568,10 @@ impl WorkspaceApp {
                         MouseButton::Left,
                         cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                             this.scheduled_input.command_focused = true;
+                            this.scheduled_input.time_focused = false;
+                            this.scheduled_input.time_draft.clear();
+                            this.scheduled_input.delay_focused = false;
+                            this.scheduled_input.delay_draft.clear();
                             this.ime_marked_text = None;
                             window.focus(&this.focus_handle, cx);
                             this.begin_ime_selection_from_mouse_down(
@@ -547,6 +581,7 @@ impl WorkspaceApp {
                                 cx,
                             );
                             cx.notify();
+                            cx.stop_propagation();
                         }),
                     )
                     .on_mouse_move(
@@ -590,24 +625,28 @@ impl WorkspaceApp {
                     .child(self.scheduled_input_choice_button(
                         self.i18n.t("terminal.scheduled_input.once"),
                         repeat == ScheduledInputRepeat::Once,
-                        move |this, cx| {
-                            this.set_scheduled_input_repeat(ScheduledInputRepeat::Once, cx)
+                        move |this, window, cx| {
+                            this.set_scheduled_input_repeat(ScheduledInputRepeat::Once, window, cx)
                         },
                         cx,
                     ))
                     .child(self.scheduled_input_choice_button(
                         self.i18n.t("terminal.scheduled_input.at_time"),
                         repeat == ScheduledInputRepeat::OnceAt,
-                        move |this, cx| {
-                            this.set_scheduled_input_repeat(ScheduledInputRepeat::OnceAt, cx)
+                        move |this, window, cx| {
+                            this.set_scheduled_input_repeat(
+                                ScheduledInputRepeat::OnceAt,
+                                window,
+                                cx,
+                            )
                         },
                         cx,
                     ))
                     .child(self.scheduled_input_choice_button(
                         self.i18n.t("terminal.scheduled_input.daily"),
                         repeat == ScheduledInputRepeat::Daily,
-                        move |this, cx| {
-                            this.set_scheduled_input_repeat(ScheduledInputRepeat::Daily, cx)
+                        move |this, window, cx| {
+                            this.set_scheduled_input_repeat(ScheduledInputRepeat::Daily, window, cx)
                         },
                         cx,
                     )),
@@ -676,7 +715,7 @@ impl WorkspaceApp {
         &self,
         label: String,
         selected: bool,
-        action: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        action: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.tokens.ui;
@@ -701,8 +740,8 @@ impl WorkspaceApp {
             .child(label)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _event, _window, cx| {
-                    action(this, cx);
+                cx.listener(move |this, _event, window, cx| {
+                    action(this, window, cx);
                     cx.stop_propagation();
                 }),
             )
@@ -721,34 +760,59 @@ impl WorkspaceApp {
         let time_draft = self.scheduled_input.time_draft.clone();
 
         let center = if time_focused {
-            div().flex_1().min_w(px(0.0)).child(text_input_anchor_probe(
-                WorkspaceImeTarget::ScheduledInputTime.anchor_id(),
-                text_input(
-                    &self.tokens,
-                    TextInputView {
-                        value: &time_draft,
-                        placeholder: "HH:MM".to_string(),
-                        focused: true,
-                        caret_visible: self.new_connection_caret_visible,
-                        secret: false,
-                        selected_all: false,
-                        selected_range: self
-                            .ime_selected_range_for_target(WorkspaceImeTarget::ScheduledInputTime),
-                        marked_text: self
-                            .marked_text_for_target(WorkspaceImeTarget::ScheduledInputTime),
+            div()
+                .id("scheduled-input-time")
+                .flex_1()
+                .min_w(px(0.0))
+                .cursor_text()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                        window.focus(&this.focus_handle, cx);
+                        this.begin_ime_selection_from_mouse_down(
+                            WorkspaceImeTarget::ScheduledInputTime,
+                            event,
+                            window,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_move(
+                    cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                        this.update_ime_selection_drag_from_mouse_move(event, window, cx);
+                    }),
+                )
+                .child(text_input_anchor_probe(
+                    WorkspaceImeTarget::ScheduledInputTime.anchor_id(),
+                    text_input(
+                        &self.tokens,
+                        TextInputView {
+                            value: &time_draft,
+                            placeholder: "HH:MM".to_string(),
+                            focused: true,
+                            caret_visible: self.new_connection_caret_visible,
+                            secret: false,
+                            selected_all: false,
+                            selected_range: self.ime_selected_range_for_target(
+                                WorkspaceImeTarget::ScheduledInputTime,
+                            ),
+                            marked_text: self
+                                .marked_text_for_target(WorkspaceImeTarget::ScheduledInputTime),
+                        },
+                    ),
+                    {
+                        let workspace = cx.entity();
+                        move |anchor, _window, cx| {
+                            let _ = workspace.update(cx, |this, cx| {
+                                this.update_text_input_anchor(anchor, cx);
+                            });
+                        }
                     },
-                ),
-                {
-                    let workspace = cx.entity();
-                    move |anchor, _window, cx| {
-                        let _ = workspace.update(cx, |this, cx| {
-                            this.update_text_input_anchor(anchor, cx);
-                        });
-                    }
-                },
-            ))
+                ))
         } else {
             div()
+                .id("scheduled-input-time")
                 .flex_1()
                 .min_w(px(0.0))
                 .text_size(px(12.0))
@@ -760,6 +824,7 @@ impl WorkspaceApp {
                     cx.listener(|this, _event, window, cx| {
                         this.set_scheduled_input_time_focused(cx);
                         window.focus(&this.focus_handle, cx);
+                        cx.stop_propagation();
                     }),
                 )
         };
@@ -833,34 +898,59 @@ impl WorkspaceApp {
         let delay_draft = self.scheduled_input.delay_draft.clone();
 
         let center = if delay_focused {
-            div().flex_1().min_w(px(0.0)).child(text_input_anchor_probe(
-                WorkspaceImeTarget::ScheduledInputDelay.anchor_id(),
-                text_input(
-                    &self.tokens,
-                    TextInputView {
-                        value: &delay_draft,
-                        placeholder: "min".to_string(),
-                        focused: true,
-                        caret_visible: self.new_connection_caret_visible,
-                        secret: false,
-                        selected_all: false,
-                        selected_range: self
-                            .ime_selected_range_for_target(WorkspaceImeTarget::ScheduledInputDelay),
-                        marked_text: self
-                            .marked_text_for_target(WorkspaceImeTarget::ScheduledInputDelay),
+            div()
+                .id("scheduled-input-delay")
+                .flex_1()
+                .min_w(px(0.0))
+                .cursor_text()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                        window.focus(&this.focus_handle, cx);
+                        this.begin_ime_selection_from_mouse_down(
+                            WorkspaceImeTarget::ScheduledInputDelay,
+                            event,
+                            window,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_move(
+                    cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                        this.update_ime_selection_drag_from_mouse_move(event, window, cx);
+                    }),
+                )
+                .child(text_input_anchor_probe(
+                    WorkspaceImeTarget::ScheduledInputDelay.anchor_id(),
+                    text_input(
+                        &self.tokens,
+                        TextInputView {
+                            value: &delay_draft,
+                            placeholder: "min".to_string(),
+                            focused: true,
+                            caret_visible: self.new_connection_caret_visible,
+                            secret: false,
+                            selected_all: false,
+                            selected_range: self.ime_selected_range_for_target(
+                                WorkspaceImeTarget::ScheduledInputDelay,
+                            ),
+                            marked_text: self
+                                .marked_text_for_target(WorkspaceImeTarget::ScheduledInputDelay),
+                        },
+                    ),
+                    {
+                        let workspace = cx.entity();
+                        move |anchor, _window, cx| {
+                            let _ = workspace.update(cx, |this, cx| {
+                                this.update_text_input_anchor(anchor, cx);
+                            });
+                        }
                     },
-                ),
-                {
-                    let workspace = cx.entity();
-                    move |anchor, _window, cx| {
-                        let _ = workspace.update(cx, |this, cx| {
-                            this.update_text_input_anchor(anchor, cx);
-                        });
-                    }
-                },
-            ))
+                ))
         } else {
             div()
+                .id("scheduled-input-delay")
                 .flex_1()
                 .min_w(px(0.0))
                 .text_size(px(12.0))
@@ -872,6 +962,7 @@ impl WorkspaceApp {
                     cx.listener(|this, _event, window, cx| {
                         this.set_scheduled_input_delay_focused(cx);
                         window.focus(&this.focus_handle, cx);
+                        cx.stop_propagation();
                     }),
                 )
         };
