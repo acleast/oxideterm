@@ -1198,22 +1198,6 @@ def create_macos_app(
         plistlib.dump(plist, file)
 
     sign_macos_path(app_dir)
-    app_zip = DIST_DIR / f"OxideTerm_{version}_{label}.app.zip"
-    zip_macos_app_bundle(app_dir, app_zip)
-    if notarize_macos_artifact(app_zip, staple=False):
-        # The ZIP is only the submission container. Staple the accepted ticket
-        # to the application itself, then rebuild the distributable archive.
-        run(["xcrun", "stapler", "staple", str(app_dir)])
-        zip_macos_app_bundle(app_dir, app_zip)
-
-    if identity.channel == "stable":
-        # OxideTerm 1.x uses Tauri's app.tar.gz installer contract. Keep this
-        # bridge asset beside the native ZIP until the 1.x population retires.
-        archive_macos_tauri_bundle(
-            app_dir,
-            DIST_DIR / f"OxideTerm_{version}_{label}.app.tar.gz",
-        )
-
     if shutil.which("hdiutil"):
         dmg_root = DIST_DIR / f"dmg-{label}"
         if dmg_root.exists():
@@ -1595,9 +1579,6 @@ def main() -> None:
         create_windows_installer(app_binary, update_helper, target, version, label, identity)
     if "apple-darwin" in target:
         sign_macos_path(app_binary)
-    # Every target should publish a self-contained portable artifact; Windows
-    # additionally ships an NSIS installer for users who prefer installation.
-    create_portable_package(app_binary, update_helper, target, version, label)
     if "apple-darwin" in target:
         create_macos_app(app_binary, target, version, label, identity)
     if "linux" in target:

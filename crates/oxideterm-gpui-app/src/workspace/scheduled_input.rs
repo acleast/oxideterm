@@ -359,7 +359,7 @@ impl WorkspaceApp {
                     if !pane.read(cx).ai_accepts_input() {
                         return false;
                     }
-                    pane.update(cx, |pane, cx| pane.send_command_line(&command, cx))
+                    pane.update(cx, |pane, cx| pane.send_scheduled_command_line(&command, cx))
                 });
             let Some(index) = self
                 .scheduled_input

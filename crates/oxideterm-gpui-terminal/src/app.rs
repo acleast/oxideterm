@@ -1721,6 +1721,35 @@ impl TerminalPane {
         self.send_text(&input, cx);
     }
 
+    pub fn send_scheduled_command_line(&mut self, command: &str, cx: &mut Context<Self>) -> bool {
+        if command.trim().is_empty() || !self.terminal_accepts_input() {
+            return false;
+        }
+        let input = zeroize::Zeroizing::new(command.replace("\r\n", "\n").replace('\r', "\n"));
+        if !self.send_command_sender_text(&input, cx) {
+            return false;
+        }
+
+        // Send Enter through the active terminal keyboard protocol. Codex uses
+        // Kitty keyboard mode, where a bare carriage return is a line break,
+        // not the key event that submits the prompt.
+        let mode = self.terminal.lock().mode();
+        let enter = gpui::Keystroke {
+            key: "enter".into(),
+            ..Default::default()
+        };
+        let sequence = crate::terminal_view::configurable_key_escape_sequence(
+            &enter,
+            &mode,
+            false,
+            self.settings.backspace_sequence,
+            self.settings.delete_sequence,
+            crate::terminal_view::KittyKeyEventType::Press,
+        )
+        .unwrap_or_else(|| std::borrow::Cow::Borrowed("\x0d"));
+        self.send_command_sender_raw_bytes(sequence.as_bytes(), cx)
+    }
+
     pub fn send_command_sender_line(&mut self, line: &str, cx: &mut Context<Self>) -> bool {
         let mut input = zeroize::Zeroizing::new(line.replace("\r\n", "\r").replace('\n', "\r"));
         input.push('\r');

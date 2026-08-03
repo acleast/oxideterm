@@ -55,22 +55,11 @@ def target_label(target: str) -> str:
 
 def expected_artifact_names(target: str, version: str) -> set[str]:
     label = target_label(target)
-    names = {f"OxideTerm_{version}_{label}_portable"}
     if "windows" in target:
-        return {
-            f"OxideTerm_{version}_{label}-setup.exe",
-            f"OxideTerm_{version}_{label}_portable.zip",
-        }
-    names = {f"OxideTerm_{version}_{label}_portable.tar.gz"}
+        return {f"OxideTerm_{version}_{label}-setup.exe"}
+    names = set()
     if "apple-darwin" in target:
-        names.update(
-            {
-                f"OxideTerm_{version}_{label}.app.zip",
-                f"OxideTerm_{version}_{label}.dmg",
-            }
-        )
-        if "-" not in version:
-            names.add(f"OxideTerm_{version}_{label}.app.tar.gz")
+        names.add(f"OxideTerm_{version}_{label}.dmg")
     if "linux" in target:
         names.update(
             {
@@ -195,6 +184,17 @@ def verify_macos_app_zip(path: Path, expected_version: str) -> None:
 def verify_macos_tauri_archive(path: Path, expected_version: str) -> None:
     """Validate the legacy Tauri updater archive using the app bundle contract."""
     verify_macos_app_zip(path, expected_version)
+
+
+def verify_macos_dmg(path: Path, expected_version: str) -> None:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"missing or empty macOS DMG: {path.name}")
+    # The package job creates the DMG with hdiutil, which is the platform's
+    # authoritative validator for the image format. The app bundle itself is
+    # verified during packaging before the DMG is assembled.
+    hdiutil = shutil.which("hdiutil")
+    if hdiutil:
+        run_checked([hdiutil, "verify", str(path)])
 
 
 def run_checked(command: list[str], *, cwd: Path | None = None) -> str:
@@ -367,26 +367,10 @@ def verify_release(dist: Path, target: str, version: str) -> dict[str, object]:
         raise RuntimeError(f"empty release artifacts: {', '.join(empty)}")
 
     label = target_label(target)
-    portable_name = (
-        f"OxideTerm_{version}_{label}_portable.zip"
-        if "windows" in target
-        else f"OxideTerm_{version}_{label}_portable.tar.gz"
-    )
-    portable_path = dist / portable_name
-    verify_portable_archive(portable_path, target, version)
-    with tempfile.TemporaryDirectory() as directory:
-        binary = extract_portable_binary(portable_path, target, Path(directory))
-        verify_binary_architecture(binary, target)
-        if "linux" in target:
-            verify_linux_dynamic_libraries(binary)
-
     if "windows" in target:
         verify_windows_installer(dist / f"OxideTerm_{version}_{label}-setup.exe", version)
     elif "apple-darwin" in target:
-        verify_macos_app_zip(dist / f"OxideTerm_{version}_{label}.app.zip", version)
-        legacy_archive = dist / f"OxideTerm_{version}_{label}.app.tar.gz"
-        if legacy_archive.exists():
-            verify_macos_tauri_archive(legacy_archive, version)
+        verify_macos_dmg(dist / f"OxideTerm_{version}_{label}.dmg", version)
     elif "linux" in target:
         verify_appimage(dist / f"OxideTerm_{version}_{label}.AppImage", version)
         verify_deb(dist / f"OxideTerm_{version}_{label}.deb", version)

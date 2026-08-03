@@ -23,39 +23,31 @@ class ArtifactNameTests(unittest.TestCase):
             "2.0.0-gpui-preview.15",
         )
 
-    def test_windows_artifacts_include_installer_and_portable(self) -> None:
+    def test_windows_artifacts_include_only_installer(self) -> None:
         self.assertEqual(
             verify_native_package.expected_artifact_names(
                 "x86_64-pc-windows-msvc", "2.0.0"
             ),
             {
                 "OxideTerm_2.0.0_windows_x64-setup.exe",
-                "OxideTerm_2.0.0_windows_x64_portable.zip",
             },
         )
 
-    def test_linux_artifacts_include_all_distribution_shapes(self) -> None:
+    def test_linux_artifacts_include_installers_only(self) -> None:
         names = verify_native_package.expected_artifact_names(
             "aarch64-unknown-linux-gnu", "2.0.0"
         )
-        self.assertEqual(len(names), 4)
+        self.assertEqual(len(names), 3)
         self.assertTrue(any(name.endswith(".AppImage") for name in names))
         self.assertTrue(any(name.endswith(".deb") for name in names))
         self.assertTrue(any(name.endswith(".rpm") for name in names))
-        self.assertTrue(any(name.endswith(".tar.gz") for name in names))
 
-    def test_stable_macos_requires_tauri_bridge_archive(self) -> None:
-        stable = verify_native_package.expected_artifact_names(
-            "aarch64-apple-darwin", "2.0.0"
-        )
-        preview = verify_native_package.expected_artifact_names(
-            "aarch64-apple-darwin", "2.0.0-gpui-preview.15"
-        )
-
-        self.assertIn("OxideTerm_2.0.0_macos_arm64.app.tar.gz", stable)
-        self.assertNotIn(
-            "OxideTerm_2.0.0-gpui-preview.15_macos_arm64.app.tar.gz",
-            preview,
+    def test_macos_artifacts_include_only_dmg(self) -> None:
+        self.assertEqual(
+            verify_native_package.expected_artifact_names(
+                "aarch64-apple-darwin", "2.0.0"
+            ),
+            {"OxideTerm_2.0.0_macos_arm64.dmg"},
         )
 
 

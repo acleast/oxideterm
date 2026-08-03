@@ -47,10 +47,9 @@ def release_asset_url(tag: str, filename: str) -> str:
 
 
 def stable_download_table(version: str, tag: str) -> str:
-    """Render the recommended installer matrix without listing portable variants."""
+    """Render the installer matrix for the release's supported platforms."""
     filenames = {
         "windows_x64": f"OxideTerm_{version}_windows_x64-setup.exe",
-        "windows_arm64": f"OxideTerm_{version}_windows_arm64-setup.exe",
         "macos_arm64": f"OxideTerm_{version}_macos_arm64.dmg",
     }
 
@@ -61,12 +60,10 @@ def stable_download_table(version: str, tag: str) -> str:
         [
             "## 📥 Download for your system",
             "",
-            "| Operating system | x64 | ARM64 |",
-            "|---|---|---|",
-            f"| **Windows** | {link('Setup (.exe)', 'windows_x64')} | {link('Setup (.exe)', 'windows_arm64')} |",
-            f"| **macOS** | Not available | {link('DMG (Apple Silicon)', 'macos_arm64')} |",
-            "",
-            "Portable archives and `sha256sums.txt` remain available in the release assets below.",
+            "| Operating system | Download |",
+            "|---|---|",
+            f"| **Windows (x64)** | {link('Setup (.exe)', 'windows_x64')} |",
+            f"| **macOS (Apple Silicon)** | {link('DMG', 'macos_arm64')} |",
         ]
     )
 
