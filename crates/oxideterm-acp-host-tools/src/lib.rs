@@ -1,4 +1,4 @@
-//! Authenticated MCP bridge for ACP agents to call OxideTerm-owned host tools.
+//! Authenticated MCP bridge for ACP agents to call OxideTerm-owned tools.
 
 mod protocol;
 mod runtime;

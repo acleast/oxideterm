@@ -1,21 +1,238 @@
 #[cfg(test)]
 mod ai_turn_order_tests {
-use super::*;
+    use super::*;
 
-#[test]
-fn acp_bridge_exposes_only_visible_terminal_tools() {
-    let names = acp_visible_terminal_tool_definitions(true)
-        .into_iter()
-        .map(|definition| definition.name)
-        .collect::<Vec<_>>();
-    let expected = ACP_VISIBLE_TERMINAL_TOOL_NAMES
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
+    #[gpui::test]
+    fn runtime_evidence_records_are_entity_owned(cx: &mut gpui::TestAppContext) {
+        let task_runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("AI runtime"),
+        );
+        let entity = cx.new(|cx| {
+            crate::workspace::ai_state::AiWorkspaceEntity::new(
+                task_runtime,
+                oxideterm_ai::AiProviderKeyStore::new(),
+                cx,
+            )
+        });
+        entity.update(cx, |entity, _cx| {
+            let representative_runtime_epoch = "epoch-test-only";
+            let result = serde_json::json!({
+                "output": "API_KEY=supersecret123456",
+                "data": { "exitCode": 0 },
+                "meta": { "runtimeEpoch": representative_runtime_epoch },
+            });
+            let record = entity
+                .record_ai_tool_execution_status(
+                    "conversation-a",
+                    "assistant-a",
+                    "tool-a",
+                    "run_command",
+                    r#"{"command":"codex --help API_KEY=supersecret123456"}"#,
+                    "completed",
+                    Some(&result),
+                    Some("execute"),
+                    10,
+                )
+                .expect("tool execution record");
+            let facts = entity.record_ai_tool_result_facts(&record, Some(&result), 10);
 
-    assert_eq!(names, expected);
-    assert!(acp_visible_terminal_tool_definitions(false).is_empty());
-}
+            assert_eq!(entity.tool_execution_records.len(), 1);
+            assert!(!facts.is_empty());
+            assert_eq!(entity.tool_result_facts.len(), facts.len());
+            let retained = format!(
+                "{:?}{:?}",
+                entity.tool_execution_records, entity.tool_result_facts
+            );
+            assert!(!retained.contains("supersecret123456"));
+            assert!(retained.contains("command_chars="));
+            assert!(retained.contains("exit_code: 0"));
+            assert!(!retained.contains("target_id"));
+            assert!(!retained.contains("session_id"));
+            assert!(!retained.contains("node_id"));
+            assert!(!retained.contains(representative_runtime_epoch));
+        });
+    }
+
+    #[test]
+    fn persisted_tool_arguments_drop_secret_capable_execution_payloads() {
+        let arguments = serde_json::json!({
+            "command": "curl https://example.test",
+            "apiKey": "short",
+            "headers": {
+                "Authorization": "Bearer opaque-value",
+            },
+        })
+        .to_string();
+
+        let sanitized = sanitize_ai_tool_arguments_for_persistence(&arguments);
+
+        assert!(!sanitized.contains("curl https://example.test"));
+        assert!(!sanitized.contains("\"command\""));
+        assert!(!sanitized.contains("\"short\""));
+        assert!(!sanitized.contains("opaque-value"));
+        assert!(!sanitized.contains("\"headers\""));
+    }
+
+    #[test]
+    fn approval_arguments_keep_only_a_locally_redacted_command() {
+        let arguments = serde_json::json!({
+            "command": "curl https://example.test",
+            "apiKey": "short",
+        })
+        .to_string();
+
+        let sanitized = sanitize_ai_tool_arguments_for_approval(&arguments);
+
+        assert!(sanitized.contains("curl https://example.test"));
+        assert!(!sanitized.contains("\"short\""));
+        assert!(sanitized.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn remote_write_error_debug_omits_sensitive_details() {
+        let path = "/private/runtime/secret.txt";
+        let error = AiRemoteFileWriteError::ExpectedFileMissing {
+            path: path.to_string(),
+        };
+
+        let debug = format!("{error:?}");
+
+        assert!(debug.contains("ExpectedFileMissing"));
+        assert!(!debug.contains(path));
+    }
+
+    #[test]
+    fn diagnostic_resource_projection_omits_stable_identifiers() {
+        let stable_id = "4e22e673-067e-46e2-8b9f-902d7b21af4c";
+        let resource_kind = ai_tool_argument_resource_kind(Some(&serde_json::json!({
+            "resource_ref": {
+                "kind": "saved_connection",
+                "id": stable_id,
+                "label": "Production",
+            },
+        })));
+        let mut record = test_tool_execution_record("tool-resource");
+        record.resource_kind = resource_kind;
+
+        let diagnostic = ai_tool_execution_record_json(&record).to_string();
+
+        assert!(!diagnostic.contains(stable_id));
+        assert!(diagnostic.contains("saved_connection"));
+    }
+
+    #[test]
+    fn ai_delivery_redacts_tool_payloads_and_classifies_provider_errors() {
+        let (tx, rx) = crate::workspace::delivery::ActiveDeliverySender::channel();
+        let call = AiToolCall {
+            id: "tool-secret".to_string(),
+            name: "run_command".to_string(),
+            arguments: serde_json::json!({
+                "command": "echo visible",
+                "apiKey": "short-secret",
+            })
+            .to_string(),
+        };
+
+        send_ai_tool_status_with_payload(
+            &tx,
+            1,
+            "conversation-1",
+            "assistant-1",
+            &call,
+            "completed",
+            Some(serde_json::json!({
+                "output": "export TOKEN=result-secret-value",
+            })),
+            Some("execute".to_string()),
+            Some("password=summary-secret-value".to_string()),
+            false,
+            Some("raw-secret-value".to_string()),
+            None,
+            None,
+        )
+        .expect("tool status");
+        let delivery = rx.recv().expect("tool delivery");
+        let AiStreamDeliveryEvent::ToolStatus {
+            arguments,
+            result,
+            summary,
+            raw_text,
+            ..
+        } = delivery.event
+        else {
+            panic!("expected tool status");
+        };
+        let retained = format!("{arguments}{result:?}{summary:?}{raw_text:?}");
+        assert!(!retained.contains("short-secret"));
+        assert!(!retained.contains("result-secret-value"));
+        assert!(!retained.contains("summary-secret-value"));
+        assert!(!retained.contains("raw-secret-value"));
+        assert!(retained.contains("[REDACTED]"));
+
+        send_ai_stream_delivery(
+            &tx,
+            1,
+            "conversation-1",
+            "assistant-1",
+            AiStreamDeliveryEvent::Stream(AiStreamEvent::Error(
+                "Authorization: Bearer provider-secret-value".to_string(),
+            )),
+        )
+        .expect("provider error");
+        let delivery = rx.recv().expect("error delivery");
+        assert!(matches!(
+            delivery.event,
+            AiStreamDeliveryEvent::Stream(AiStreamEvent::Error(ref error))
+                if error == "stream_failed"
+        ));
+    }
+
+    #[test]
+    fn model_visible_settings_projection_excludes_secret_bearing_configuration() {
+        let mut settings = oxideterm_settings::PersistedSettings::default();
+        settings.ai.custom_system_prompt = "private-system-prompt".to_string();
+        settings.ai.memory.content = "private-memory-content".to_string();
+        settings.ai.providers = vec![serde_json::json!({
+            "id": "private-provider",
+            "apiKey": "private-provider-key",
+        })];
+        settings.ai.mcp_servers = vec![serde_json::json!({
+            "id": "private-mcp",
+            "headers": { "Authorization": "Bearer private-mcp-token" },
+        })];
+        settings.ai.acp_agents = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "private-agent",
+                "command": "agent",
+                "args": ["--token", "private-acp-token"],
+                "env": { "AGENT_TOKEN": "private-acp-env" },
+            }))
+            .expect("ACP agent settings"),
+        ];
+
+        let projection = ai_model_visible_settings_projection(&settings);
+        let serialized = serde_json::to_string(&projection).expect("settings projection");
+
+        assert!(projection.pointer("/ai/toolUse").is_some());
+        assert!(projection.get("terminal").is_some());
+        assert!(projection.get("sftp").is_some());
+        for secret in [
+            "private-system-prompt",
+            "private-memory-content",
+            "private-provider-key",
+            "private-mcp-token",
+            "private-acp-token",
+            "private-acp-env",
+        ] {
+            assert!(!serialized.contains(secret));
+        }
+        assert!(projection.pointer("/ai/providers").is_none());
+        assert!(projection.pointer("/ai/mcpServers").is_none());
+        assert!(projection.pointer("/ai/acpAgents").is_none());
+    }
 
     fn assistant_message() -> AiChatMessage {
         AiChatMessage {
@@ -62,7 +279,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
     fn test_tool_result_fact_for_assistant(
         fact_id: &str,
         assistant_message_id: &str,
-        output_preview: &str,
+        summary: &str,
     ) -> AiToolResultFact {
         AiToolResultFact {
             fact_id: fact_id.to_string(),
@@ -71,15 +288,8 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             tool_call_id: "tool-1".to_string(),
             tool_name: "run_command".to_string(),
             source_kind: "output".to_string(),
-            text_hash: ai_tool_fact_hash(output_preview),
-            summary: output_preview
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_string(),
-            output_preview: output_preview.to_string(),
+            summary: summary.to_string(),
             created_at: 1,
-            runtime_epoch: "epoch-1".to_string(),
         }
     }
 
@@ -90,8 +300,8 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             assistant_message_id: "assistant-1".to_string(),
             tool_call_id: tool_call_id.to_string(),
             tool_name: "run_command".to_string(),
-            argument_summary: "target=local-shell:default command=df -h /".to_string(),
-            target_id: Some("local-shell:default".to_string()),
+            argument_summary: "runtime_target=current command=df -h /".to_string(),
+            resource_kind: None,
             target_kind: Some("local-shell".to_string()),
             risk: "execute".to_string(),
             approval_source: Some("policy_allowed".to_string()),
@@ -100,11 +310,9 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             status: "completed".to_string(),
             success: Some(true),
             error_code: None,
-            result_summary: Some("Remote command completed.".to_string()),
             duration_ms: Some(12),
             started_at: 1,
             finished_at: Some(2),
-            runtime_epoch: "epoch-1".to_string(),
         }
     }
 
@@ -174,82 +382,41 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
     }
 
     #[test]
-    fn acp_prompt_includes_current_context_without_replaying_history() {
-        let history = vec![
-            test_message(
-                "base-system",
-                AiChatRole::System,
-                "SSH session host: example.test\nIDE file: src/main.rs".to_string(),
-            ),
-            test_message(
-                "current-terminal-context",
-                AiChatRole::System,
-                "Current terminal context:\nAPI_KEY=supersecret123456\ncargo check failed"
-                    .to_string(),
-            ),
-            test_message(
-                "old-user",
-                AiChatRole::User,
-                "old request must not be replayed".to_string(),
-            ),
-            test_message(
-                "old-assistant",
-                AiChatRole::Assistant,
-                "old response must not be replayed".to_string(),
-            ),
-            test_message(
-                "latest-user",
-                AiChatRole::User,
-                "explain the failure".to_string(),
-            ),
-        ];
-
-        let prompt = acp_current_turn_prompt(&history).expect("ACP prompt");
-
-        assert!(prompt.contains("SSH session host: example.test"));
-        assert!(prompt.contains("IDE file: src/main.rs"));
-        assert!(prompt.contains("cargo check failed"));
-        assert!(prompt.contains("explain the failure"));
-        assert!(!prompt.contains("old request must not be replayed"));
-        assert!(!prompt.contains("old response must not be replayed"));
-        assert!(!prompt.contains("supersecret123456"));
-        assert!(prompt.contains("API_KEY=[REDACTED]"));
-    }
-
-    #[test]
-    fn acp_prompt_without_context_preserves_latest_request() {
-        let history = vec![test_message(
+    fn second_model_round_replaces_the_previous_runtime_context() {
+        let mut history = vec![test_message(
             "latest-user",
             AiChatRole::User,
-            "list the current directory".to_string(),
+            "inspect the active terminal".to_string(),
         )];
 
-        assert_eq!(
-            acp_current_turn_prompt(&history).as_deref(),
-            Some("list the current directory")
+        replace_ai_runtime_context_message(
+            &mut history,
+            r#"{"runtimeContext":{"snapshotId":"snap_first"}}"#.to_string(),
         );
-    }
+        replace_ai_runtime_context_message(
+            &mut history,
+            r#"{"runtimeContext":{"snapshotId":"snap_second"}}"#.to_string(),
+        );
 
-    #[test]
-    fn acp_prompt_requires_a_non_empty_user_request() {
-        let history = vec![test_message(
-            "base-system",
-            AiChatRole::System,
-            "runtime context".to_string(),
-        )];
-
-        assert!(acp_current_turn_prompt(&history).is_none());
+        let runtime_messages = history
+            .iter()
+            .filter(|message| message.id == AI_RUNTIME_CONTEXT_MESSAGE_ID)
+            .collect::<Vec<_>>();
+        assert_eq!(runtime_messages.len(), 1);
+        assert!(runtime_messages[0].content.contains("snap_second"));
+        assert!(!runtime_messages[0].content.contains("snap_first"));
     }
 
     #[test]
     fn context_indicator_tool_definition_tokens_use_real_orchestrator_schema() {
         let tools = oxideterm_ai::orchestrator_tool_definitions();
+        let breakdown = ai_prompt_token_breakdown(&[], &tools, "openai", 0);
 
         assert_eq!(
-            ai_estimated_tool_definitions_tokens(),
+            breakdown.tool_definitions,
             ai_tool_definitions_estimated_tokens(&tools)
         );
-        assert!(ai_estimated_tool_definitions_tokens() > tools.len() * 10);
+        assert!(breakdown.tool_definitions > tools.len() * 10);
     }
 
     #[test]
@@ -264,7 +431,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             ..oxideterm_ai::AiToolUsePolicy::default()
         };
 
-        let tools = ai_stream_tool_definitions(true, &policy, &registry);
+        let tools = ai_stream_tool_definitions(true, true, &policy, &registry);
         let names = tools
             .iter()
             .map(|tool| tool.name.as_str())
@@ -276,33 +443,49 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
     }
 
     #[test]
-    fn context_indicator_tool_result_tokens_only_count_user_and_assistant_messages() {
-        let tool_call = serde_json::json!({
-            "arguments": "{\"command\":\"echo hi\"}",
-            "result": { "output": "large tool output" },
-        });
-        let mut system = test_message("system", AiChatRole::System, String::new());
-        system.tool_calls = vec![tool_call.clone()];
-        let mut assistant = test_message("assistant", AiChatRole::Assistant, String::new());
-        assistant.tool_calls = vec![tool_call];
-        let conversation = AiConversation {
-            id: "conv-1".to_string(),
-            title: "Conversation".to_string(),
-            messages: vec![system, assistant.clone()],
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            origin: "sidebar".to_string(),
-            profile_id: None,
-            message_count: 2,
-            session_id: None,
-            session_metadata: None,
-            messages_loaded: true,
+    fn compact_tool_count_tracks_enabled_catalog_instead_of_round_limit() {
+        let registry = oxideterm_ai::McpRegistry::new(oxideterm_ai::AiProviderKeyStore::new());
+        let baseline_policy = oxideterm_ai::AiToolUsePolicy {
+            enabled: true,
+            ..oxideterm_ai::AiToolUsePolicy::default()
+        };
+        let baseline_count = ai_active_tool_count(true, true, &baseline_policy, &registry);
+
+        assert!(baseline_count > 10);
+        assert_eq!(
+            ai_active_tool_count(false, true, &baseline_policy, &registry),
+            0
+        );
+        assert_eq!(
+            ai_active_tool_count(true, false, &baseline_policy, &registry),
+            baseline_count - 2
+        );
+
+        let mut restricted_policy = baseline_policy;
+        restricted_policy.disabled_tools = vec![
+            "run_command".to_string(),
+            "list_mcp_resources".to_string(),
+        ];
+        assert_eq!(
+            ai_active_tool_count(true, true, &restricted_policy, &registry),
+            baseline_count - 2
+        );
+    }
+
+    #[test]
+    fn context_indicator_excludes_future_output_reserve_from_used_context() {
+        let core = oxideterm_ai::AiPromptTokenBreakdown {
+            system_instructions: 100,
+            tool_definitions: 200,
+            reserved_output: 400,
+            messages: 300,
+            tool_results: 50,
         };
 
-        assert_eq!(
-            ai_conversation_tool_result_tokens(&conversation),
-            ai_tool_call_estimated_tokens(&assistant.tool_calls[0])
-        );
+        let breakdown = ai_context_token_breakdown_from_prompt(core, 8_192);
+
+        assert_eq!(breakdown.total, 650);
+        assert_eq!(breakdown.reserved_output, 400);
     }
 
     #[test]
@@ -319,6 +502,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             session_id: None,
             session_metadata: None,
             messages_loaded: true,
+            turn_count: 0,
         }];
 
         let stale_applied = apply_ai_acp_session_started_to_conversations(
@@ -329,6 +513,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             "stale-session",
             Some(serde_json::json!({ "source": "stale" })),
             Vec::new(),
+            None,
             "agent-1",
         );
 
@@ -353,6 +538,14 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
                     label: "Model A".to_string(),
                 }],
             }],
+            Some(oxideterm_ai::AcpSessionModeState {
+                current_mode_id: "agent".to_string(),
+                available_modes: vec![oxideterm_ai::AcpSessionMode {
+                    mode_id: "agent".to_string(),
+                    name: "Agent".to_string(),
+                    description: Some("Agent mode".to_string()),
+                }],
+            }),
             "agent-1",
         );
 
@@ -377,8 +570,201 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
                     "currentValueId": "model-a",
                     "choices": [{ "valueId": "model-a", "label": "Model A" }],
                 }],
-                "modelSelection": null,
+                "modelSelection": {
+                    "configId": "model",
+                    "valueId": "model-a",
+                },
+                "configSelections": [{
+                    "configId": "model",
+                    "valueId": "model-a",
+                }],
+                "currentModeId": "agent",
+                "availableModes": [{
+                    "modeId": "agent",
+                    "name": "Agent",
+                    "description": "Agent mode",
+                }],
+                "availableCommands": [],
+                "plan": null,
+                "usage": null,
+                "title": null,
             }))
+        );
+
+        let modes_removed = apply_ai_acp_session_started_to_conversations(
+            &mut conversations,
+            2,
+            2,
+            "conv-1",
+            "mode-less-session",
+            None,
+            Vec::new(),
+            None,
+            "agent-1",
+        );
+        let current_state =
+            ai_acp_session_state(&conversations[0]).expect("current ACP session state");
+        assert!(modes_removed);
+        assert_eq!(current_state.current_mode_id, None);
+        assert!(current_state.available_modes.is_empty());
+    }
+
+    #[test]
+    fn acp_handoff_cursor_advances_only_for_the_matching_agent() {
+        let mut conversation = AiConversation {
+            id: "conv-1".to_string(),
+            title: "Conversation".to_string(),
+            messages: vec![AiChatMessage {
+                id: "assistant-1".to_string(),
+                role: AiChatRole::Assistant,
+                content: "done".to_string(),
+                timestamp_ms: 42,
+                model: Some("model".to_string()),
+                context: None,
+                thinking_content: None,
+                is_streaming: false,
+                metadata: None,
+                tool_call_id: None,
+                tool_calls: Vec::new(),
+                turn: None,
+                transcript_ref: None,
+                summary_ref: None,
+                branches: None,
+                suggestions: Vec::new(),
+            }],
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            origin: "sidebar".to_string(),
+            profile_id: None,
+            message_count: 1,
+            session_id: Some("session-1".to_string()),
+            session_metadata: Some(serde_json::json!({
+                "acp": {
+                    "agentId": "agent-1",
+                    "sessionId": "session-1",
+                    "metadata": null,
+                    "configOptions": [],
+                    "modelSelection": null,
+                    "configSelections": [],
+                    "currentModeId": null,
+                    "availableModes": [],
+                    "availableCommands": [],
+                    "plan": null,
+                    "usage": null,
+                    "title": null
+                }
+            })),
+            messages_loaded: true,
+            turn_count: 0,
+        };
+
+        assert!(!store_ai_acp_handoff_cursor_in_conversation(
+            &mut conversation,
+            "agent-2",
+            "assistant-1",
+        ));
+        assert!(
+            ai_acp_session_state(&conversation)
+                .and_then(|state| state.handoff_cursor)
+                .is_none()
+        );
+
+        assert!(store_ai_acp_handoff_cursor_in_conversation(
+            &mut conversation,
+            "agent-1",
+            "assistant-1",
+        ));
+        assert_eq!(
+            ai_acp_session_state(&conversation)
+                .and_then(|state| state.handoff_cursor),
+            Some(oxideterm_ai::AcpConversationHandoffCursor {
+                message_id: "assistant-1".to_string(),
+                timestamp_ms: 42,
+            })
+        );
+
+        let mut resumed = conversation.clone();
+        assert!(apply_ai_acp_session_started_to_conversations(
+            std::slice::from_mut(&mut resumed),
+            1,
+            1,
+            "conv-1",
+            "session-1",
+            None,
+            Vec::new(),
+            None,
+            "agent-1",
+        ));
+        assert!(
+            ai_acp_session_state(&resumed)
+                .and_then(|state| state.handoff_cursor)
+                .is_some()
+        );
+
+        assert!(apply_ai_acp_session_started_to_conversations(
+            std::slice::from_mut(&mut conversation),
+            1,
+            1,
+            "conv-1",
+            "replacement-session",
+            None,
+            Vec::new(),
+            None,
+            "agent-1",
+        ));
+        assert!(
+            ai_acp_session_state(&conversation)
+                .and_then(|state| state.handoff_cursor)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn acp_config_catalog_replaces_stale_selections_with_agent_state() {
+        let config_options = vec![oxideterm_ai::AcpSessionConfigOption {
+            config_id: "model".to_string(),
+            name: "Model".to_string(),
+            category: Some("model".to_string()),
+            current_value_id: "model-b".to_string(),
+            choices: vec![oxideterm_ai::AcpSessionConfigChoice {
+                value_id: "model-b".to_string(),
+                label: "Model B".to_string(),
+            }],
+        }];
+        let mut model_selection = Some(oxideterm_ai::AcpSessionConfigSelection {
+            config_id: "model".to_string(),
+            value_id: "model-a".to_string(),
+        });
+        let mut config_selections = vec![
+            oxideterm_ai::AcpSessionConfigSelection {
+                config_id: "model".to_string(),
+                value_id: "model-b".to_string(),
+            },
+            oxideterm_ai::AcpSessionConfigSelection {
+                config_id: "removed-option".to_string(),
+                value_id: "removed-value".to_string(),
+            },
+        ];
+
+        synchronize_ai_acp_config_selections(
+            &config_options,
+            &mut model_selection,
+            &mut config_selections,
+        );
+
+        assert_eq!(
+            model_selection,
+            Some(oxideterm_ai::AcpSessionConfigSelection {
+                config_id: "model".to_string(),
+                value_id: "model-b".to_string(),
+            })
+        );
+        assert_eq!(
+            config_selections,
+            vec![oxideterm_ai::AcpSessionConfigSelection {
+                config_id: "model".to_string(),
+                value_id: "model-b".to_string(),
+            }]
         );
     }
 
@@ -388,13 +774,13 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
         let mut config = oxideterm_ssh::SshConfig::default();
         config.host = "example.com".to_string();
         config.username = "alice".to_string();
-        let node = WorkspaceSshNode {
-            saved_connection_id: Some("conn-1".to_string()),
-            config,
-            title: "example".to_string(),
-            terminal_ids: Vec::new(),
-            readiness: NodeReadiness::Ready,
-        };
+        let node = WorkspaceSshNode::new(
+            Some("conn-1".to_string()),
+            &config,
+            "example".to_string(),
+            Vec::new(),
+            NodeReadiness::Ready,
+        );
 
         let target = ai_sftp_target_for_node(&node_id, &node, "sftp-1".to_string());
 
@@ -436,15 +822,16 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
         let mut config = oxideterm_ssh::SshConfig::default();
         config.host = "example.com".to_string();
         config.username = "alice".to_string();
-        let node = WorkspaceSshNode {
-            saved_connection_id: Some("conn-1".to_string()),
-            config,
-            title: "example".to_string(),
-            terminal_ids: Vec::new(),
-            readiness: NodeReadiness::Ready,
-        };
+        let node = WorkspaceSshNode::new(
+            Some("conn-1".to_string()),
+            &config,
+            "example".to_string(),
+            Vec::new(),
+            NodeReadiness::Ready,
+        );
 
         let target = ai_ide_workspace_target_for_node(
+            TabId(9),
             &node_id,
             &node,
             Some("editor-tab-1".to_string()),
@@ -452,9 +839,13 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             Some("app".to_string()),
         );
 
-        assert_eq!(target.id, "ide-workspace:node-1");
+        assert_eq!(target.id, "ide-surface:9");
         assert_eq!(target.kind, "ide-workspace");
         assert_eq!(target.label, "app");
+        assert_eq!(
+            target.refs.get("surfaceTabId").map(String::as_str),
+            Some("9")
+        );
         assert_eq!(
             target.refs.get("nodeId").map(String::as_str),
             Some("node-1")
@@ -483,61 +874,6 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
         );
     }
 
-    #[test]
-    fn connect_result_terminal_target_keeps_tauri_synthetic_refs() {
-        let mut refs = std::collections::BTreeMap::new();
-        refs.insert("sessionId".to_string(), "session-1".to_string());
-        refs.insert("tabId".to_string(), "tab-1".to_string());
-        let terminal = AiOrchestratorTarget {
-            id: "terminal-session:session-1".to_string(),
-            kind: "terminal-session".to_string(),
-            label: "SSH terminal session-".to_string(),
-            state: "connected".to_string(),
-            capabilities: vec![
-                "terminal.observe".to_string(),
-                "terminal.send".to_string(),
-                "terminal.wait".to_string(),
-                "state.list".to_string(),
-            ],
-            refs,
-            metadata: serde_json::json!({
-                "paneId": 7,
-                "terminalType": "terminal",
-            }),
-            terminal_buffer: None,
-            terminal_screen: None,
-        };
-
-        let target = ai_connect_result_terminal_target(
-            &terminal,
-            "prod (alice@example.com:22)",
-            Some("node-1"),
-            Some("conn-1"),
-        );
-
-        assert_eq!(target.label, "prod (alice@example.com:22) terminal");
-        assert_eq!(
-            target.refs.get("sessionId").map(String::as_str),
-            Some("session-1")
-        );
-        assert_eq!(
-            target.refs.get("nodeId").map(String::as_str),
-            Some("node-1")
-        );
-        assert_eq!(
-            target.refs.get("connectionId").map(String::as_str),
-            Some("conn-1")
-        );
-        assert!(!target.refs.contains_key("tabId"));
-        assert_eq!(
-            target
-                .metadata
-                .get("terminalType")
-                .and_then(serde_json::Value::as_str),
-            Some("terminal")
-        );
-        assert!(target.metadata.get("paneId").is_none());
-    }
 
     #[test]
     fn prompt_budget_policy_matches_tauri_levels() {
@@ -603,13 +939,14 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
     }
 
     #[test]
-    fn user_memory_prompt_truncates_like_tauri_character_limit() {
-        let memory = "你".repeat(4_001);
+    fn user_memory_prompt_uses_the_shared_character_limit() {
+        let limit = oxideterm_ai::AI_USER_MEMORY_MAX_CHARS;
+        let memory = "你".repeat(limit + 1);
 
         let prompt = ai_user_memory_prompt(&memory, true).expect("memory prompt");
 
-        assert!(prompt.contains(&"你".repeat(4_000)));
-        assert!(!prompt.contains(&"你".repeat(4_001)));
+        assert!(prompt.contains(&"你".repeat(limit)));
+        assert!(!prompt.contains(&"你".repeat(limit + 1)));
         assert!(prompt.contains("\n...[truncated]"));
     }
 
@@ -689,6 +1026,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
                 original_count: Some(4),
                 compacted_at_ms: Some(1),
                 original_messages: None,
+                original_user_count: None,
             }),
             tool_call_id: None,
             tool_calls: Vec::new(),
@@ -821,6 +1159,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
                 original_count: Some(compacted.len()),
                 compacted_at_ms: Some(1),
                 original_messages: Some(compacted),
+                original_user_count: Some(2),
             }),
             tool_call_id: None,
             tool_calls: Vec::new(),
@@ -966,8 +1305,9 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
 
         let summary = ai_tool_argument_summary("write_resource", Some(&args));
 
-        assert!(summary.contains("ssh-node:node-1"));
-        assert!(summary.contains("/tmp/report.txt"));
+        assert!(summary.contains("resource=file"));
+        assert!(!summary.contains("ssh-node:node-1"));
+        assert!(!summary.contains("/tmp/report.txt"));
         assert!(!summary.contains("super secret draft"));
     }
 
@@ -1057,11 +1397,11 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].fact_id, "current-tool.output");
-        assert!(!filtered[0].output_preview.contains("468G"));
+        assert!(!filtered[0].summary.contains("468G"));
     }
 
     #[test]
-    fn tool_result_fact_extraction_hashes_output_and_execution_values() {
+    fn tool_result_fact_extraction_keeps_only_structured_execution_values() {
         let record = test_tool_execution_record("tool-1");
         let result = serde_json::json!({
             "summary": "Remote command completed.",
@@ -1075,7 +1415,8 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
 
         let facts = extract_ai_tool_result_facts(&record, Some(&result), 42);
 
-        assert!(facts.iter().any(|fact| fact.fact_id == "tool-1.output"));
+        assert!(!facts.iter().any(|fact| fact.fact_id == "tool-1.output"));
+        assert!(!facts.iter().any(|fact| fact.fact_id == "tool-1.summary"));
         assert!(
             facts
                 .iter()
@@ -1084,13 +1425,23 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
         assert!(
             facts
                 .iter()
-                .all(|fact| fact.text_hash.starts_with("sha256:"))
+                .any(|fact| fact.fact_id == "tool-1.execution.visible_in_terminal")
         );
         assert!(
             facts
                 .iter()
-                .any(|fact| fact.output_preview.contains("468G"))
+                .any(|fact| fact.fact_id == "tool-1.execution.state")
         );
+        let diagnostic = serde_json::json!(
+            facts
+                .iter()
+                .map(ai_tool_result_fact_json)
+                .collect::<Vec<_>>()
+        )
+        .to_string();
+        assert!(!diagnostic.contains("468G"));
+        assert!(!diagnostic.contains("textHash"));
+        assert!(!diagnostic.contains("outputPreview"));
     }
 
     #[test]
@@ -1248,6 +1599,49 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
     }
 
     #[test]
+    fn chat_message_signatures_rehash_only_the_invalidated_row() {
+        let mut cache = AiChatMessageSignatureCache::default();
+        let computed = std::cell::Cell::new(0usize);
+        let message_ids = (0..256)
+            .map(|index| format!("message-{index}"))
+            .collect::<Vec<_>>();
+        cache.select_conversation("conversation-1");
+
+        for message_id in &message_ids {
+            cache.signature_for(message_id, || {
+                computed.set(computed.get().saturating_add(1));
+                1
+            });
+        }
+        assert_eq!(computed.get(), message_ids.len());
+
+        for message_id in &message_ids {
+            cache.signature_for(message_id, || {
+                computed.set(computed.get().saturating_add(1));
+                2
+            });
+        }
+        assert_eq!(
+            computed.get(),
+            message_ids.len(),
+            "an unchanged scroll render must reuse all message signatures"
+        );
+
+        cache.invalidate_message(&message_ids[128]);
+        for message_id in &message_ids {
+            cache.signature_for(message_id, || {
+                computed.set(computed.get().saturating_add(1));
+                3
+            });
+        }
+        assert_eq!(
+            computed.get(),
+            message_ids.len() + 1,
+            "a streamed update must rehash only its owning message"
+        );
+    }
+
+    #[test]
     fn turn_plain_text_summary_uses_text_parts_like_tauri_turn_end() {
         let mut message = assistant_message();
 
@@ -1348,6 +1742,8 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             reasoning_effort: Some("auto".to_string()),
             safety_mode: AiPolicySafetyMode::Default,
             profile_id: None,
+            memory_context: None,
+            memory_entry_ids: Vec::new(),
             tool_policy,
             tools: Vec::new(),
             tool_choice: oxideterm_ai::AiToolChoice::Auto,
@@ -1382,7 +1778,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
 
     #[test]
     fn required_tool_buffer_flushes_only_after_tool_call() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::workspace::delivery::ActiveDeliverySender::channel();
         let mut assistant_content = String::new();
         let mut assistant_thinking = String::new();
         let mut buffered_content = "我已经打开了终端。".to_string();
@@ -1708,6 +2104,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
                     original_count: Some(4),
                     compacted_at_ms: Some(1),
                     original_messages: None,
+                    original_user_count: None,
                 }),
                 tool_call_id: None,
                 tool_calls: Vec::new(),
@@ -1786,14 +2183,28 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
     }
 
     #[test]
-    fn tool_arguments_must_parse_to_json_object() {
+    fn tool_arguments_must_match_the_v2_contract() {
         assert_eq!(
-            parse_ai_tool_args("{\"target\":\"local\"}")
-                .and_then(|value| value.get("target").cloned()),
-            Some(serde_json::json!("local"))
+            parse_ai_tool_args("list_targets", "{\"view\":\"live_sessions\"}")
+                .and_then(|value| value.get("view").cloned()),
+            Some(serde_json::json!("live_sessions"))
         );
-        assert!(parse_ai_tool_args("not json").is_none());
-        assert!(parse_ai_tool_args("[\"not\", \"an\", \"object\"]").is_none());
+        assert!(parse_ai_tool_args("list_targets", "{\"target_id\":\"local\"}").is_none());
+        assert!(parse_ai_tool_args("list_targets", "not json").is_none());
+        assert!(
+            parse_ai_tool_args("list_targets", "[\"not\", \"an\", \"object\"]").is_none()
+        );
+        assert_eq!(
+            parse_ai_tool_args(
+                "mcp__example__inspect",
+                "{\"target_id\":\"terminal-session:42\",\"custom\":true}"
+            ),
+            Some(serde_json::json!({
+                "target_id": "terminal-session:42",
+                "custom": true,
+            })),
+            "an external MCP payload remains server-owned and gains no app authority"
+        );
     }
 
     #[test]
@@ -1833,6 +2244,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             session_id: None,
             session_metadata: None,
             messages_loaded: true,
+            turn_count: 0,
         };
 
         let stopped = finalize_streaming_ai_messages_on_cancel(&mut conversation);
@@ -1910,6 +2322,7 @@ fn acp_bridge_exposes_only_visible_terminal_tools() {
             session_id: None,
             session_metadata: None,
             messages_loaded: true,
+            turn_count: 0,
         };
 
         let stopped = finalize_streaming_ai_messages_on_cancel(&mut conversation);

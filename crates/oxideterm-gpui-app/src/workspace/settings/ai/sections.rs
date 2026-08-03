@@ -4,7 +4,6 @@ pub(in crate::workspace) const AI_ACP_AGENT_TEXTAREA_MIN_H: f32 = 72.0; // Tauri
 pub(in crate::workspace) const AI_TOOL_NUMBER_INPUT_W: f32 = 96.0; // Tauri w-24.
 pub(in crate::workspace) const AI_ACP_AGENT_FIELD_MIN_WIDTH: f32 = 220.0; // Keep ACP form fields readable on narrow settings panes.
 pub(in crate::workspace) const AI_ACP_AGENT_TEXTAREA_FIELD_MIN_WIDTH: f32 = 240.0; // Multiline command fields need more room than compact selects.
-pub(in crate::workspace) const AI_ACP_AGENT_AUTH_TOKEN_MIN_WIDTH: f32 = 220.0; // Let token actions wrap without crushing the secret input.
 pub(in crate::workspace) const AI_ACP_AGENT_CAPABILITY_MIN_WIDTH: f32 = 150.0; // Capability checkboxes should wrap as chips, not grid columns.
 pub(in crate::workspace) const AI_READONLY_VALUE_WIDTH: f32 = 180.0; // Keep compact status fields aligned with text inputs.
 
@@ -108,7 +107,10 @@ impl WorkspaceApp {
         agent: &oxideterm_settings::AcpAgentConfig,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let testing = self.ai.runtime.acp_agent_probe_pending.contains(&agent.id);
+        let testing = self
+            .ai_entity
+            .read(cx)
+            .acp_agent_probe_is_pending(&agent.id);
         div()
             .w_full()
             .min_w(px(0.0))
@@ -210,7 +212,6 @@ impl WorkspaceApp {
                         ),
                     )),
             )
-            .child(self.ai_acp_agent_auth_token_input(index, agent, cx))
             .child(
                 div()
                     .w_full()
@@ -225,7 +226,10 @@ impl WorkspaceApp {
                             self.i18n.t("settings_view.ai.acp_agent_args"),
                             self.i18n.t("settings_view.ai.acp_agent_args_placeholder"),
                             self.i18n.t("settings_view.ai.acp_agent_args_placeholder"),
-                            self.current_settings_input_value(SettingsInput::AiAcpAgentArgs(index)),
+                            self.current_settings_input_value(
+                                SettingsInput::AiAcpAgentArgs(index),
+                                cx,
+                            ),
                             AI_ACP_AGENT_TEXTAREA_MIN_H,
                             cx,
                         ),
@@ -237,7 +241,10 @@ impl WorkspaceApp {
                             self.i18n.t("settings_view.ai.acp_agent_env"),
                             self.i18n.t("settings_view.ai.acp_agent_env_placeholder"),
                             self.i18n.t("settings_view.ai.acp_agent_env_placeholder"),
-                            self.current_settings_input_value(SettingsInput::AiAcpAgentEnv(index)),
+                            self.current_settings_input_value(
+                                SettingsInput::AiAcpAgentEnv(index),
+                                cx,
+                            ),
                             AI_ACP_AGENT_TEXTAREA_MIN_H,
                             cx,
                         ),
@@ -300,229 +307,6 @@ impl WorkspaceApp {
         .into_any_element()
     }
 
-    pub(in crate::workspace) fn ai_acp_agent_auth_token_input(
-        &self,
-        index: usize,
-        agent: &oxideterm_settings::AcpAgentConfig,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let input = SettingsInput::AiAcpAgentAuthToken(index);
-        let focused = self.focused_settings_input == Some(input);
-        let draft = if focused {
-            self.settings_input_draft.as_str()
-        } else {
-            ""
-        };
-        let save_disabled = draft.trim().is_empty();
-        let remove_disabled =
-            agent.auth.status != oxideterm_settings::AcpAgentAuthStatus::Authenticated;
-        let save_agent_id = agent.id.clone();
-        let remove_agent_id = agent.id.clone();
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .text_color(rgb(self.tokens.ui.text_muted))
-                    .child(self.i18n.t("settings_view.ai.acp_agent_auth_token")),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .flex_1()
-                            .flex_basis(px(AI_ACP_AGENT_AUTH_TOKEN_MIN_WIDTH))
-                            .child(self.ai_provider_secret_input(
-                                input,
-                                draft,
-                                if agent.auth.status
-                                    == oxideterm_settings::AcpAgentAuthStatus::Authenticated
-                                {
-                                    self.i18n.t("settings_view.ai.acp_agent_auth_token_saved")
-                                } else {
-                                    self.i18n
-                                        .t("settings_view.ai.acp_agent_auth_token_placeholder")
-                                },
-                                focused,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        self.workspace_toolbar_action_button(
-                            self.i18n.t("settings_view.ai.save"),
-                            None,
-                            ToolbarButtonOptions {
-                                button: ButtonOptions {
-                                    variant: ButtonVariant::Secondary,
-                                    size: ButtonSize::Sm,
-                                    radius: ButtonRadius::Md,
-                                    disabled: save_disabled,
-                                },
-                                height: Some(32.0),
-                                font_size: Some(self.tokens.metrics.ui_text_xs),
-                                ..ToolbarButtonOptions::default()
-                            },
-                            cx.listener(move |this, _event, _window, cx| {
-                                this.save_ai_acp_agent_auth_token(index, save_agent_id.clone(), cx);
-                                cx.stop_propagation();
-                            }),
-                        )
-                        .into_any_element(),
-                    )
-                    .child(
-                        self.workspace_toolbar_action_button(
-                            self.i18n.t("settings_view.ai.remove"),
-                            None,
-                            ToolbarButtonOptions {
-                                button: ButtonOptions {
-                                    variant: ButtonVariant::Ghost,
-                                    size: ButtonSize::Sm,
-                                    radius: ButtonRadius::Md,
-                                    disabled: remove_disabled,
-                                },
-                                height: Some(32.0),
-                                font_size: Some(self.tokens.metrics.ui_text_xs),
-                                text_color: Some(rgb(self.tokens.ui.error)),
-                                hover_text_color: Some(rgb(self.tokens.ui.error)),
-                                hover_background: Some(rgba((self.tokens.ui.error << 8) | 0x1a)),
-                                ..ToolbarButtonOptions::default()
-                            },
-                            cx.listener(move |this, _event, _window, cx| {
-                                this.delete_ai_acp_agent_auth_token(
-                                    index,
-                                    remove_agent_id.clone(),
-                                    cx,
-                                );
-                                cx.stop_propagation();
-                            }),
-                        )
-                        .into_any_element(),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    pub(in crate::workspace) fn save_ai_acp_agent_auth_token(
-        &mut self,
-        index: usize,
-        agent_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        if self.focused_settings_input != Some(SettingsInput::AiAcpAgentAuthToken(index)) {
-            cx.notify();
-            return;
-        }
-
-        // The ACP token draft is converted to a zeroizing owner at the
-        // UI/backend boundary and is never applied through persisted settings.
-        let Some(token) = ai_take_provider_key_secret(&mut self.settings_input_draft) else {
-            cx.notify();
-            return;
-        };
-        let key_store = self.ai.models.key_store.clone();
-        let runtime = self.forwarding_runtime.clone();
-        cx.spawn(async move |weak, cx| {
-            let agent_id_for_store = agent_id.clone();
-            let result = runtime
-                .spawn_blocking(move || key_store.store_acp_auth_token(&agent_id_for_store, token))
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|result| result.map_err(|error| error.to_string()));
-            let _ = weak.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        this.focused_settings_input = None;
-                        this.edit_settings(
-                            |settings| {
-                                if let Some(agent) = settings
-                                    .ai
-                                    .acp_agents
-                                    .iter_mut()
-                                    .find(|agent| agent.id == agent_id)
-                                {
-                                    agent.auth.status =
-                                        oxideterm_settings::AcpAgentAuthStatus::Authenticated;
-                                    agent.auth.account_label = Some(
-                                        (!agent.display_name.trim().is_empty())
-                                            .then(|| agent.display_name.clone())
-                                            .unwrap_or_else(|| agent.id.clone()),
-                                    );
-                                }
-                            },
-                            cx,
-                        );
-                    }
-                    Err(error) => {
-                        this.push_ai_settings_toast(
-                            this.ai_i18n_error("settings_view.ai.save_failed", &error),
-                            TerminalNoticeVariant::Error,
-                        );
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
-    pub(in crate::workspace) fn delete_ai_acp_agent_auth_token(
-        &mut self,
-        _index: usize,
-        agent_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        let key_store = self.ai.models.key_store.clone();
-        let runtime = self.forwarding_runtime.clone();
-        cx.spawn(async move |weak, cx| {
-            let agent_id_for_delete = agent_id.clone();
-            let result = runtime
-                .spawn_blocking(move || key_store.delete_acp_auth_token(&agent_id_for_delete))
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|result| result.map_err(|error| error.to_string()));
-            let _ = weak.update(cx, |this, cx| {
-                match result {
-                    Ok(()) => {
-                        this.edit_settings(
-                            |settings| {
-                                if let Some(agent) = settings
-                                    .ai
-                                    .acp_agents
-                                    .iter_mut()
-                                    .find(|agent| agent.id == agent_id)
-                                {
-                                    agent.auth.status =
-                                        oxideterm_settings::AcpAgentAuthStatus::Unknown;
-                                    agent.auth.account_label = None;
-                                }
-                            },
-                            cx,
-                        );
-                    }
-                    Err(error) => {
-                        this.push_ai_settings_toast(
-                            this.ai_i18n_error("settings_view.ai.remove_failed", &error),
-                            TerminalNoticeVariant::Error,
-                        );
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-
     pub(in crate::workspace) fn ai_labeled_text_input(
         &self,
         label_key: &str,
@@ -544,7 +328,7 @@ impl WorkspaceApp {
             )
             .child(self.settings_text_input_control(
                 input,
-                self.current_settings_input_value(input),
+                self.current_settings_input_value(input, cx),
                 placeholder,
                 240.0,
                 cx,
@@ -604,12 +388,14 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn ai_acp_agent_test_button(
         &self,
-        index: usize,
+        _index: usize,
         agent: &oxideterm_settings::AcpAgentConfig,
         testing: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let agent_for_probe = agent.clone();
+        // Capture only the stable id. Cloning the whole config here would keep
+        // token-bearing args and env alive for the lifetime of the render tree.
+        let agent_id = agent.id.clone();
         let mut options = ToolbarButtonOptions::compact_text(
             ButtonVariant::Outline,
             ButtonRadius::Md,
@@ -634,7 +420,7 @@ impl WorkspaceApp {
             )),
             options,
             cx.listener(move |this, _event, _window, cx| {
-                this.test_ai_acp_agent(index, agent_for_probe.clone(), cx);
+                this.test_ai_acp_agent(agent_id.clone(), cx);
                 cx.stop_propagation();
             }),
         )
@@ -643,142 +429,33 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn test_ai_acp_agent(
         &mut self,
-        _index: usize,
-        agent: oxideterm_settings::AcpAgentConfig,
+        agent_id: String,
         cx: &mut Context<Self>,
     ) {
-        if self.ai.runtime.acp_agent_probe_pending.contains(&agent.id) {
+        if self
+            .ai_entity
+            .read(cx)
+            .acp_agent_probe_is_pending(&agent_id)
+        {
             cx.notify();
             return;
         }
-
-        let agent_id = agent.id.clone();
-        self.ai
-            .runtime
-            .acp_agent_probe_pending
-            .insert(agent_id.clone());
-        if self.ai.runtime.acp_agent_probe_tx.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.ai.runtime.acp_agent_probe_tx = Some(tx);
-            self.ai.runtime.acp_agent_probe_rx = Some(rx);
-        }
-        let Some(ui_tx) = self.ai.runtime.acp_agent_probe_tx.as_ref().cloned() else {
-            self.ai.runtime.acp_agent_probe_pending.remove(&agent_id);
+        let Some(agent) = self
+            .settings_store
+            .settings()
+            .ai
+            .acp_agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .cloned()
+        else {
             cx.notify();
             return;
         };
-
-        let launch_config = ai_acp_launch_config_from_settings(&agent);
-        let capability_policy = ai_acp_capability_policy_from_settings(&agent.capability_policy);
-        // ACP probe uses the shared backend runtime because launching a stdio
-        // agent needs Tokio process IO. The UI receives only redacted status.
-        self.forwarding_runtime.spawn(async move {
-            let result = match oxideterm_ai::build_acp_stdio_launcher(launch_config) {
-                Ok(launcher) => {
-                    if !oxideterm_ai::acp_launch_command_available(launcher.config())
-                        .unwrap_or(false)
-                    {
-                        ai_acp_probe_error_result("command_not_found")
-                    } else {
-                        let initialize_result = oxideterm_ai::initialize_acp_agent(
-                            launcher,
-                            env!("CARGO_PKG_VERSION").to_string(),
-                            capability_policy,
-                        )
-                        .await;
-                        match initialize_result {
-                            Ok(response) => {
-                                let auth_required = !response.auth_methods.is_empty();
-                                AcpAgentProbeResult {
-                                    runtime_state: if auth_required {
-                                        oxideterm_settings::AcpAgentRuntimeState::AuthRequired
-                                    } else {
-                                        oxideterm_settings::AcpAgentRuntimeState::Ready
-                                    },
-                                    auth_status: if auth_required {
-                                        oxideterm_settings::AcpAgentAuthStatus::Required
-                                    } else {
-                                        oxideterm_settings::AcpAgentAuthStatus::NotRequired
-                                    },
-                                    last_error_kind: None,
-                                }
-                            }
-                            Err(_) => ai_acp_probe_error_result("initialize"),
-                        }
-                    }
-                }
-                Err(_) => ai_acp_probe_error_result("config"),
-            };
-            let _ = ui_tx.send(AcpAgentProbeDelivery { agent_id, result });
+        self.ai_entity.update(cx, |ai, _cx| {
+            ai.request_acp_agent_probe(agent);
         });
-        self.schedule_ai_acp_agent_probe_poll(cx);
         cx.notify();
-    }
-
-    pub(in crate::workspace) fn poll_ai_acp_agent_probe_results(&mut self, cx: &mut Context<Self>) {
-        let Some(rx) = self.ai.runtime.acp_agent_probe_rx.take() else {
-            return;
-        };
-        let mut keep_rx = true;
-        loop {
-            match rx.try_recv() {
-                Ok(delivery) => {
-                    self.ai
-                        .runtime
-                        .acp_agent_probe_pending
-                        .remove(&delivery.agent_id);
-                    self.edit_settings(
-                        |settings| {
-                            if let Some(agent) = settings
-                                .ai
-                                .acp_agents
-                                .iter_mut()
-                                .find(|agent| agent.id == delivery.agent_id)
-                            {
-                                agent.auth.status = delivery.result.auth_status.clone();
-                                agent.status.state = delivery.result.runtime_state.clone();
-                                agent.status.last_error_kind =
-                                    delivery.result.last_error_kind.clone();
-                            }
-                        },
-                        cx,
-                    );
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    keep_rx = false;
-                    self.ai.runtime.acp_agent_probe_tx = None;
-                    self.ai.runtime.acp_agent_probe_pending.clear();
-                    break;
-                }
-            }
-        }
-        if keep_rx && !self.ai.runtime.acp_agent_probe_pending.is_empty() {
-            self.ai.runtime.acp_agent_probe_rx = Some(rx);
-        } else if self.ai.runtime.acp_agent_probe_pending.is_empty() {
-            self.ai.runtime.acp_agent_probe_tx = None;
-        }
-    }
-
-    pub(in crate::workspace) fn schedule_ai_acp_agent_probe_poll(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) {
-        if self.ai.runtime.acp_agent_probe_polling {
-            return;
-        }
-        self.ai.runtime.acp_agent_probe_polling = true;
-        cx.spawn(async move |weak, cx| {
-            Timer::after(Duration::from_millis(50)).await;
-            let _ = weak.update(cx, |this, cx| {
-                this.ai.runtime.acp_agent_probe_polling = false;
-                this.poll_ai_acp_agent_probe_results(cx);
-                if !this.ai.runtime.acp_agent_probe_pending.is_empty() {
-                    this.schedule_ai_acp_agent_probe_poll(cx);
-                }
-            });
-        })
-        .detach();
     }
 
     pub(in crate::workspace) fn ai_acp_agent_capabilities(
@@ -882,17 +559,25 @@ impl WorkspaceApp {
         providers: &[AiProviderView],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = self.settings_page.ai_provider_settings_expanded;
+        let expanded = self
+            .ai_entity
+            .read(cx)
+            .settings_section_expanded(AiSettingsViewSection::ProviderSettings);
         let summary = self.i18n_count(
             "settings_view.ai.provider_settings_summary",
             self.settings_store.settings().ai.providers.len(),
         );
-        self.sync_ai_provider_card_list_state(providers);
+        self.sync_ai_provider_card_list_state(providers, cx);
         let provider_list = if expanded {
-            let state = self.ai.models.provider_card_list_state.clone();
+            let state = self
+                .ai_entity
+                .read(cx)
+                .model_ui()
+                .provider_card_list_state
+                .clone();
             let spec = self.ai_provider_card_list_spec();
             let workspace = cx.entity();
-            let list_height = self.ai_provider_card_list_estimated_height(providers);
+            let list_height = self.ai_provider_card_list_estimated_height(providers, cx);
             Some(
                 div()
                     .w_full()
@@ -923,9 +608,11 @@ impl WorkspaceApp {
                 summary,
                 expanded,
                 |this, _event, _window, cx| {
-                    this.settings_page
-                        .toggle_ai_section(AiSettingsSection::ProviderSettings);
+                    this.ai_entity.update(cx, |ai, cx| {
+                        ai.toggle_settings_section(AiSettingsViewSection::ProviderSettings, cx);
+                    });
                     cx.stop_propagation();
+                    // WorkspaceApp owns the surrounding settings render.
                     cx.notify();
                 },
                 cx,
@@ -939,10 +626,11 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn ai_provider_card_list_estimated_height(
         &self,
         providers: &[AiProviderView],
+        cx: &App,
     ) -> f32 {
         providers
             .iter()
-            .map(|provider| self.ai_provider_card_estimated_height(provider))
+            .map(|provider| self.ai_provider_card_estimated_height(provider, cx))
             .sum::<f32>()
             + AI_PROVIDER_CARD_LIST_ESTIMATED_HEIGHT
     }
@@ -950,6 +638,7 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn ai_provider_card_estimated_height(
         &self,
         provider: &AiProviderView,
+        cx: &App,
     ) -> f32 {
         let active_provider = self
             .settings_store
@@ -959,18 +648,16 @@ impl WorkspaceApp {
             .as_deref()
             == Some(provider.id.as_str());
         let expanded = self
-            .settings_page
-            .expanded_ai_providers
-            .get(&provider.id)
-            .copied()
-            .unwrap_or(active_provider);
+            .ai_entity
+            .read(cx)
+            .settings_provider_expanded(&provider.id, active_provider);
         if !expanded {
             return 72.0;
         }
         let models_expanded = self
-            .settings_page
-            .expanded_ai_provider_models
-            .contains(&provider.id);
+            .ai_entity
+            .read(cx)
+            .settings_provider_models_expanded(&provider.id);
         let visible_model_count = if models_expanded {
             provider.models.len()
         } else {
@@ -980,7 +667,7 @@ impl WorkspaceApp {
             .div_ceil(AI_PROVIDER_MODEL_CHIPS_PER_VIRTUAL_ROW)
             .max(1);
         let key_input_height = if self
-            .ai_provider_key_display_state(provider)
+            .ai_provider_key_display_state(provider, cx)
             .shows_key_control()
         {
             72.0
@@ -1000,6 +687,7 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn sync_ai_provider_card_list_state(
         &self,
         providers: &[AiProviderView],
+        cx: &App,
     ) {
         let mut signatures = providers
             .iter()
@@ -1012,27 +700,27 @@ impl WorkspaceApp {
                     .as_deref()
                     == Some(provider.id.as_str());
                 let expanded = self
-                    .settings_page
-                    .expanded_ai_providers
-                    .get(&provider.id)
-                    .copied()
-                    .unwrap_or(active_provider);
+                    .ai_entity
+                    .read(cx)
+                    .settings_provider_expanded(&provider.id, active_provider);
                 ai_provider_card_signature(
                     provider,
                     expanded,
-                    self.settings_page
-                        .expanded_ai_provider_models
-                        .contains(&provider.id),
-                    self.ai_provider_has_key_cached(&provider.id),
+                    self.ai_entity
+                        .read(cx)
+                        .settings_provider_models_expanded(&provider.id),
+                    self.ai_provider_has_key_cached(&provider.id, cx),
                 )
             })
             .collect::<Vec<_>>();
         // The add-provider controls are the final virtual row inside this
         // section. Keep a stable sentinel signature for that fixed row.
         signatures.push(0xadd0_0001);
+        let ai = self.ai_entity.read(cx);
+        let model_ui = ai.model_ui();
         sync_tauri_variable_list_state_by_signatures(
-            &self.ai.models.provider_card_list_state,
-            &mut self.ai.models.provider_card_list_cache.borrow_mut(),
+            &model_ui.provider_card_list_state,
+            &mut model_ui.provider_card_list_cache.borrow_mut(),
             "ai-provider-cards",
             &signatures,
             self.ai_provider_card_list_spec(),
@@ -1196,7 +884,13 @@ impl WorkspaceApp {
         settings: &PersistedSettings,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let has_saved_memory = !settings.ai.memory.content.trim().is_empty();
+        let has_saved_memory = !settings.ai.memory.content.trim().is_empty()
+            || settings
+                .ai
+                .memory
+                .entries
+                .iter()
+                .any(|entry| !entry.content.trim().is_empty());
         settings_ai_editor_summary_section(
             &self.tokens,
             settings_ai_icon_heading(
@@ -1267,7 +961,11 @@ impl WorkspaceApp {
                 .collect(),
         );
 
-        let collapsed_summary = (!self.settings_page.ai_tool_use_expanded).then(|| {
+        let tool_use_expanded = self
+            .ai_entity
+            .read(cx)
+            .settings_section_expanded(AiSettingsViewSection::ToolUse);
+        let collapsed_summary = (!tool_use_expanded).then(|| {
             settings_ai_tool_collapsed_summary(
                 &self.tokens,
                 format!(
@@ -1280,7 +978,7 @@ impl WorkspaceApp {
                 ),
             )
         });
-        let expanded_body = self.settings_page.ai_tool_use_expanded.then(|| {
+        let expanded_body = tool_use_expanded.then(|| {
             settings_ai_tool_expanded_body(
                 &self.tokens,
                 settings.ai.tool_use.enabled,
@@ -1328,6 +1026,233 @@ impl WorkspaceApp {
             collapsed_summary,
             expanded_body,
         )
+    }
+
+    pub(in crate::workspace) fn ai_skills_section(
+        &self,
+        settings: &PersistedSettings,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let registry = self.skill_registry.read();
+        let records = registry.records().cloned().collect::<Vec<_>>();
+        let diagnostic_count = registry.diagnostics().len();
+        drop(registry);
+        let enabled_count = records.iter().filter(|record| record.enabled).count();
+        let mut section = div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.0))
+                    .child(settings_ai_icon_heading(
+                        Self::render_lucide_icon(
+                            LucideIcon::BookOpen,
+                            16.0,
+                            rgb(self.tokens.ui.text),
+                        ),
+                        self.ai_section_title("settings_view.ai.skills_title"),
+                    ))
+                    .child(self.workspace_toolbar_action_button(
+                        self.i18n.t("settings_view.ai.skills_refresh"),
+                        Some(Self::render_lucide_icon(
+                            LucideIcon::RefreshCw,
+                            12.0,
+                            rgb(self.tokens.ui.text),
+                        )),
+                        ToolbarButtonOptions {
+                            button: ButtonOptions {
+                                variant: ButtonVariant::Outline,
+                                size: ButtonSize::Sm,
+                                radius: ButtonRadius::Md,
+                                disabled: false,
+                            },
+                            ..ToolbarButtonOptions::default()
+                        },
+                        cx.listener(|this, _event, _window, cx| {
+                            this.refresh_ai_skill_registry();
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(self.tokens.metrics.ui_text_xs))
+                    .text_color(rgb(self.tokens.ui.text_muted))
+                    .line_height(px(18.0))
+                    .child(self.i18n.t("settings_view.ai.skills_hint")),
+            )
+            .child(self.bool_row(
+                "settings_view.ai.skills_enabled",
+                "settings_view.ai.skills_enabled_hint",
+                settings.ai.skills.enabled,
+                set_ai_skills_enabled,
+                cx,
+            ))
+            .child(
+                div()
+                    .text_size(px(self.tokens.metrics.ui_text_xs))
+                    .text_color(rgb(self.tokens.ui.text_muted))
+                    .child(
+                        self.i18n
+                            .t("settings_view.ai.skills_summary")
+                            .replace("{{enabled}}", &enabled_count.to_string())
+                            .replace("{{total}}", &records.len().to_string())
+                            .replace("{{diagnostics}}", &diagnostic_count.to_string()),
+                    ),
+            );
+
+        if records.is_empty() {
+            return section
+                .child(
+                    div()
+                        .py(px(8.0))
+                        .text_size(px(self.tokens.metrics.ui_text_xs))
+                        .text_color(rgb(self.tokens.ui.text_muted))
+                        .child(self.i18n.t("settings_view.ai.skills_empty")),
+                )
+                .into_any_element();
+        }
+
+        for record in records {
+            let skill_path = record.skill_path.to_string_lossy().into_owned();
+            let checked = record.enabled;
+            let source = match record.origin {
+                oxideterm_skills::SkillOrigin::AgentStandard => ".agents",
+                oxideterm_skills::SkillOrigin::OxideTerm => "OxideTerm",
+                oxideterm_skills::SkillOrigin::ClaudeCompatible => ".claude",
+                oxideterm_skills::SkillOrigin::CopilotCompatible => ".github",
+                oxideterm_skills::SkillOrigin::OpenCodeCompatible => ".opencode",
+                oxideterm_skills::SkillOrigin::Plugin => "skills/",
+            };
+            let scope_key = match record.scope {
+                oxideterm_skills::SkillScope::Workspace => {
+                    "settings_view.ai.skills_scope_workspace"
+                }
+                oxideterm_skills::SkillScope::User => "settings_view.ai.skills_scope_user",
+                oxideterm_skills::SkillScope::Plugin => "settings_view.ai.skills_scope_plugin",
+            };
+            section = section.child(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .border_t_1()
+                    .border_color(rgba((self.tokens.ui.border << 8) | 0x66))
+                    .pt(px(10.0))
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(rgb(self.tokens.ui.text))
+                                    .child(record.name),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(self.tokens.metrics.ui_text_xs))
+                                    .text_color(rgb(self.tokens.ui.text_muted))
+                                    .child(record.description),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(self.tokens.ui.text_muted))
+                                    .child(format!("{} · {}", self.i18n.t(scope_key), source)),
+                            ),
+                    )
+                    .child(
+                        checkbox(&self.tokens, String::new(), checked).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, _window, cx| {
+                                let skill_path = skill_path.clone();
+                                this.edit_settings(
+                                    move |settings| {
+                                        if checked {
+                                            if !settings
+                                                .ai
+                                                .skills
+                                                .disabled_paths
+                                                .iter()
+                                                .any(|path| path == &skill_path)
+                                            {
+                                                settings.ai.skills.disabled_paths.push(skill_path);
+                                            }
+                                        } else {
+                                            settings
+                                                .ai
+                                                .skills
+                                                .disabled_paths
+                                                .retain(|path| path != &skill_path);
+                                        }
+                                    },
+                                    cx,
+                                );
+                                this.refresh_ai_skill_registry();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+            );
+        }
+        section.into_any_element()
+    }
+
+    pub(in crate::workspace) fn refresh_ai_skill_registry(&mut self) {
+        let plugin_registry =
+            plugin_host::NativePluginRegistry::discover(self.settings_store.path());
+        let plugin_roots = plugin_registry
+            .plugins()
+            .iter()
+            .filter(|plugin| {
+                matches!(
+                    plugin.state,
+                    plugin_host::NativePluginState::ReadyManifestOnly
+                        | plugin_host::NativePluginState::ReadyWasm
+                        | plugin_host::NativePluginState::ReadyProcess
+                        | plugin_host::NativePluginState::Active
+                )
+            })
+            .map(|plugin| plugin.install_dir.clone())
+            .collect();
+        let disabled_paths = self
+            .settings_store
+            .settings()
+            .ai
+            .skills
+            .disabled_paths
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let registry =
+            oxideterm_skills::SkillRegistry::discover(&oxideterm_skills::SkillDiscoveryOptions {
+                workspace_root: self.skill_workspace_root.clone(),
+                settings_path: Some(self.settings_store.path().to_path_buf()),
+                plugin_roots,
+                disabled_paths,
+            });
+        *self.skill_registry.write() = registry;
+        // A disabled or replaced skill must be loaded again before resources
+        // can be read in any existing conversation.
+        self.loaded_conversation_skills.clear();
     }
 
     pub(in crate::workspace) fn ai_tool_number_input_row(
@@ -1423,33 +1348,52 @@ impl WorkspaceApp {
         min_height: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let focused = self.focused_settings_input == Some(input);
-        let display_value = if focused {
-            self.settings_input_draft.as_str()
+        let entity_owned = ai_state::AiWorkspaceEntity::owns_settings_input(input);
+        let focused = if entity_owned {
+            self.ai_entity.read(cx).focused_settings_input() == Some(input)
         } else {
-            value.as_str()
+            self.focused_settings_input == Some(input)
         };
         let target = WorkspaceImeTarget::Settings(input);
         let workspace = cx.entity();
         let marked_text = self
-            .marked_text_for_target(target)
+            .marked_text_for_target(target, cx)
             .map(|marked| marked.to_string());
-        let caret = focused.then(|| {
-            text_caret(&self.tokens, self.new_connection_caret_visible).into_any_element()
-        });
-        let textarea = settings_ai_textarea_surface(
-            &self.tokens,
-            min_height,
-            focused,
-            display_value,
-            &placeholder,
-            marked_text,
-            caret,
-        )
+        let caret = focused
+            .then(|| text_caret(&self.tokens, self.input_caret.visible()).into_any_element());
+        let textarea = if entity_owned {
+            let ai_workspace = self.ai_entity.read(cx);
+            settings_ai_textarea_surface(
+                &self.tokens,
+                min_height,
+                focused,
+                ai_workspace.settings_input_value(input).unwrap_or_default(),
+                &placeholder,
+                marked_text,
+                caret,
+            )
+        } else {
+            let display_value = if focused {
+                self.settings_input_draft.as_str()
+            } else {
+                value.as_str()
+            };
+            settings_ai_textarea_surface(
+                &self.tokens,
+                min_height,
+                focused,
+                display_value,
+                &placeholder,
+                marked_text,
+                caret,
+            )
+        }
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                let current = this.current_settings_input_value(input);
+                let current = (!ai_state::AiWorkspaceEntity::owns_settings_input(input))
+                    .then(|| this.current_settings_input_value(input, cx))
+                    .unwrap_or_default();
                 this.focus_settings_input(input, current, cx);
                 this.ime_marked_text = None;
                 window.focus(&this.focus_handle, cx);
@@ -1486,25 +1430,30 @@ impl WorkspaceApp {
             .flex()
             .flex_col()
             .child(self.ai_context_windows_header(cx))
-            .when(self.settings_page.ai_context_windows_expanded, |section| {
-                if provider_panels.is_empty() {
-                    section.child(settings_ai_model_empty_text(
-                        &self.tokens,
-                        self.i18n.t("settings_view.ai.model_context_windows_empty"),
-                    ))
-                } else {
-                    let mut list = div()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(16.0));
-                    for panel in provider_panels {
-                        list = list.child(self.ai_context_window_provider(settings, panel, cx));
+            .when(
+                self.ai_entity
+                    .read(cx)
+                    .settings_section_expanded(AiSettingsViewSection::ContextWindows),
+                |section| {
+                    if provider_panels.is_empty() {
+                        section.child(settings_ai_model_empty_text(
+                            &self.tokens,
+                            self.i18n.t("settings_view.ai.model_context_windows_empty"),
+                        ))
+                    } else {
+                        let mut list = div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(16.0));
+                        for panel in provider_panels {
+                            list = list.child(self.ai_context_window_provider(settings, panel, cx));
+                        }
+                        section.child(list)
                     }
-                    section.child(list)
-                }
-            })
+                },
+            )
             .into_any_element()
     }
 
@@ -1512,16 +1461,17 @@ impl WorkspaceApp {
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let expanded = self
+            .ai_entity
+            .read(cx)
+            .settings_section_expanded(AiSettingsViewSection::ContextWindows);
         settings_ai_context_windows_header(
             &self.tokens,
             self.i18n.t("settings_view.ai.model_context_windows"),
             self.i18n.t("settings_view.ai.model_context_windows_hint"),
             self.render_animated_chevron(
-                (
-                    "ai-context-windows-chevron",
-                    self.settings_page.ai_context_windows_expanded as usize,
-                ),
-                self.settings_page.ai_context_windows_expanded,
+                ("ai-context-windows-chevron", expanded as usize),
+                expanded,
                 16.0,
                 rgb(self.tokens.ui.text_muted),
             ),
@@ -1530,9 +1480,11 @@ impl WorkspaceApp {
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _event, _window, cx| {
-                this.settings_page
-                    .toggle_ai_section(AiSettingsSection::ContextWindows);
+                this.ai_entity.update(cx, |ai, cx| {
+                    ai.toggle_settings_section(AiSettingsViewSection::ContextWindows, cx);
+                });
                 cx.stop_propagation();
+                // WorkspaceApp owns the surrounding settings render.
                 cx.notify();
             }),
         )
@@ -1547,9 +1499,9 @@ impl WorkspaceApp {
     ) -> AnyElement {
         let provider_id = panel.provider_id.clone();
         let expanded = self
-            .settings_page
-            .expanded_ai_context_providers
-            .contains(&provider_id);
+            .ai_entity
+            .read(cx)
+            .settings_context_provider_expanded(&provider_id);
         let header_provider_id = provider_id.clone();
         let header = settings_ai_model_provider_header(
             &self.tokens,
@@ -1571,15 +1523,17 @@ impl WorkspaceApp {
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _event, _window, cx| {
-                this.settings_page
-                    .toggle_ai_context_provider(header_provider_id.clone());
+                this.ai_entity.update(cx, |ai, cx| {
+                    ai.toggle_settings_context_provider(&header_provider_id, cx);
+                });
                 cx.stop_propagation();
+                // WorkspaceApp owns the surrounding settings render.
                 cx.notify();
             }),
         );
         let rows = if expanded {
             let models = panel.models.clone();
-            let state = self.sync_ai_context_model_list_state(settings, &provider_id, &models);
+            let state = self.sync_ai_context_model_list_state(settings, &provider_id, &models, cx);
             let spec = self.ai_provider_model_row_list_spec();
             let workspace = cx.entity();
             let provider_id_for_rows = provider_id;
@@ -1618,6 +1572,7 @@ impl WorkspaceApp {
         settings: &PersistedSettings,
         provider_id: &str,
         models: &[String],
+        cx: &App,
     ) -> ListState {
         let signatures = models
             .iter()
@@ -1634,7 +1589,8 @@ impl WorkspaceApp {
             })
             .collect::<Vec<_>>();
         let state = {
-            let mut states = self.ai.models.context_model_list_states.borrow_mut();
+            let ai = self.ai_entity.read(cx);
+            let mut states = ai.model_ui().context_model_list_states.borrow_mut();
             states
                 .entry(provider_id.to_string())
                 .or_insert_with(|| {
@@ -1650,7 +1606,8 @@ impl WorkspaceApp {
                 .clone()
         };
         {
-            let mut caches = self.ai.models.context_model_list_caches.borrow_mut();
+            let ai = self.ai_entity.read(cx);
+            let mut caches = ai.model_ui().context_model_list_caches.borrow_mut();
             let cache = caches.entry(provider_id.to_string()).or_default();
             sync_tauri_variable_list_state_by_signatures(
                 &state,
@@ -1720,7 +1677,7 @@ impl WorkspaceApp {
             ),
             self.settings_text_input_control(
                 input,
-                self.current_settings_input_value(input),
+                self.current_settings_input_value(input, cx),
                 "Auto".to_string(),
                 AI_CONTEXT_NUMBER_W,
                 cx,
@@ -1747,7 +1704,10 @@ impl WorkspaceApp {
             format!("{model}:"),
             self.settings_text_input_control(
                 SettingsInput::AiActiveModelMaxResponseTokens,
-                self.current_settings_input_value(SettingsInput::AiActiveModelMaxResponseTokens),
+                self.current_settings_input_value(
+                    SettingsInput::AiActiveModelMaxResponseTokens,
+                    cx,
+                ),
                 "Auto".to_string(),
                 128.0,
                 cx,
@@ -1757,7 +1717,10 @@ impl WorkspaceApp {
     }
 
     pub(in crate::workspace) fn ai_tool_expand_button(&self, cx: &mut Context<Self>) -> AnyElement {
-        let expanded = self.settings_page.ai_tool_use_expanded;
+        let expanded = self
+            .ai_entity
+            .read(cx)
+            .settings_section_expanded(AiSettingsViewSection::ToolUse);
         // Tool-policy expand/collapse is an outline small Button in Tauri.
         // Route it through the same shared primitive as other settings
         // command buttons.
@@ -1778,9 +1741,11 @@ impl WorkspaceApp {
                 ..ToolbarButtonOptions::default()
             },
             cx.listener(|this, _event, _window, cx| {
-                this.settings_page
-                    .toggle_ai_section(AiSettingsSection::ToolUse);
+                this.ai_entity.update(cx, |ai, cx| {
+                    ai.toggle_settings_section(AiSettingsViewSection::ToolUse, cx);
+                });
                 cx.stop_propagation();
+                // WorkspaceApp owns the surrounding settings render.
                 cx.notify();
             }),
         )
@@ -1792,6 +1757,41 @@ impl WorkspaceApp {
         group: AiToolPolicyGroup,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let group_state = group.state();
+        let group_for_toggle = group.clone();
+        let next_bulk_value = group.next_bulk_value();
+        let group_checkbox_state = match group_state {
+            AiToolPolicyGroupState::Locked | AiToolPolicyGroupState::AllApproved => {
+                CheckboxState::Checked
+            }
+            AiToolPolicyGroupState::PartiallyApproved => CheckboxState::Indeterminate,
+            AiToolPolicyGroupState::NoneApproved => CheckboxState::Unchecked,
+        };
+        let mut group_control = checkbox_with_state(
+            &self.tokens,
+            String::new(),
+            group_checkbox_state,
+            CheckboxOptions {
+                disabled: group_state == AiToolPolicyGroupState::Locked,
+                ..CheckboxOptions::default()
+            },
+        );
+        if let Some(approved) = next_bulk_value {
+            group_control = group_control.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, _window, cx| {
+                    let group = group_for_toggle.clone();
+                    this.edit_settings(
+                        move |settings| {
+                            set_ai_tool_policy_group_approval(settings, &group, approved);
+                        },
+                        cx,
+                    );
+                    cx.stop_propagation();
+                }),
+            );
+        }
+
         let mut items = Vec::new();
         for item in group.items {
             let tool_key = item.key.map(str::to_string);
@@ -1832,6 +1832,7 @@ impl WorkspaceApp {
             &self.tokens,
             self.i18n.t(group.title_key),
             self.i18n.t(group.description_key),
+            group_control.into_any_element(),
             items,
         )
     }
@@ -1920,38 +1921,5 @@ pub(in crate::workspace) fn acp_agent_error_kind_key(kind: &str) -> &'static str
         "config" => "settings_view.ai.acp_agent_error_config",
         "initialize" => "settings_view.ai.acp_agent_error_initialize",
         _ => "settings_view.ai.acp_agent_error_unknown",
-    }
-}
-
-pub(in crate::workspace) fn ai_acp_launch_config_from_settings(
-    agent: &oxideterm_settings::AcpAgentConfig,
-) -> oxideterm_ai::AcpLaunchConfig {
-    oxideterm_ai::AcpLaunchConfig {
-        id: agent.id.clone(),
-        display_name: agent.display_name.clone(),
-        command: agent.command.clone(),
-        args: agent.args.clone(),
-        env: agent.env.clone(),
-        cwd: agent.cwd.as_ref().map(std::path::PathBuf::from),
-    }
-}
-
-pub(in crate::workspace) fn ai_acp_capability_policy_from_settings(
-    policy: &oxideterm_settings::AcpAgentCapabilityPolicy,
-) -> oxideterm_ai::AcpHostCapabilityPolicy {
-    oxideterm_ai::AcpHostCapabilityPolicy {
-        fs_read_text_file: policy.fs_read_text_file,
-        fs_write_text_file: policy.fs_write_text_file,
-        terminal: policy.terminal,
-    }
-}
-
-pub(in crate::workspace) fn ai_acp_probe_error_result(kind: &'static str) -> AcpAgentProbeResult {
-    // Probe failures store only stable categories. Raw process errors can
-    // contain command args, env values, or auth material from local agents.
-    AcpAgentProbeResult {
-        runtime_state: oxideterm_settings::AcpAgentRuntimeState::Error,
-        auth_status: oxideterm_settings::AcpAgentAuthStatus::Unknown,
-        last_error_kind: Some(kind.to_string()),
     }
 }

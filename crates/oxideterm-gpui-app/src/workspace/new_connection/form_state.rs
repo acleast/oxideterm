@@ -1,9 +1,9 @@
 use std::fmt;
 
 use oxideterm_connections::{
-    AuthType, ConnectionInfo, PrivilegeCredentialKind, RemoteDesktopProfile,
-    SavedUpstreamProxyProtocol, TransportUsernameTransition, transport_port_replacement,
-    transport_username_transition,
+    AuthType, ConnectionInfo, ConnectionTerminalOptions, ConnectionX11ForwardingOptions,
+    RemoteDesktopProfile, SavedUpstreamProxyProtocol, TransportUsernameTransition,
+    transport_port_replacement, transport_username_transition,
 };
 pub(in crate::workspace) use oxideterm_connections::{
     ConnectionTransport as NewConnectionTransport, RDP_DEFAULT_PORT_TEXT, SSH_DEFAULT_PORT_TEXT,
@@ -14,6 +14,7 @@ use oxideterm_remote_desktop::{
     RemoteDesktopVncImageQuality, RemoteDesktopVncOptions, RemoteDesktopVncSecurityPolicy,
     RemoteDesktopVncSessionMode,
 };
+use zeroize::Zeroize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::workspace) enum SshAuthTab {
@@ -109,10 +110,6 @@ impl NewConnectionFormMode {
     pub(in crate::workspace) fn submits_saved_connection_properties(self) -> bool {
         matches!(self, Self::EditProperties | Self::DuplicateTemplate)
     }
-
-    pub(in crate::workspace) fn stores_connection_on_connect(self) -> bool {
-        self == Self::NewConnection
-    }
 }
 
 pub(in crate::workspace) fn new_connection_form_mode(
@@ -165,6 +162,9 @@ pub(in crate::workspace) enum NewConnectionSelect {
     SerialStopBits,
     SerialParity,
     SerialFlowControl,
+    TerminalEncoding,
+    TerminalBackspaceSequence,
+    TerminalDeleteSequence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -191,6 +191,7 @@ pub(in crate::workspace) enum NewConnectionField {
     ManagedKeyId,
     CertPath,
     Passphrase,
+    IdentityAgent,
     Group,
     PostConnectCommand,
     Color,
@@ -203,6 +204,7 @@ pub(in crate::workspace) enum NewConnectionField {
     JumpManagedKeyId,
     JumpCertPath,
     JumpPassphrase,
+    JumpIdentityAgent,
     UpstreamProxyHost,
     UpstreamProxyPort,
     UpstreamProxyNoProxy,
@@ -306,47 +308,6 @@ pub(in crate::workspace) fn toggle_remote_desktop_feature(
     }
 }
 
-#[derive(Clone)]
-pub(in crate::workspace) struct PrivilegeCredentialDraft {
-    pub(in crate::workspace) credential_id: Option<String>,
-    pub(in crate::workspace) label: String,
-    pub(in crate::workspace) kind: PrivilegeCredentialKind,
-    pub(in crate::workspace) username_hint: String,
-    pub(in crate::workspace) prompt_patterns: String,
-    pub(in crate::workspace) secret: String,
-    pub(in crate::workspace) enabled: bool,
-}
-
-impl fmt::Debug for PrivilegeCredentialDraft {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PrivilegeCredentialDraft")
-            .field("credential_id", &self.credential_id)
-            .field("label", &self.label)
-            .field("kind", &self.kind)
-            .field("username_hint", &self.username_hint)
-            .field("prompt_patterns", &self.prompt_patterns)
-            .field("secret", &"[redacted secret]")
-            .field("enabled", &self.enabled)
-            .finish()
-    }
-}
-
-impl Default for PrivilegeCredentialDraft {
-    fn default() -> Self {
-        Self {
-            credential_id: None,
-            label: String::new(),
-            kind: PrivilegeCredentialKind::SudoPassword,
-            username_hint: String::new(),
-            prompt_patterns: String::new(),
-            secret: String::new(),
-            enabled: true,
-        }
-    }
-}
-
-#[derive(Clone)]
 pub(in crate::workspace) struct NewConnectionProxyHop {
     pub(in crate::workspace) saved_connection_id: String,
     pub(in crate::workspace) host: String,
@@ -359,7 +320,7 @@ pub(in crate::workspace) struct NewConnectionProxyHop {
     pub(in crate::workspace) cert_path: String,
     pub(in crate::workspace) passphrase: String,
     pub(in crate::workspace) agent_forwarding: bool,
-    pub(in crate::workspace) identity_agent: Option<String>,
+    pub(in crate::workspace) identity_agent: String,
     pub(in crate::workspace) agent_forwarding_socket: Option<String>,
     pub(in crate::workspace) legacy_ssh_compatibility: bool,
 }
@@ -379,7 +340,10 @@ impl fmt::Debug for NewConnectionProxyHop {
             .field("cert_path", &self.cert_path)
             .field("passphrase", &"[redacted secret]")
             .field("agent_forwarding", &self.agent_forwarding)
-            .field("identity_agent_configured", &self.identity_agent.is_some())
+            .field(
+                "identity_agent_configured",
+                &identity_agent_selector(&self.identity_agent).is_some(),
+            )
             .field(
                 "agent_forwarding_socket_configured",
                 &self.agent_forwarding_socket.is_some(),
@@ -403,7 +367,7 @@ impl NewConnectionProxyHop {
             cert_path: String::new(),
             passphrase: String::new(),
             agent_forwarding: false,
-            identity_agent: None,
+            identity_agent: String::new(),
             agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
         }
@@ -411,6 +375,11 @@ impl NewConnectionProxyHop {
 
     pub(in crate::workspace) fn complete(&self) -> bool {
         !self.host.trim().is_empty() && !self.username.trim().is_empty()
+    }
+
+    fn zeroize_secret_drafts(&mut self) {
+        self.password.zeroize();
+        self.passphrase.zeroize();
     }
 
     pub(in crate::workspace) fn apply_saved_connection(&mut self, connection: &ConnectionInfo) {
@@ -434,13 +403,19 @@ impl NewConnectionProxyHop {
         self.cert_path = connection.cert_path.clone().unwrap_or_default();
         self.managed_key_id = connection.managed_key_id.clone().unwrap_or_default();
         self.agent_forwarding = connection.agent_forwarding;
-        self.identity_agent = connection.identity_agent.clone();
+        self.identity_agent = connection.identity_agent.clone().unwrap_or_default();
         self.agent_forwarding_socket = connection.agent_forwarding_socket.clone();
         self.legacy_ssh_compatibility = connection.legacy_ssh_compatibility;
     }
 }
 
-#[derive(Clone)]
+impl Drop for NewConnectionProxyHop {
+    fn drop(&mut self) {
+        // Proxy credentials remain in one form owner and are scrubbed on removal.
+        self.zeroize_secret_drafts();
+    }
+}
+
 pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) transport: NewConnectionTransport,
     pub(in crate::workspace) name: String,
@@ -484,9 +459,12 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) upstream_proxy_remote_dns: bool,
     pub(in crate::workspace) upstream_proxy_no_proxy: String,
     pub(in crate::workspace) agent_forwarding: bool,
-    pub(in crate::workspace) identity_agent: Option<String>,
+    pub(in crate::workspace) identity_agent: String,
     pub(in crate::workspace) agent_forwarding_socket: Option<String>,
     pub(in crate::workspace) legacy_ssh_compatibility: bool,
+    pub(in crate::workspace) dedicated_new_terminal_connection: bool,
+    pub(in crate::workspace) x11_forwarding: ConnectionX11ForwardingOptions,
+    pub(in crate::workspace) terminal: ConnectionTerminalOptions,
     pub(in crate::workspace) agent_available: Option<bool>,
     pub(in crate::workspace) save_connection: bool,
     pub(in crate::workspace) field_focused: bool,
@@ -560,12 +538,21 @@ impl fmt::Debug for NewConnectionForm {
             .field("upstream_proxy_remote_dns", &self.upstream_proxy_remote_dns)
             .field("upstream_proxy_no_proxy", &self.upstream_proxy_no_proxy)
             .field("agent_forwarding", &self.agent_forwarding)
-            .field("identity_agent_configured", &self.identity_agent.is_some())
+            .field(
+                "identity_agent_configured",
+                &identity_agent_selector(&self.identity_agent).is_some(),
+            )
             .field(
                 "agent_forwarding_socket_configured",
                 &self.agent_forwarding_socket.is_some(),
             )
             .field("legacy_ssh_compatibility", &self.legacy_ssh_compatibility)
+            .field(
+                "dedicated_new_terminal_connection",
+                &self.dedicated_new_terminal_connection,
+            )
+            .field("x11_forwarding", &self.x11_forwarding)
+            .field("terminal", &self.terminal)
             .field("agent_available", &self.agent_available)
             .field("save_connection", &self.save_connection)
             .field("field_focused", &self.field_focused)
@@ -631,9 +618,12 @@ impl Default for NewConnectionForm {
             upstream_proxy_remote_dns: true,
             upstream_proxy_no_proxy: String::new(),
             agent_forwarding: false,
-            identity_agent: None,
+            identity_agent: String::new(),
             agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
+            dedicated_new_terminal_connection: false,
+            x11_forwarding: ConnectionX11ForwardingOptions::default(),
+            terminal: ConnectionTerminalOptions::default(),
             agent_available: None,
             save_connection: false,
             field_focused: true,
@@ -655,31 +645,45 @@ impl Default for NewConnectionForm {
     }
 }
 
+impl NewConnectionForm {
+    fn zeroize_secret_drafts(&mut self) {
+        self.password.zeroize();
+        self.passphrase.zeroize();
+        self.upstream_proxy_password.zeroize();
+    }
+}
+
+impl Drop for NewConnectionForm {
+    fn drop(&mut self) {
+        // GPUI inputs require plain String drafts, so scrub them at owner teardown.
+        self.zeroize_secret_drafts();
+    }
+}
+
 pub(in crate::workspace) fn form_from_remote_desktop_profile(
     profile: &RemoteDesktopProfile,
     ungrouped_label: String,
 ) -> NewConnectionForm {
     // Editing carries only the keychain reference; the credential value is never loaded.
-    NewConnectionForm {
-        transport: match profile.protocol {
-            oxideterm_remote_desktop::RemoteDesktopProtocol::Rdp => NewConnectionTransport::Rdp,
-            oxideterm_remote_desktop::RemoteDesktopProtocol::Vnc => NewConnectionTransport::Vnc,
-        },
-        name: profile.name.clone(),
-        host: profile.host.clone(),
-        port: profile.port.to_string(),
-        username: profile.username.clone().unwrap_or_default(),
-        remote_desktop_session_options: profile.session_options,
-        remote_desktop_profile_id: Some(profile.id.clone()),
-        saved_password_keychain_id: profile.credential_ref.clone(),
-        save_password: profile.credential_ref.is_some(),
-        group: profile.group.clone().unwrap_or(ungrouped_label),
-        icon: profile.icon.clone().unwrap_or_default(),
-        color: profile.color.clone().unwrap_or_default(),
-        icon_background_color: profile.icon_background_color.clone().unwrap_or_default(),
-        focused_field: NewConnectionField::Name,
-        ..NewConnectionForm::default()
-    }
+    let mut form = NewConnectionForm::default();
+    form.transport = match profile.protocol {
+        oxideterm_remote_desktop::RemoteDesktopProtocol::Rdp => NewConnectionTransport::Rdp,
+        oxideterm_remote_desktop::RemoteDesktopProtocol::Vnc => NewConnectionTransport::Vnc,
+    };
+    form.name = profile.name.clone();
+    form.host = profile.host.clone();
+    form.port = profile.port.to_string();
+    form.username = profile.username.clone().unwrap_or_default();
+    form.remote_desktop_session_options = profile.session_options;
+    form.remote_desktop_profile_id = Some(profile.id.clone());
+    form.saved_password_keychain_id = profile.credential_ref.clone();
+    form.save_password = profile.credential_ref.is_some();
+    form.group = profile.group.clone().unwrap_or(ungrouped_label);
+    form.icon = profile.icon.clone().unwrap_or_default();
+    form.color = profile.color.clone().unwrap_or_default();
+    form.icon_background_color = profile.icon_background_color.clone().unwrap_or_default();
+    form.focused_field = NewConnectionField::Name;
+    form
 }
 
 /// Returns the presentation-only visibility state for primary credential fields.
@@ -709,6 +713,29 @@ pub(in crate::workspace) fn toggle_connection_secret_field_visibility(
             true
         }
         _ => false,
+    }
+}
+
+/// Returns the configured endpoint selector while preserving an empty draft as auto-detect.
+pub(in crate::workspace) fn identity_agent_selector(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+/// Converts a form endpoint into the persisted optional representation.
+pub(in crate::workspace) fn identity_agent_from_form(value: &str) -> Option<String> {
+    identity_agent_selector(value).map(str::to_string)
+}
+
+/// Refreshes the main connection's status only after its endpoint draft changes.
+pub(in crate::workspace) fn refresh_identity_agent_availability(form: &mut NewConnectionForm) {
+    form.agent_available =
+        oxideterm_ssh::ssh_agent_available(identity_agent_selector(&form.identity_agent));
+}
+
+fn refresh_focused_identity_agent_availability(form: &mut NewConnectionForm) {
+    if form.focused_field == NewConnectionField::IdentityAgent {
+        refresh_identity_agent_availability(form);
     }
 }
 
@@ -869,7 +896,16 @@ pub(in crate::workspace) fn next_connection_field(
             NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
-        SshAuthTab::Agent | SshAuthTab::TwoFactor => vec![
+        SshAuthTab::Agent => vec![
+            NewConnectionField::Name,
+            NewConnectionField::Host,
+            NewConnectionField::Port,
+            NewConnectionField::Username,
+            NewConnectionField::IdentityAgent,
+            NewConnectionField::Group,
+            NewConnectionField::PostConnectCommand,
+        ],
+        SshAuthTab::TwoFactor => vec![
             NewConnectionField::Name,
             NewConnectionField::Host,
             NewConnectionField::Port,
@@ -917,10 +953,16 @@ pub(in crate::workspace) fn next_jump_connection_field(
             NewConnectionField::JumpUsername,
             NewConnectionField::JumpPassword,
         ],
-        SshAuthTab::DefaultKey | SshAuthTab::Agent => vec![
+        SshAuthTab::DefaultKey => vec![
             NewConnectionField::JumpHost,
             NewConnectionField::JumpPort,
             NewConnectionField::JumpUsername,
+        ],
+        SshAuthTab::Agent => vec![
+            NewConnectionField::JumpHost,
+            NewConnectionField::JumpPort,
+            NewConnectionField::JumpUsername,
+            NewConnectionField::JumpIdentityAgent,
         ],
         SshAuthTab::SshKey => vec![
             NewConnectionField::JumpHost,
@@ -977,6 +1019,7 @@ pub(in crate::workspace) fn current_connection_field_mut(
         NewConnectionField::ManagedKeyId => &mut form.managed_key_id,
         NewConnectionField::CertPath => &mut form.cert_path,
         NewConnectionField::Passphrase => &mut form.passphrase,
+        NewConnectionField::IdentityAgent => &mut form.identity_agent,
         NewConnectionField::Group => &mut form.group,
         NewConnectionField::PostConnectCommand => &mut form.post_connect_command,
         NewConnectionField::UpstreamProxyHost => &mut form.upstream_proxy_host,
@@ -1042,6 +1085,13 @@ pub(in crate::workspace) fn current_connection_field_mut(
                 .expect("jump passphrase field without jump form")
                 .passphrase
         }
+        NewConnectionField::JumpIdentityAgent => {
+            &mut form
+                .jump_server_form
+                .as_mut()
+                .expect("jump identity agent field without jump form")
+                .identity_agent
+        }
         NewConnectionField::SerialPortPath => &mut form.serial_port_path,
         NewConnectionField::SerialBaudRate => &mut form.serial_baud_rate,
         NewConnectionField::SerialProfileName => &mut form.serial_profile_name,
@@ -1060,6 +1110,7 @@ pub(in crate::workspace) fn current_connection_field(form: &NewConnectionForm) -
         NewConnectionField::ManagedKeyId => &form.managed_key_id,
         NewConnectionField::CertPath => &form.cert_path,
         NewConnectionField::Passphrase => &form.passphrase,
+        NewConnectionField::IdentityAgent => &form.identity_agent,
         NewConnectionField::Group => &form.group,
         NewConnectionField::PostConnectCommand => &form.post_connect_command,
         NewConnectionField::UpstreamProxyHost => &form.upstream_proxy_host,
@@ -1125,6 +1176,13 @@ pub(in crate::workspace) fn current_connection_field(form: &NewConnectionForm) -
                 .expect("jump passphrase field without jump form")
                 .passphrase
         }
+        NewConnectionField::JumpIdentityAgent => {
+            &form
+                .jump_server_form
+                .as_ref()
+                .expect("jump identity agent field without jump form")
+                .identity_agent
+        }
         NewConnectionField::SerialPortPath => &form.serial_port_path,
         NewConnectionField::SerialBaudRate => &form.serial_baud_rate,
         NewConnectionField::SerialProfileName => &form.serial_profile_name,
@@ -1161,6 +1219,7 @@ pub(in crate::workspace) fn insert_text_into_current_connection_field(
     }
     current_connection_field_mut(form).push_str(text);
     form.selected_field = None;
+    refresh_focused_identity_agent_availability(form);
 }
 
 pub(in crate::workspace) fn backspace_current_connection_field(
@@ -1174,10 +1233,16 @@ pub(in crate::workspace) fn backspace_current_connection_field(
         let text_changed = !field.is_empty();
         field.clear();
         form.selected_field = None;
+        if text_changed {
+            refresh_focused_identity_agent_availability(form);
+        }
         text_changed || selection_was_visible
     } else {
         let text_changed = current_connection_field_mut(form).pop().is_some();
         form.selected_field = None;
+        if text_changed {
+            refresh_focused_identity_agent_availability(form);
+        }
         text_changed || selection_was_visible
     }
 }
@@ -1185,6 +1250,7 @@ pub(in crate::workspace) fn backspace_current_connection_field(
 pub(in crate::workspace) fn clear_current_connection_field(form: &mut NewConnectionForm) {
     current_connection_field_mut(form).clear();
     form.selected_field = None;
+    refresh_focused_identity_agent_availability(form);
 }
 
 pub(in crate::workspace) fn text_from_keystroke(keystroke: &gpui::Keystroke) -> Option<&str> {
@@ -1212,20 +1278,22 @@ mod tests {
 
     use super::{
         NewConnectionField, NewConnectionForm, NewConnectionFormMode, NewConnectionProxyHop,
-        NewConnectionTransport, RDP_DEFAULT_PORT_TEXT, RemoteDesktopSessionFeature,
-        RemoteDesktopSessionOptions, RemoteDesktopVncCompression, RemoteDesktopVncImageQuality,
-        RemoteDesktopVncOptions, RemoteDesktopVncPreference, RemoteDesktopVncSecurityPolicy,
-        RemoteDesktopVncSessionMode, SSH_DEFAULT_PORT_TEXT, SavedConnectionPromptAction,
-        SshAuthFamily, SshAuthTab, SshKeyAuthSource, TELNET_DEFAULT_PORT_TEXT,
-        VNC_DEFAULT_PORT_TEXT, apply_remote_desktop_vnc_preference, apply_transport_default_port,
+        NewConnectionTransport, NewConnectionUpstreamProxyAuth, NewConnectionUpstreamProxyPolicy,
+        RDP_DEFAULT_PORT_TEXT, RemoteDesktopSessionFeature, RemoteDesktopSessionOptions,
+        RemoteDesktopVncCompression, RemoteDesktopVncImageQuality, RemoteDesktopVncOptions,
+        RemoteDesktopVncPreference, RemoteDesktopVncSecurityPolicy, RemoteDesktopVncSessionMode,
+        SSH_DEFAULT_PORT_TEXT, SavedConnectionPromptAction, SshAuthFamily, SshAuthTab,
+        SshKeyAuthSource, TELNET_DEFAULT_PORT_TEXT, VNC_DEFAULT_PORT_TEXT,
+        apply_remote_desktop_vnc_preference, apply_transport_default_port,
         apply_transport_default_username, auth_family_from_tab, auth_tab_from_key_source,
         backspace_current_connection_field, connection_icon_field_visible,
         connection_secret_field_visible, default_auth_tab_for_family,
-        form_from_remote_desktop_profile, insert_text_into_current_connection_field,
-        key_source_from_tab, new_connection_form_mode, next_connection_field,
-        remote_desktop_feature_supported, remote_desktop_vnc_preference_selected,
-        select_current_connection_field, text_from_keystroke,
-        toggle_connection_secret_field_visibility, toggle_remote_desktop_feature,
+        form_from_remote_desktop_profile, identity_agent_from_form, identity_agent_selector,
+        insert_text_into_current_connection_field, key_source_from_tab, new_connection_form_mode,
+        next_connection_field, next_jump_connection_field, remote_desktop_feature_supported,
+        remote_desktop_vnc_preference_selected, select_current_connection_field,
+        text_from_keystroke, toggle_connection_secret_field_visibility,
+        toggle_remote_desktop_feature,
     };
 
     fn keystroke(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
@@ -1276,19 +1344,37 @@ mod tests {
 
     #[test]
     fn visible_secret_drafts_remain_redacted_from_debug_output() {
-        let form = NewConnectionForm {
-            password: "password-value".to_string(),
-            password_visible: true,
-            passphrase: "passphrase-value".to_string(),
-            passphrase_visible: true,
-            ..NewConnectionForm::default()
-        };
+        let mut form = NewConnectionForm::default();
+        form.password = "password-value".to_string();
+        form.password_visible = true;
+        form.passphrase = "passphrase-value".to_string();
+        form.passphrase_visible = true;
 
         let debug_output = format!("{form:?}");
 
         assert!(!debug_output.contains("password-value"));
         assert!(!debug_output.contains("passphrase-value"));
         assert!(debug_output.contains("[redacted secret]"));
+    }
+
+    #[test]
+    fn connection_secret_drafts_are_zeroized() {
+        let mut form = NewConnectionForm::default();
+        form.password = "password-value".to_string();
+        form.passphrase = "passphrase-value".to_string();
+        form.upstream_proxy_password = "proxy-password-value".to_string();
+        form.zeroize_secret_drafts();
+
+        let mut proxy_hop = NewConnectionProxyHop::new();
+        proxy_hop.password = "hop-password-value".to_string();
+        proxy_hop.passphrase = "hop-passphrase-value".to_string();
+        proxy_hop.zeroize_secret_drafts();
+
+        assert!(form.password.is_empty());
+        assert!(form.passphrase.is_empty());
+        assert!(form.upstream_proxy_password.is_empty());
+        assert!(proxy_hop.password.is_empty());
+        assert!(proxy_hop.passphrase.is_empty());
     }
 
     #[test]
@@ -1436,11 +1522,9 @@ mod tests {
 
     #[test]
     fn selected_text_is_replaced_by_committed_input() {
-        let mut form = NewConnectionForm {
-            host: "example.test".to_string(),
-            focused_field: NewConnectionField::Host,
-            ..NewConnectionForm::default()
-        };
+        let mut form = NewConnectionForm::default();
+        form.host = "example.test".to_string();
+        form.focused_field = NewConnectionField::Host;
         select_current_connection_field(&mut form);
         insert_text_into_current_connection_field(&mut form, "192.168.1.10");
         assert_eq!(form.host, "192.168.1.10");
@@ -1718,11 +1802,9 @@ mod tests {
 
     #[test]
     fn backspace_clears_selected_field() {
-        let mut form = NewConnectionForm {
-            username: "root".to_string(),
-            focused_field: NewConnectionField::Username,
-            ..NewConnectionForm::default()
-        };
+        let mut form = NewConnectionForm::default();
+        form.username = "root".to_string();
+        form.focused_field = NewConnectionField::Username;
         select_current_connection_field(&mut form);
         assert!(backspace_current_connection_field(&mut form));
         assert!(form.username.is_empty());
@@ -1731,11 +1813,9 @@ mod tests {
 
     #[test]
     fn backspace_reports_text_changes_without_selection() {
-        let mut form = NewConnectionForm {
-            username: "root".to_string(),
-            focused_field: NewConnectionField::Username,
-            ..NewConnectionForm::default()
-        };
+        let mut form = NewConnectionForm::default();
+        form.username = "root".to_string();
+        form.focused_field = NewConnectionField::Username;
 
         assert!(backspace_current_connection_field(&mut form));
         assert_eq!(form.username, "roo");
@@ -1744,10 +1824,8 @@ mod tests {
 
     #[test]
     fn backspace_reports_false_for_empty_unselected_field() {
-        let mut form = NewConnectionForm {
-            focused_field: NewConnectionField::Name,
-            ..NewConnectionForm::default()
-        };
+        let mut form = NewConnectionForm::default();
+        form.focused_field = NewConnectionField::Name;
 
         assert!(!backspace_current_connection_field(&mut form));
         assert_eq!(form.selected_field, None);
@@ -1755,14 +1833,44 @@ mod tests {
 
     #[test]
     fn backspace_clears_stale_selection_state() {
-        let mut form = NewConnectionForm {
-            focused_field: NewConnectionField::Username,
-            selected_field: Some(NewConnectionField::Host),
-            ..NewConnectionForm::default()
-        };
+        let mut form = NewConnectionForm::default();
+        form.focused_field = NewConnectionField::Username;
+        form.selected_field = Some(NewConnectionField::Host);
 
         assert!(backspace_current_connection_field(&mut form));
         assert_eq!(form.selected_field, None);
+    }
+
+    #[test]
+    fn identity_agent_form_values_trim_and_preserve_automatic_detection() {
+        assert_eq!(identity_agent_selector(" \t "), None);
+        assert_eq!(
+            identity_agent_selector("  $YUBIKEY_AGENT  "),
+            Some("$YUBIKEY_AGENT")
+        );
+        assert_eq!(
+            identity_agent_from_form("  /tmp/yubikey-agent.sock  "),
+            Some("/tmp/yubikey-agent.sock".to_string())
+        );
+    }
+
+    #[test]
+    fn agent_tab_navigation_reaches_identity_agent_fields() {
+        assert_eq!(
+            next_connection_field(
+                NewConnectionField::Username,
+                SshAuthTab::Agent,
+                NewConnectionTransport::Ssh,
+                NewConnectionUpstreamProxyPolicy::UseGlobal,
+                NewConnectionUpstreamProxyAuth::None,
+                true,
+            ),
+            NewConnectionField::IdentityAgent
+        );
+        assert_eq!(
+            next_jump_connection_field(NewConnectionField::JumpUsername, SshAuthTab::Agent, true,),
+            NewConnectionField::JumpIdentityAgent
+        );
     }
 
     #[test]
@@ -1788,8 +1896,6 @@ mod tests {
             NewConnectionFormMode::SavedConnectionPrompt
         );
 
-        assert!(NewConnectionFormMode::NewConnection.stores_connection_on_connect());
-        assert!(!NewConnectionFormMode::SavedConnectionPrompt.stores_connection_on_connect());
         assert!(NewConnectionFormMode::EditProperties.submits_saved_connection_properties());
         assert!(NewConnectionFormMode::DuplicateTemplate.submits_saved_connection_properties());
         assert!(

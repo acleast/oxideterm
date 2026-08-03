@@ -22,7 +22,7 @@ use oxideterm_topology::{
     ConnectionTopologyConsumerSummary, ConnectionTopologyEdge, ConnectionTopologyNode,
     ConnectionTopologySnapshot, ConnectionTopologyStatus,
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex as ParkingMutex, RwLock};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{Mutex, Notify};
@@ -64,6 +64,7 @@ pub enum ConnectionConsumer {
     Terminal(String),
     Sftp(String),
     PortForward(String),
+    X11Forward(String),
     Ide(String),
     NodeRouter(String),
 }
@@ -160,6 +161,7 @@ pub struct AcquiredSftpMeta {
     pub session: Arc<Mutex<SftpSession>>,
     pub was_new: bool,
     pub cwd: Option<String>,
+    pub generation: u64,
 }
 
 enum SharedSftpState {
@@ -217,7 +219,9 @@ struct ConnectionEntry {
     connection_id: String,
     key: String,
     config: SshConfig,
+    ownership_transition: ParkingMutex<()>,
     parent_connection_id: RwLock<Option<String>>,
+    parent_connection_consumer: RwLock<Option<ConnectionConsumer>>,
     state: RwLock<ConnectionState>,
     ref_count: AtomicU64,
     keep_alive: AtomicBool,
@@ -235,16 +239,28 @@ struct ConnectionEntry {
     created_at: SystemTime,
     last_active_at: RwLock<SystemTime>,
     idle_timeout: Option<Duration>,
+    retire_when_unused: bool,
 }
 
 impl ConnectionEntry {
     fn new(config: SshConfig, pool_config: ConnectionPoolConfig) -> Self {
         let key = config.connection_key();
+        Self::new_with_key(config, key, pool_config, false)
+    }
+
+    fn new_with_key(
+        config: SshConfig,
+        key: String,
+        pool_config: ConnectionPoolConfig,
+        retire_when_unused: bool,
+    ) -> Self {
         Self {
             connection_id: Uuid::new_v4().to_string(),
             key,
             config,
+            ownership_transition: ParkingMutex::new(()),
             parent_connection_id: RwLock::new(None),
+            parent_connection_consumer: RwLock::new(None),
             state: RwLock::new(ConnectionState::Connecting),
             ref_count: AtomicU64::new(0),
             keep_alive: AtomicBool::new(false),
@@ -262,6 +278,7 @@ impl ConnectionEntry {
             created_at: SystemTime::now(),
             last_active_at: RwLock::new(SystemTime::now()),
             idle_timeout: pool_config.idle_timeout,
+            retire_when_unused,
         }
     }
 
@@ -406,6 +423,12 @@ impl SshConnectionHandle {
         &self.entry.key
     }
 
+    pub(crate) fn config(&self) -> &SshConfig {
+        // The registry remains the sole owner of authentication material while
+        // consumers borrow non-reconnect shell settings from the live entry.
+        &self.entry.config
+    }
+
     pub fn info(&self) -> ConnectionInfo {
         self.entry.info()
     }
@@ -467,12 +490,29 @@ impl SshConnectionHandle {
         Ok(self.acquire_sftp_with_meta().await?.session)
     }
 
+    /// Returns only the already-open shared channel for the exact owner
+    /// generation. It never creates or substitutes a replacement session.
+    pub async fn acquire_existing_sftp_generation(
+        &self,
+        expected_generation: u64,
+    ) -> Option<Arc<Mutex<SftpSession>>> {
+        let guard = self.entry.sftp.lock().await;
+        if self.entry.sftp_generation.load(Ordering::Acquire) != expected_generation {
+            return None;
+        }
+        match &*guard {
+            SharedSftpState::Ready(session) => Some(Arc::clone(session)),
+            SharedSftpState::Empty | SharedSftpState::Initializing { .. } => None,
+        }
+    }
+
     pub async fn acquire_sftp_with_meta(&self) -> Result<AcquiredSftpMeta, SftpError> {
         loop {
             let initializing = {
                 let mut guard = self.entry.sftp.lock().await;
                 match &*guard {
                     SharedSftpState::Ready(session) => {
+                        let generation = self.entry.sftp_generation.load(Ordering::Acquire);
                         let session = Arc::clone(session);
                         drop(guard);
                         let cwd = {
@@ -483,6 +523,7 @@ impl SshConnectionHandle {
                             session,
                             was_new: false,
                             cwd,
+                            generation,
                         });
                     }
                     SharedSftpState::Initializing { notify, .. } => Some(notify.clone()),
@@ -511,6 +552,7 @@ impl SshConnectionHandle {
                     let session = Arc::new(Mutex::new(sftp));
                     match &*guard {
                         SharedSftpState::Ready(existing) => {
+                            let generation = self.entry.sftp_generation.load(Ordering::Acquire);
                             let existing = Arc::clone(existing);
                             drop(guard);
                             let cwd = {
@@ -521,12 +563,14 @@ impl SshConnectionHandle {
                                 session: existing,
                                 was_new: false,
                                 cwd,
+                                generation,
                             });
                         }
                         SharedSftpState::Initializing { notify, generation }
                             if *generation
                                 == self.entry.sftp_generation.load(Ordering::Acquire) =>
                         {
+                            let generation = *generation;
                             let notify = notify.clone();
                             *guard = SharedSftpState::Ready(Arc::clone(&session));
                             notify.notify_waiters();
@@ -535,6 +579,7 @@ impl SshConnectionHandle {
                                 session,
                                 was_new: true,
                                 cwd,
+                                generation,
                             });
                         }
                         SharedSftpState::Initializing { notify, .. } => {
@@ -665,6 +710,28 @@ impl SshConnectionRegistry {
         SshConnectionHandle { entry }
     }
 
+    pub fn acquire_dedicated(
+        &self,
+        config: SshConfig,
+        consumer: ConnectionConsumer,
+    ) -> SshConnectionHandle {
+        let pool_key = format!("{}|dedicated={}", config.connection_key(), Uuid::new_v4());
+        // Dedicated terminals remain registry-owned without joining the shared
+        // node pool. Their transport is retired as soon as its terminal exits.
+        let entry = Arc::new(ConnectionEntry::new_with_key(
+            config,
+            pool_key.clone(),
+            *self.config.read(),
+            true,
+        ));
+        entry.consumers.write().push(consumer);
+        entry.ref_count.store(1, Ordering::SeqCst);
+        self.by_id
+            .insert(entry.connection_id.clone(), pool_key.clone());
+        self.by_key.insert(pool_key, entry.clone());
+        SshConnectionHandle { entry }
+    }
+
     pub fn release(&self, connection_id: &str, consumer: &ConnectionConsumer) {
         let Some(key) = self.by_id.get(connection_id).map(|key| key.value().clone()) else {
             return;
@@ -689,6 +756,10 @@ impl SshConnectionRegistry {
         }
         entry.touch();
         if entry.ref_count.load(Ordering::SeqCst) == 0 {
+            if entry.retire_when_unused {
+                let _ = self.retire_connection(connection_id);
+                return;
+            }
             if entry.is_keep_alive() {
                 entry.cancel_idle_timer();
                 *entry.state.write() = ConnectionState::Idle;
@@ -736,7 +807,7 @@ impl SshConnectionRegistry {
             // whenever the connection has been registered to a node.
             let _ = emitter.emit_state_from_connection(&info.connection_id, &info.state, reason);
         }
-        if became_active && entry.first_visible_terminal_started() {
+        if became_active && entry.first_visible_terminal_started() && !entry.retire_when_unused {
             // Match Tauri's environment detector gate: hidden exec/shell probes
             // must not be the first session on a fresh SSH login because PAM
             // MOTD/lastlog output belongs to the user's first visible terminal.
@@ -752,7 +823,9 @@ impl SshConnectionRegistry {
             .map(|key| key.value().clone())?;
         let entry = self.by_key.get(&key)?.clone();
         let first = entry.mark_first_visible_terminal_started();
-        if first {
+        if first && !entry.retire_when_unused {
+            // A one-terminal connection must not start an environment probe
+            // that opens a second channel on servers requiring isolated login.
             self.maybe_spawn_remote_env_detection(entry);
         }
         Some(first)
@@ -819,9 +892,63 @@ impl SshConnectionRegistry {
             .get(connection_id)
             .map(|key| key.value().clone())?;
         let entry = self.by_key.get(&key)?.clone();
+        let _ownership_transition = entry.ownership_transition.lock();
+        if !self.connection_entry_is_registered(connection_id, &key) {
+            return None;
+        }
+        let released_parent_ownership = if parent_connection_id.is_none() {
+            entry
+                .parent_connection_consumer
+                .write()
+                .take()
+                .and_then(|parent_consumer| {
+                    entry
+                        .parent_connection_id
+                        .read()
+                        .clone()
+                        .map(|parent_id| (parent_id, parent_consumer))
+                })
+        } else {
+            None
+        };
         *entry.parent_connection_id.write() = parent_connection_id;
         entry.touch();
+        if let Some((parent_id, parent_consumer)) = released_parent_ownership {
+            self.release(&parent_id, &parent_consumer);
+        }
         Some(entry.info())
+    }
+
+    pub fn set_parent_connection_ownership(
+        &self,
+        connection_id: &str,
+        parent_connection_id: String,
+        parent_consumer: ConnectionConsumer,
+    ) -> Option<ConnectionInfo> {
+        let key = self
+            .by_id
+            .get(connection_id)
+            .map(|key| key.value().clone())?;
+        let entry = self.by_key.get(&key)?.clone();
+        let _ownership_transition = entry.ownership_transition.lock();
+        if !self.connection_entry_is_registered(connection_id, &key) {
+            return None;
+        }
+        // Parent ownership is linked under the same lifecycle lock used by retirement.
+        *entry.parent_connection_id.write() = Some(parent_connection_id);
+        *entry.parent_connection_consumer.write() = Some(parent_consumer);
+        entry.touch();
+        Some(entry.info())
+    }
+
+    fn connection_entry_is_registered(&self, connection_id: &str, key: &str) -> bool {
+        self.by_id
+            .get(connection_id)
+            .is_some_and(|registered_key| registered_key.value() == key)
+            && self
+                .by_key
+                .get(key)
+                .is_some_and(|registered_entry| registered_entry.connection_id == connection_id)
     }
 
     pub fn descendant_connection_infos(&self, root_connection_id: &str) -> Vec<ConnectionInfo> {
@@ -853,12 +980,31 @@ impl SshConnectionRegistry {
             .get(connection_id)
             .map(|key| key.value().clone())?;
         let entry = self.by_key.get(&key).map(|entry| entry.clone())?;
+        let _ownership_transition = entry.ownership_transition.lock();
+        if !self.connection_entry_is_registered(connection_id, &key) {
+            return None;
+        }
         entry.cancel_idle_timer();
         let info = entry.info();
+        let parent_ownership =
+            entry
+                .parent_connection_consumer
+                .write()
+                .take()
+                .and_then(|parent_consumer| {
+                    entry
+                        .parent_connection_id
+                        .read()
+                        .clone()
+                        .map(|parent_id| (parent_id, parent_consumer))
+                });
         if entry.connection_id == connection_id {
             self.by_key.remove(&key);
         }
         self.by_id.remove(connection_id);
+        if let Some((parent_id, parent_consumer)) = parent_ownership {
+            self.release(&parent_id, &parent_consumer);
+        }
         Some(info)
     }
 
@@ -1439,7 +1585,9 @@ fn topology_consumer_summary(
         match consumer {
             ConnectionConsumer::Terminal(_) => summary.terminals += 1,
             ConnectionConsumer::Sftp(_) => summary.sftp += 1,
-            ConnectionConsumer::PortForward(_) => summary.port_forwards += 1,
+            ConnectionConsumer::PortForward(_) | ConnectionConsumer::X11Forward(_) => {
+                summary.port_forwards += 1
+            }
             ConnectionConsumer::Ide(_) => summary.ide += 1,
             ConnectionConsumer::NodeRouter(_) => summary.node_router += 1,
         }
@@ -1672,7 +1820,9 @@ impl From<&ConnectionConsumer> for ConnectionMonitorConsumerKind {
         match consumer {
             ConnectionConsumer::Terminal(_) => Self::Terminal,
             ConnectionConsumer::Sftp(_) => Self::Sftp,
-            ConnectionConsumer::PortForward(_) => Self::PortForward,
+            ConnectionConsumer::PortForward(_) | ConnectionConsumer::X11Forward(_) => {
+                Self::PortForward
+            }
             ConnectionConsumer::Ide(_) | ConnectionConsumer::NodeRouter(_) => Self::Other,
         }
     }
@@ -1996,6 +2146,71 @@ mod tests {
 
         registry.release(first.connection_id(), &consumer);
         assert_eq!(first.info().ref_count, 0);
+    }
+
+    #[test]
+    fn acquire_dedicated_isolates_a_terminal_from_the_shared_pool_entry() {
+        let registry = SshConnectionRegistry::default();
+        let config = SshConfig::password("dedicated.example", 22, "alice", "pw");
+        let node_consumer = ConnectionConsumer::NodeRouter("node-1".into());
+        let terminal_consumer = ConnectionConsumer::Terminal("term-1".into());
+
+        let shared = registry.acquire(config.clone(), node_consumer.clone());
+        let dedicated = registry.acquire_dedicated(config.clone(), terminal_consumer.clone());
+        let pooled_again = registry.acquire(config, node_consumer);
+
+        assert_ne!(shared.connection_id(), dedicated.connection_id());
+        assert_eq!(shared.connection_id(), pooled_again.connection_id());
+        assert_eq!(dedicated.info().consumers, vec![terminal_consumer]);
+        assert!(dedicated.key().contains("|dedicated="));
+    }
+
+    #[test]
+    fn dedicated_connection_retires_after_its_terminal_releases() {
+        let registry = SshConnectionRegistry::default();
+        let consumer = ConnectionConsumer::Terminal("term-1".into());
+        let dedicated = registry.acquire_dedicated(
+            SshConfig::password("dedicated.example", 22, "alice", "pw"),
+            consumer.clone(),
+        );
+        let connection_id = dedicated.connection_id().to_string();
+
+        registry.release(&connection_id, &consumer);
+
+        assert!(registry.get(&connection_id).is_none());
+    }
+
+    #[test]
+    fn dedicated_child_retirement_releases_parent_ownership() {
+        let registry = SshConnectionRegistry::default();
+        let parent_owner = ConnectionConsumer::NodeRouter("parent".into());
+        let parent = registry.acquire(
+            SshConfig::password("jump.example", 22, "alice", "pw"),
+            parent_owner.clone(),
+        );
+        let terminal_consumer = ConnectionConsumer::Terminal("term-1".into());
+        let child = registry.acquire_dedicated(
+            SshConfig::password("target.example", 22, "alice", "pw"),
+            terminal_consumer.clone(),
+        );
+        let ancestor_consumer =
+            ConnectionConsumer::NodeRouter(format!("{}:ancestor", child.connection_id()));
+        registry
+            .acquire_consumer_for_connection(parent.connection_id(), ancestor_consumer.clone())
+            .expect("parent connection");
+        registry
+            .set_parent_connection_ownership(
+                child.connection_id(),
+                parent.connection_id().to_string(),
+                ancestor_consumer,
+            )
+            .expect("dedicated child ownership");
+
+        registry.release(child.connection_id(), &terminal_consumer);
+
+        assert!(registry.get(child.connection_id()).is_none());
+        assert_eq!(parent.info().consumers, vec![parent_owner]);
+        assert_eq!(parent.info().ref_count, 1);
     }
 
     #[tokio::test]

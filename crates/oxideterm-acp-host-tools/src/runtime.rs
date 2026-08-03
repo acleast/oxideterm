@@ -1,12 +1,19 @@
-use std::{convert::Infallible, net::Ipv4Addr, sync::Arc};
+use std::{
+    convert::Infallible,
+    net::{Ipv4Addr, TcpListener},
+    sync::Arc,
+};
 
-use agent_client_protocol::schema::{HttpHeader, McpServer, McpServerHttp};
+use agent_client_protocol::schema::v1::{HttpHeader, McpServer, McpServerHttp};
 use bytes::Bytes;
 use http::{Method, Request, Response, StatusCode, header};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{body::Incoming, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
-use tokio::{net::TcpListener, sync::oneshot, task::JoinSet};
+use tokio::{
+    sync::{Semaphore, oneshot},
+    task::JoinSet,
+};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -15,8 +22,10 @@ use crate::{
 };
 
 const MCP_ENDPOINT_PATH: &str = "/mcp";
+const MCP_CALL_QUEUE_CAPACITY: usize = 32;
+const MCP_CONNECTION_LIMIT: usize = 32;
 
-/// Owns the loopback listener and its bounded authorization material for one ACP runtime.
+/// Owns one conversation-scoped loopback listener and its authorization material.
 pub struct AcpHostToolsServer {
     endpoint_url: String,
     authorization_header: Zeroizing<String>,
@@ -25,17 +34,19 @@ pub struct AcpHostToolsServer {
 }
 
 impl AcpHostToolsServer {
-    /// Builds a fresh ACP MCP declaration. The protocol DTO necessarily owns one bounded
-    /// plaintext header copy until the session request has been serialized by the ACP SDK.
+    /// Builds the stable MCP declaration installed when the ACP session is created.
     pub fn mcp_server(&self) -> McpServer {
         McpServer::Http(
-            McpServerHttp::new("OxideTerm Host Tools", self.endpoint_url.clone()).headers(vec![
-                HttpHeader::new("Authorization", self.authorization_header.as_str()),
-            ]),
+            McpServerHttp::new("OxideTerm Application Tools", self.endpoint_url.clone()).headers(
+                vec![HttpHeader::new(
+                    "Authorization",
+                    self.authorization_header.as_str(),
+                )],
+            ),
         )
     }
 
-    /// Stops accepting requests and awaits every connection task before returning.
+    /// Stops accepting requests and awaits every connection worker.
     pub async fn shutdown(mut self) {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
@@ -49,43 +60,60 @@ impl Drop for AcpHostToolsServer {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
         }
-        // Explicit shutdown awaits cleanup; Drop is the cancellation fallback for aborted turns.
+        // Explicit shutdown is preferred; abort is the cancellation fallback.
         self.worker.abort();
     }
 }
 
-pub async fn start_acp_host_tools_server(
+/// Starts a listener synchronously so the MCP declaration can be included in the
+/// same ACP session-creation request that owns it.
+pub fn start_acp_host_tools_server(
+    runtime: &tokio::runtime::Handle,
     definitions: Vec<AcpHostToolDefinition>,
 ) -> Result<(AcpHostToolsServer, AcpHostToolCallReceiver), AcpHostToolsError> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .await
-        .map_err(AcpHostToolsError::Bind)?;
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(AcpHostToolsError::Bind)?;
+    listener
+        .set_nonblocking(true)
+        .map_err(AcpHostToolsError::ConfigureListener)?;
     let address = listener
         .local_addr()
-        .map_err(AcpHostToolsError::LocalAddress)?;
+        .map_err(AcpHostToolsError::ConfigureListener)?;
+    let listener = {
+        let _runtime_guard = runtime.enter();
+        tokio::net::TcpListener::from_std(listener).map_err(AcpHostToolsError::ConfigureListener)?
+    };
     let authorization_header = Zeroizing::new(format!(
         "Bearer {}{}",
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     ));
-    let (call_tx, call_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (call_tx, call_rx) = tokio::sync::mpsc::channel(MCP_CALL_QUEUE_CAPACITY);
     let protocol = Arc::new(AcpHostToolsProtocol::new(
         definitions,
         call_tx,
         authorization_header.as_str(),
     ));
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
-    let worker = tokio::spawn(async move {
+    let worker = runtime.spawn(async move {
         let mut connections = JoinSet::new();
+        let connection_slots = Arc::new(Semaphore::new(MCP_CONNECTION_LIMIT));
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => break,
                 accepted = listener.accept() => {
-                    let Ok((stream, _peer)) = accepted else {
+                    let Ok((stream, peer)) = accepted else {
                         break;
+                    };
+                    if !peer.ip().is_loopback() {
+                        continue;
+                    }
+                    let Ok(connection_slot) = connection_slots.clone().try_acquire_owned() else {
+                        // Bound loopback work even when an ACP process floods the bridge.
+                        continue;
                     };
                     let protocol = protocol.clone();
                     connections.spawn(async move {
+                        let _connection_slot = connection_slot;
                         let service = service_fn(move |request| {
                             handle_http_request(request, protocol.clone())
                         });

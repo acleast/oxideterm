@@ -1,6 +1,7 @@
 mod app;
 mod background_cache;
 mod command_facts;
+mod image_budget;
 mod modem_worker;
 mod privilege_prompt;
 pub mod terminal_ui;
@@ -10,8 +11,8 @@ mod trzsz_worker;
 pub use app::{
     SharedTerminalSession, TerminalContextAction, TerminalCursorAnchor,
     TerminalCwdShellIntegrationStatus, TerminalInputInterceptor, TerminalInputInterceptorResult,
-    TerminalPane, TerminalPaneEvent, TerminalSearchStatus, TerminalSerialStatus,
-    TerminalWorkingDirectorySource,
+    TerminalPane, TerminalPaneEvent, TerminalSearchStatus, TerminalSerialAction,
+    TerminalSerialStatus, TerminalTelnetAction, TerminalWorkingDirectorySource,
 };
 pub use background_cache::BackgroundImageRenderCache;
 pub use command_facts::{
@@ -28,5 +29,5 @@ pub use terminal_ui::{
     TerminalBackgroundFit, TerminalBackgroundPreferences, TerminalCommandSelectionLabels,
     TerminalHighlightRenderMode, TerminalHighlightRule, TerminalModemLabels, TerminalNotice,
     TerminalNoticeVariant, TerminalPasteLabels, TerminalSerialControlLabels, TerminalTrzszLabels,
-    TerminalUiPreferences, TerminalUiTheme,
+    TerminalUiPreferenceOverrides, TerminalUiPreferences, TerminalUiTheme,
 };

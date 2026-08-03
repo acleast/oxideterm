@@ -69,6 +69,47 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn migrate_ai_memory_entries(settings: &mut Value) {
+    let Some(memory) = settings
+        .get_mut("ai")
+        .and_then(Value::as_object_mut)
+        .and_then(|ai| ai.get_mut("memory"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if memory
+        .get("entries")
+        .and_then(Value::as_array)
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        return;
+    }
+    let Some(content) = memory
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+    else {
+        return;
+    };
+    // One deterministic migrated entry prevents duplicate imports on every load.
+    memory.insert(
+        "entries".to_string(),
+        json!([{
+            "id": "legacy-user-memory",
+            "content": content,
+            "scopeKind": "user",
+            "memoryKind": "long_term",
+            "source": "migrated",
+            "createdAtMs": 0,
+            "updatedAtMs": 0,
+            "useCount": 0,
+            "revision": 1
+        }]),
+    );
+}
+
 fn migrate_ai_providers(settings: &mut Value, warnings: &mut Vec<String>) {
     let Some(ai) = settings.get_mut("ai").and_then(Value::as_object_mut) else {
         return;
@@ -291,6 +332,19 @@ fn migrate_ai_tool_use_settings(settings: &mut Value, raw: &Value) {
         .get("autoApproveTools")
         .is_some_and(Value::is_object)
     {
+        // Existing settings files predate newly added application tools.
+        // Merge only missing defaults so user decisions remain authoritative
+        // while the policy UI and exposed tool catalog stay synchronized.
+        if let Some(auto_approve) = settings
+            .get_mut("ai")
+            .and_then(|ai| ai.get_mut("toolUse"))
+            .and_then(|tool_use| tool_use.get_mut("autoApproveTools"))
+            .and_then(Value::as_object_mut)
+        {
+            for (name, value) in AiToolUseSettings::default().auto_approve_tools {
+                auto_approve.entry(name).or_insert(value);
+            }
+        }
         return;
     }
 
@@ -516,6 +570,7 @@ pub fn sanitize_settings_value(raw: Value) -> Result<SanitizedSettings> {
     remove_ai_provider_default_models(&mut settings);
     migrate_ai_tool_use_settings(&mut settings, &raw);
     normalize_ai_tool_auto_approve_keys(&mut settings, &raw);
+    migrate_ai_memory_entries(&mut settings);
     migrate_acp_agent_presets(&mut settings, &mut migration_warnings);
     migrate_ai_execution_profile_selection(&mut settings, &raw);
 
@@ -797,6 +852,27 @@ pub fn sanitize_settings_value(raw: Value) -> Result<SanitizedSettings> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_ai_memory_migrates_once_to_an_itemized_entry() {
+        let sanitized = sanitize_settings_value(json!({
+            "ai": {
+                "memory": {
+                    "enabled": true,
+                    "content": "Prefer concise terminal explanations."
+                }
+            }
+        }))
+        .expect("sanitize settings");
+
+        assert_eq!(sanitized.settings.ai.memory.entries.len(), 1);
+        let entry = &sanitized.settings.ai.memory.entries[0];
+        assert_eq!(entry.id, "legacy-user-memory");
+        assert_eq!(entry.scope_kind, AiMemoryScopeKind::User);
+        assert_eq!(entry.memory_kind, AiMemoryKind::LongTerm);
+        assert_eq!(entry.source, AiMemorySource::Migrated);
+        assert_eq!(entry.revision, 1);
+    }
 
     #[test]
     fn appearance_matrix_values_survive_sanitization() {
@@ -1118,6 +1194,36 @@ mod tests {
     }
 
     #[test]
+    fn existing_tool_policy_receives_new_skill_tool_defaults() {
+        let sanitized = sanitize_settings_value(json!({
+            "ai": {
+                "toolUse": {
+                    "autoApproveTools": {
+                        "run_command": true
+                    }
+                }
+            }
+        }))
+        .expect("sanitize settings");
+
+        let policy = sanitized.settings.ai.tool_use.auto_approve_tools;
+        assert_eq!(
+            policy.get("run_command").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            policy.get(AI_TOOL_LOAD_SKILL).and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            policy
+                .get(AI_TOOL_READ_SKILL_RESOURCE)
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn legacy_tool_use_read_only_flags_migrate_like_tauri() {
         let sanitized = sanitize_settings_value(json!({
             "ai": {
@@ -1244,6 +1350,52 @@ mod tests {
                 .ai
                 .extra
                 .contains_key("executionProfiles")
+        );
+    }
+
+    #[test]
+    fn ai_tool_policy_defaults_fill_new_capabilities_without_overwriting_saved_choices() {
+        let sanitized = sanitize_settings_value(json!({
+            "ai": {
+                "toolUse": {
+                    "autoApproveTools": {
+                        "run_command": true
+                    }
+                }
+            }
+        }))
+        .expect("sanitize settings");
+        let policy = &sanitized.settings.ai.tool_use.auto_approve_tools;
+
+        assert_eq!(
+            policy.get("run_command").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            policy
+                .get(AI_TOOL_LIST_BACKGROUND_TASKS)
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            policy
+                .get(AI_TOOL_CREATE_BACKGROUND_TASK)
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            policy
+                .get(AI_TOOL_CONTROL_HOST_TOOL)
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            policy.get(AI_TOOL_MANAGE_FORWARD).and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            policy.get(AI_TOOL_MANAGE_PLUGIN).and_then(Value::as_bool),
+            Some(false)
         );
     }
 

@@ -107,6 +107,7 @@ pub enum SelectAnchorId {
     AiReasoningMenu,
     AiSafetyMenu,
     AiContextPopover,
+    AiAutocomplete,
     NewConnectionGroup,
     NewConnectionKeyAuthSource,
     NewConnectionManagedKey,
@@ -122,6 +123,9 @@ pub enum SelectAnchorId {
     NewConnectionSerialStopBits,
     NewConnectionSerialParity,
     NewConnectionSerialFlowControl,
+    NewConnectionTerminalEncoding,
+    NewConnectionTerminalBackspaceSequence,
+    NewConnectionTerminalDeleteSequence,
     SettingsConnectionImportSource,
     SettingsConnectionImportDuplicateStrategy,
     CloudSyncBackend,
@@ -214,6 +218,9 @@ impl SelectAnchorId {
                 | Self::NewConnectionSerialStopBits
                 | Self::NewConnectionSerialParity
                 | Self::NewConnectionSerialFlowControl
+                | Self::NewConnectionTerminalEncoding
+                | Self::NewConnectionTerminalBackspaceSequence
+                | Self::NewConnectionTerminalDeleteSequence
         )
     }
 
@@ -760,6 +767,14 @@ mod tests {
         );
         assert!(SelectAnchorId::NewConnectionUpstreamProxyAuth.is_new_connection_select_trigger());
         assert!(SelectAnchorId::NewConnectionSerialPort.is_new_connection_select_trigger());
+        assert!(SelectAnchorId::NewConnectionTerminalEncoding.is_new_connection_select_trigger());
+        assert!(
+            SelectAnchorId::NewConnectionTerminalBackspaceSequence
+                .is_new_connection_select_trigger()
+        );
+        assert!(
+            SelectAnchorId::NewConnectionTerminalDeleteSequence.is_new_connection_select_trigger()
+        );
         assert!(!SelectAnchorId::SettingsLanguage.is_new_connection_select_trigger());
         assert!(!SelectAnchorId::AiModelSelector.is_new_connection_select_trigger());
     }

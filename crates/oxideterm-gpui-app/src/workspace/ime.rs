@@ -1,9 +1,9 @@
-use std::{ops::Range, time::Instant};
+use std::{cell::RefCell, collections::HashMap, fmt, ops::Range, rc::Rc, time::Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Element, ElementId, Entity, FocusHandle, GlobalElementId,
     InputHandler, InspectorElementId, Keystroke, LayoutId, Pixels, Point, SharedString, Style,
-    TextRun, UTF16Selection, Window, font, point, px, rgb,
+    TextRun, Timer, UTF16Selection, Window, font, point, px, rgb,
 };
 use oxideterm_editor_core::utf16::{
     control_k_delete_end, floor_char_boundary, line_end_for_utf16_offset,
@@ -15,13 +15,14 @@ use oxideterm_editor_core::utf16::{
 };
 
 use super::WorkspaceApp;
+use super::connection_monitor::HostToolsTextInput;
 use super::file_manager::FileManagerInput;
 use super::forwards::ForwardInput;
 use super::graphics::GraphicsInput;
 use super::launcher::LauncherInput;
-use super::new_connection::NewConnectionField;
+use super::new_connection::{NewConnectionField, refresh_identity_agent_availability};
 use super::quick_commands::QuickCommandInput;
-use super::session_manager::SessionManagerInput;
+use super::session_manager::{SessionManagerInput, SessionManagerState};
 use super::sftp::SftpInput;
 use oxideterm_gpui_settings_view::SettingsInput;
 use oxideterm_gpui_ui::{
@@ -30,10 +31,78 @@ use oxideterm_gpui_ui::{
         TextInputAnchor, TextInputAnchorId, TextInputContentAlign, text_input_secret_mask,
     },
 };
-use oxideterm_workspace::parse_command_palette_query;
+use zeroize::{Zeroize, Zeroizing};
 
 const READ_ONLY_TEXT_EM_WIDTH: f32 = 16.0;
 const READ_ONLY_TEXT_LINE_HEIGHT_ESTIMATE: f32 = 28.0;
+const SECRET_IME_BMP_PROXY: char = '\u{2022}';
+const SECRET_IME_ASTRAL_PROXY: char = '\u{1f512}';
+const CARET_BLINK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(530);
+
+fn secret_ime_proxy(secret: &str) -> String {
+    // Preserve every UTF-16 boundary without copying secret content across the
+    // Entity boundary. Editing ranges remain valid for both BMP and astral input.
+    secret
+        .chars()
+        .map(|character| {
+            if character.len_utf16() == 1 {
+                SECRET_IME_BMP_PROXY
+            } else {
+                SECRET_IME_ASTRAL_PROXY
+            }
+        })
+        .collect()
+}
+
+fn ime_text_snapshot(target: WorkspaceImeTarget, value: &str) -> String {
+    if ime_target_is_secret(target) {
+        secret_ime_proxy(value)
+    } else {
+        value.to_owned()
+    }
+}
+
+fn session_manager_ime_text(
+    session_manager: &SessionManagerState,
+    input: SessionManagerInput,
+) -> Option<String> {
+    if session_manager.focused_input() != Some(input) {
+        return None;
+    }
+    let value = session_manager.input_value(input)?;
+    Some(ime_text_snapshot(
+        WorkspaceImeTarget::SessionManager(input),
+        value,
+    ))
+}
+
+/// Shares layout-only text input anchors without retaining the workspace entity.
+#[derive(Clone, Default)]
+pub(super) struct TextInputAnchorStore {
+    anchors: Rc<RefCell<HashMap<TextInputAnchorId, TextInputAnchor>>>,
+}
+
+impl TextInputAnchorStore {
+    pub(super) fn get(&self, id: TextInputAnchorId) -> Option<TextInputAnchor> {
+        self.anchors.borrow().get(&id).copied()
+    }
+
+    pub(super) fn changed(&self, anchor: TextInputAnchor) -> bool {
+        self.get(anchor.id) != Some(anchor)
+    }
+
+    pub(super) fn update(&self, anchor: TextInputAnchor) {
+        if self.changed(anchor) {
+            // Anchor probes run during layout, so geometry updates must not
+            // trigger a second render loop.
+            self.anchors.borrow_mut().insert(anchor.id, anchor);
+        }
+    }
+
+    fn bounds(&self, id: TextInputAnchorId) -> Option<Bounds<Pixels>> {
+        self.get(id).map(|anchor| anchor.bounds)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) enum WorkspaceImeTarget {
@@ -41,10 +110,6 @@ pub(super) enum WorkspaceImeTarget {
     CommandPalette,
     ShortcutsModalSearch,
     Search,
-    TerminalCommandBar,
-    ScheduledInput,
-    ScheduledInputTime,
-    ScheduledInputDelay,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
     TerminalProjectSearch,
@@ -70,11 +135,262 @@ pub(super) enum WorkspaceImeTarget {
     AiModelSelectorSearch,
     AiInlinePrompt,
     AiChatInput,
+    AiConversationRename,
     AiMessageEdit,
-    PluginControl(u64),
+    PluginControl { key: u64, secret: bool },
     Sftp(SftpInput),
     NewConnection(NewConnectionField),
     KeyboardInteractive(usize),
+}
+
+/// Read-only caret projection shared with render code without exposing timer writes.
+#[derive(Clone, Default)]
+pub(super) struct WorkspaceCaretVisibility {
+    visible: Rc<std::cell::Cell<bool>>,
+}
+
+impl WorkspaceCaretVisibility {
+    pub(super) fn visible(&self) -> bool {
+        self.visible.get()
+    }
+
+    fn set_visible(&self, visible: bool) -> bool {
+        if self.visible.get() == visible {
+            return false;
+        }
+        self.visible.set(visible);
+        true
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CaretBlinkPause {
+    target: WorkspaceImeTarget,
+    until: Instant,
+}
+
+struct WorkspaceCaretState {
+    active_target: Option<WorkspaceImeTarget>,
+    visibility: WorkspaceCaretVisibility,
+    pause: Option<CaretBlinkPause>,
+}
+
+impl WorkspaceCaretState {
+    fn new(visibility: WorkspaceCaretVisibility) -> Self {
+        visibility.visible.set(true);
+        Self {
+            active_target: None,
+            visibility,
+            pause: None,
+        }
+    }
+
+    fn sync_active_target(&mut self, target: Option<WorkspaceImeTarget>) -> bool {
+        if self.active_target == target {
+            return false;
+        }
+        self.active_target = target;
+        self.pause = self
+            .pause
+            .filter(|pause| Some(pause.target) == self.active_target);
+        self.visibility.set_visible(true);
+        true
+    }
+
+    fn show_caret(&mut self) {
+        self.visibility.set_visible(true);
+    }
+
+    fn pause_settings_caret(&mut self, until: Instant) -> bool {
+        let Some(target @ WorkspaceImeTarget::Settings(_)) = self.active_target else {
+            return false;
+        };
+        self.pause = Some(CaretBlinkPause { target, until });
+        self.visibility.set_visible(true);
+        true
+    }
+
+    fn next_tick_delay(&self, now: Instant) -> Option<std::time::Duration> {
+        let target = self
+            .active_target
+            .filter(|target| ime_target_should_blink_caret(*target))?;
+        if let Some(pause) = self
+            .pause
+            .filter(|pause| pause.target == target && now < pause.until)
+        {
+            return Some(pause.until.saturating_duration_since(now));
+        }
+        Some(CARET_BLINK_INTERVAL)
+    }
+
+    fn advance_tick(&mut self, now: Instant) -> bool {
+        let Some(target) = self
+            .active_target
+            .filter(|target| ime_target_should_blink_caret(*target))
+        else {
+            return false;
+        };
+        if self
+            .pause
+            .is_some_and(|pause| pause.target == target && now < pause.until)
+        {
+            return false;
+        }
+        self.pause = None;
+        self.visibility.set_visible(!self.visibility.visible())
+    }
+}
+
+/// Owns the window-scoped caret phase and its only long-lived blink task.
+pub(super) struct WorkspaceInputEntity {
+    caret: WorkspaceCaretState,
+    blink_generation: u64,
+    blink_task: Option<gpui::Task<()>>,
+}
+
+impl WorkspaceInputEntity {
+    pub(super) fn new(visibility: WorkspaceCaretVisibility) -> Self {
+        Self {
+            caret: WorkspaceCaretState::new(visibility),
+            blink_generation: 0,
+            blink_task: None,
+        }
+    }
+
+    pub(super) fn sync_active_target(
+        &mut self,
+        target: Option<WorkspaceImeTarget>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.caret.sync_active_target(target) {
+            self.restart_blink_task(cx);
+        }
+    }
+
+    pub(super) fn show_caret(&mut self, cx: &mut Context<Self>) {
+        self.caret.show_caret();
+        self.restart_blink_task(cx);
+    }
+
+    pub(super) fn pause_settings_caret_until(&mut self, until: Instant, cx: &mut Context<Self>) {
+        if self.caret.pause_settings_caret(until) {
+            self.restart_blink_task(cx);
+        }
+    }
+
+    fn restart_blink_task(&mut self, cx: &mut Context<Self>) {
+        self.blink_generation = self.blink_generation.wrapping_add(1);
+        self.blink_task = None;
+        if self.caret.next_tick_delay(Instant::now()).is_none() {
+            return;
+        }
+        let generation = self.blink_generation;
+        self.blink_task = Some(cx.spawn(async move |input, cx| {
+            loop {
+                let delay = input
+                    .update(cx, |input, _cx| {
+                        (input.blink_generation == generation)
+                            .then(|| input.caret.next_tick_delay(Instant::now()))
+                            .flatten()
+                    })
+                    .ok()
+                    .flatten();
+                let Some(delay) = delay else {
+                    break;
+                };
+                Timer::after(delay).await;
+                let should_continue = input
+                    .update(cx, |input, cx| {
+                        if input.blink_generation != generation {
+                            return false;
+                        }
+                        if input.caret.advance_tick(Instant::now()) {
+                            cx.notify();
+                        }
+                        input.caret.next_tick_delay(Instant::now()).is_some()
+                    })
+                    .unwrap_or(false);
+                if !should_continue {
+                    break;
+                }
+            }
+        }));
+    }
+}
+
+/// Captures non-secret Host Tools IME presentation state for one render frame.
+#[derive(Clone)]
+pub(super) struct HostToolsPlainTextImeFrame {
+    input: HostToolsTextInput,
+    target: WorkspaceImeTarget,
+    caret_visible: bool,
+    selected_range: Option<Range<usize>>,
+    marked_text: Option<String>,
+    anchor_store: TextInputAnchorStore,
+}
+
+impl HostToolsPlainTextImeFrame {
+    fn new(
+        input: HostToolsTextInput,
+        caret_visible: bool,
+        selected_range: Option<Range<usize>>,
+        marked_text: Option<String>,
+        anchor_store: TextInputAnchorStore,
+    ) -> Option<Self> {
+        // Tmux dialog commands may contain secrets and must stay on their
+        // zeroizing workspace-owned input path.
+        let target = workspace_ime_target_for_plain_host_tools_input(input)?;
+        Some(Self {
+            input,
+            target,
+            caret_visible,
+            selected_range,
+            marked_text,
+            anchor_store,
+        })
+    }
+
+    pub(super) fn input(&self) -> HostToolsTextInput {
+        self.input
+    }
+
+    pub(super) fn anchor_id(&self) -> TextInputAnchorId {
+        self.target.anchor_id()
+    }
+
+    pub(super) fn caret_visible(&self) -> bool {
+        self.caret_visible
+    }
+
+    pub(super) fn selected_range(&self) -> Option<Range<usize>> {
+        self.selected_range.clone()
+    }
+
+    pub(super) fn marked_text(&self) -> Option<&str> {
+        self.marked_text.as_deref()
+    }
+
+    pub(super) fn update_anchor(&self, anchor: TextInputAnchor) {
+        self.anchor_store.update(anchor);
+    }
+}
+
+pub(super) fn workspace_ime_target_for_plain_host_tools_input(
+    input: HostToolsTextInput,
+) -> Option<WorkspaceImeTarget> {
+    match input {
+        HostToolsTextInput::ProcessSearch => Some(WorkspaceImeTarget::HostProcessSearch),
+        HostToolsTextInput::ProcessRenice => Some(WorkspaceImeTarget::HostProcessRenice),
+        HostToolsTextInput::DockerSearch => Some(WorkspaceImeTarget::HostDockerSearch),
+        HostToolsTextInput::ServiceSearch => Some(WorkspaceImeTarget::HostServiceSearch),
+        HostToolsTextInput::LogSearch => Some(WorkspaceImeTarget::HostLogSearch),
+        HostToolsTextInput::TmuxSearch => Some(WorkspaceImeTarget::HostTmuxSearch),
+        HostToolsTextInput::TmuxDialog => None,
+        HostToolsTextInput::PortSearch => Some(WorkspaceImeTarget::HostPortSearch),
+        HostToolsTextInput::ScheduleSearch => Some(WorkspaceImeTarget::HostScheduleSearch),
+        HostToolsTextInput::FilesystemSearch => Some(WorkspaceImeTarget::HostFilesystemSearch),
+        HostToolsTextInput::PackageSearch => Some(WorkspaceImeTarget::HostPackageSearch),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,27 +406,58 @@ pub(super) struct WorkspaceImeDragSelection {
     anchor: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub(super) struct PendingPlatformTextCommit {
     target: WorkspaceImeTarget,
-    text: String,
+    text: Zeroizing<String>,
     generation: u64,
     consumed: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for PendingPlatformTextCommit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PendingPlatformTextCommit")
+            .field("target", &self.target)
+            .field("text", &"<redacted>")
+            .field("generation", &self.generation)
+            .field("consumed", &self.consumed)
+            .finish()
+    }
+}
+
+#[derive(Eq, PartialEq)]
 pub(super) struct WorkspaceImeMarkedText {
     // IME marked text is rendered in a virtual text buffer but commits into the
     // original value range that was selected when composition started.
     target: WorkspaceImeTarget,
     replacement_range: Range<usize>,
-    text: String,
+    text: Zeroizing<String>,
+}
+
+impl fmt::Debug for WorkspaceImeMarkedText {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkspaceImeMarkedText")
+            .field("target", &self.target)
+            .field("replacement_range", &self.replacement_range)
+            .field("text", &"<redacted>")
+            .finish()
+    }
 }
 
 impl WorkspaceImeMarkedText {
     fn virtual_range(&self) -> Range<usize> {
         let marked_len = self.text.encode_utf16().count();
         self.replacement_range.start..self.replacement_range.start + marked_len
+    }
+
+    fn replace(&mut self, replacement_range: Range<usize>, text: &str) {
+        // Reuse the composition allocation only after clearing its previous
+        // contents, so repeated IME updates do not leave stale secret bytes.
+        self.text.zeroize();
+        self.text.push_str(text);
+        self.replacement_range = replacement_range;
     }
 }
 
@@ -121,10 +468,6 @@ impl WorkspaceImeTarget {
             Self::CommandPalette => 4,
             Self::ShortcutsModalSearch => 5,
             Self::Search => 1,
-            Self::TerminalCommandBar => 2,
-            Self::ScheduledInput => 4_500,
-            Self::ScheduledInputTime => 4_501,
-            Self::ScheduledInputDelay => 4_502,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
             Self::TerminalProjectSearch => 19,
@@ -151,7 +494,8 @@ impl WorkspaceImeTarget {
             Self::AiInlinePrompt => 1_896,
             Self::AiChatInput => 1_897,
             Self::AiMessageEdit => 1_898,
-            Self::PluginControl(id) => id.wrapping_add(10_000),
+            Self::AiConversationRename => 1_899,
+            Self::PluginControl { key, .. } => key.wrapping_add(10_000),
             Self::Sftp(input) => 1_900 + input.anchor_key(),
             Self::NewConnection(field) => 2_000 + field as u64,
             Self::KeyboardInteractive(index) => 3_000 + index as u64,
@@ -225,7 +569,7 @@ impl Element for WorkspaceImeElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if self.view.read(cx).active_ime_target().is_some() {
+        if self.view.read(cx).active_ime_target(cx).is_some() {
             window.handle_input(
                 &self.focus_handle,
                 WorkspaceInputHandler {
@@ -297,9 +641,9 @@ impl InputHandler for WorkspaceInputHandler {
         _window: &mut Window,
         cx: &mut App,
     ) -> Option<UTF16Selection> {
-        self.view.update(cx, |view, _cx| {
-            let target = view.active_ime_target()?;
-            view.text_for_ime_target(target).map(|text| {
+        self.view.update(cx, |view, cx| {
+            let target = view.active_ime_target(cx)?;
+            view.text_for_ime_target(target, cx).map(|text| {
                 let text_len = text.encode_utf16().count();
                 let (range, reversed) =
                     if let Some(selection) = view.ime_selection_for_target(target) {
@@ -309,7 +653,8 @@ impl InputHandler for WorkspaceInputHandler {
                             _ if view.selected_ime_target == Some(target) => (0..text_len, false),
                             WorkspaceImeTarget::NewConnection(field)
                                 if view
-                                    .new_connection_form
+                                    .connection_form_state(cx)
+                                    .form
                                     .as_ref()
                                     .is_some_and(|form| form.selected_field == Some(field)) =>
                             {
@@ -324,9 +669,9 @@ impl InputHandler for WorkspaceInputHandler {
     }
 
     fn marked_text_range(&mut self, _window: &mut Window, cx: &mut App) -> Option<Range<usize>> {
-        self.view.update(cx, |view, _cx| {
-            let target = view.active_ime_target()?;
-            let marked = view.marked_text_state_for_target(target)?;
+        self.view.update(cx, |view, cx| {
+            let target = view.active_ime_target(cx)?;
+            let marked = view.marked_text_state_for_target(target, cx)?;
             (!marked.text.is_empty()).then(|| marked.virtual_range())
         })
     }
@@ -338,8 +683,8 @@ impl InputHandler for WorkspaceInputHandler {
         _window: &mut Window,
         cx: &mut App,
     ) -> Option<String> {
-        self.view.update(cx, |view, _cx| {
-            let text = view.active_ime_text_with_marked_text()?;
+        self.view.update(cx, |view, cx| {
+            let text = view.active_ime_text_with_marked_text(cx)?;
             let end = text.encode_utf16().count();
             let clamped = range_utf16.start.min(end)..range_utf16.end.min(end);
             *adjusted_range = Some(clamped.clone());
@@ -368,7 +713,7 @@ impl InputHandler for WorkspaceInputHandler {
         cx: &mut App,
     ) {
         let _ = self.view.update(cx, |view, cx| {
-            let Some(target) = view.active_ime_target() else {
+            let Some(target) = view.active_ime_target(cx) else {
                 return;
             };
             if new_text.is_empty() {
@@ -378,12 +723,22 @@ impl InputHandler for WorkspaceInputHandler {
                 return;
             }
             let replacement_range =
-                view.marked_text_replacement_range_for_platform_range(target, range_utf16);
-            view.ime_marked_text = Some(WorkspaceImeMarkedText {
-                target,
-                replacement_range: replacement_range.clone(),
-                text: new_text.to_string(),
-            });
+                view.marked_text_replacement_range_for_platform_range(target, range_utf16, cx);
+            if let Some(marked) = view
+                .ime_marked_text
+                .as_mut()
+                .filter(|marked| marked.target == target)
+            {
+                marked.replace(replacement_range.clone(), new_text);
+            } else {
+                view.ime_marked_text = Some(WorkspaceImeMarkedText {
+                    target,
+                    replacement_range: replacement_range.clone(),
+                    // Composition may contain a password or token. The marked
+                    // owner zeroizes it on replacement, cancellation, or release.
+                    text: Zeroizing::new(new_text.to_string()),
+                });
+            }
             view.set_ime_selection_from_anchor(
                 target,
                 replacement_range.start,
@@ -407,12 +762,11 @@ impl InputHandler for WorkspaceInputHandler {
         _window: &mut Window,
         cx: &mut App,
     ) -> Option<Bounds<Pixels>> {
-        self.view.update(cx, |view, _cx| {
-            let target = view.active_ime_target()?;
+        self.view.update(cx, |view, cx| {
+            let target = view.active_ime_target(cx)?;
             let bounds = view
                 .text_input_anchors
-                .get(&target.anchor_id())
-                .map(|anchor| anchor.bounds)
+                .bounds(target.anchor_id())
                 .unwrap_or(self.fallback_bounds);
             Some(Bounds {
                 origin: bounds.origin + point(px(0.0), bounds.size.height),
@@ -427,9 +781,9 @@ impl InputHandler for WorkspaceInputHandler {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<usize> {
-        self.view.update(cx, |view, _cx| {
-            let target = view.active_ime_target()?;
-            view.ime_index_for_position(target, point, window)
+        self.view.update(cx, |view, cx| {
+            let target = view.active_ime_target(cx)?;
+            view.ime_index_for_position(target, point, window, cx)
         })
     }
 
@@ -445,10 +799,10 @@ impl WorkspaceApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
-        if self.marked_text_state_for_target(target).is_some()
+        if self.marked_text_state_for_target(target, cx).is_some()
             && ime_composition_control_key(keystroke)
         {
             return true;
@@ -462,7 +816,9 @@ impl WorkspaceApp {
             self.next_platform_text_commit_generation.wrapping_add(1);
         self.pending_platform_text_commit = Some(PendingPlatformTextCommit {
             target,
-            text: text.to_string(),
+            // The duplicate marker survives one event turn and therefore owns
+            // a zeroizing copy regardless of the active input classification.
+            text: Zeroizing::new(text.to_string()),
             generation,
             consumed: false,
         });
@@ -488,16 +844,30 @@ impl WorkspaceApp {
         anchor: TextInputAnchor,
         _cx: &mut Context<Self>,
     ) {
-        if self.text_input_anchors.get(&anchor.id) != Some(&anchor) {
-            // Anchor probes run during layout, so scrolling a focused input can
-            // update its bounds every frame. Browsers do not schedule an app
-            // render for that geometry-only change; store it for hit-testing
-            // and IME math without feeding another cx.notify loop.
-            self.text_input_anchors.insert(anchor.id, anchor);
-        }
+        self.text_input_anchors.update(anchor);
     }
 
-    pub(super) fn active_ime_target(&self) -> Option<WorkspaceImeTarget> {
+    pub(super) fn host_tools_plain_text_ime_frame(
+        &self,
+        input: HostToolsTextInput,
+        cx: &App,
+    ) -> Option<HostToolsPlainTextImeFrame> {
+        let target = workspace_ime_target_for_plain_host_tools_input(input)?;
+        HostToolsPlainTextImeFrame::new(
+            input,
+            self.input_caret.visible(),
+            self.ime_selected_range_for_target(target, cx),
+            self.marked_text_for_target(target, cx).map(str::to_owned),
+            self.text_input_anchors.clone(),
+        )
+    }
+
+    pub(super) fn show_active_input_caret(&mut self, cx: &mut Context<Self>) {
+        self.workspace_input
+            .update(cx, |input, cx| input.show_caret(cx));
+    }
+
+    pub(super) fn active_ime_target(&self, cx: &App) -> Option<WorkspaceImeTarget> {
         if self.app_lock.locked {
             return Some(WorkspaceImeTarget::Settings(
                 SettingsInput::AppLockCurrentPassword,
@@ -514,30 +884,53 @@ impl WorkspaceApp {
         {
             return Some(WorkspaceImeTarget::Settings(input));
         }
-        if let Some(challenge) = self.keyboard_interactive_challenge.as_ref() {
-            return Some(WorkspaceImeTarget::KeyboardInteractive(
-                challenge.focused_prompt,
-            ));
+        if let Some(focused_prompt) = self
+            .connection_flow
+            .read(cx)
+            .focused_keyboard_interactive_prompt()
+        {
+            return Some(WorkspaceImeTarget::KeyboardInteractive(focused_prompt));
         }
 
-        if let Some(form) = self.new_connection_form.as_ref()
+        if let Some(form) = self.connection_form_state(cx).form.as_ref()
             && form.field_focused
-            && self.new_connection_field_accepts_ime(form.focused_field)
+            && self.new_connection_field_accepts_ime(form.focused_field, cx)
         {
             return Some(WorkspaceImeTarget::NewConnection(form.focused_field));
         }
 
-        if let Some(input) = self.focused_oxide_dialog_input() {
+        if let Some(input) = self.focused_oxide_dialog_input(cx) {
             // Oxide import/export dialogs are workspace-level overlays, so
             // their focused field takes priority over the underlying surface.
             return Some(WorkspaceImeTarget::SessionManager(input));
         }
 
-        if let Some(input) = self.focused_settings_input {
+        let settings_tab_visible = self
+            .active_tab(cx)
+            .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::Settings);
+        if settings_tab_visible {
+            if let Some(input) = self
+                .settings_workspace
+                .read(cx)
+                .settings_entity_focused_input()
+            {
+                return Some(WorkspaceImeTarget::Settings(input));
+            }
+
+            if let Some(input) = self.ai_entity.read(cx).focused_settings_input() {
+                return Some(WorkspaceImeTarget::Settings(input));
+            }
+        }
+
+        let legacy_settings_input_visible = settings_tab_visible
+            || self
+                .active_tab(cx)
+                .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::CloudSync);
+        if legacy_settings_input_visible && let Some(input) = self.focused_settings_input {
             return Some(WorkspaceImeTarget::Settings(input));
         }
 
-        if self.command_palette.open {
+        if self.command_palette.read(cx).is_open() {
             return Some(WorkspaceImeTarget::CommandPalette);
         }
 
@@ -545,154 +938,149 @@ impl WorkspaceApp {
             return Some(WorkspaceImeTarget::ShortcutsModalSearch);
         }
 
-        if self.connection_monitor.host_process_search_focused {
-            return Some(WorkspaceImeTarget::HostProcessSearch);
-        }
-        if self.connection_monitor.host_process_renice_focused {
-            return Some(WorkspaceImeTarget::HostProcessRenice);
-        }
-        if self.connection_monitor.host_docker_search_focused {
-            return Some(WorkspaceImeTarget::HostDockerSearch);
-        }
-        if self.connection_monitor.host_service_search_focused {
-            return Some(WorkspaceImeTarget::HostServiceSearch);
-        }
-        if self.connection_monitor.host_log_search_focused {
-            return Some(WorkspaceImeTarget::HostLogSearch);
-        }
-        if self.connection_monitor.host_tmux_search_focused {
-            return Some(WorkspaceImeTarget::HostTmuxSearch);
-        }
-        if self
-            .connection_monitor
-            .host_tmux_input_dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.focused)
+        if self.host_tools_visibility(cx).main_window_is_visible()
+            && let Some(input) = self.host_tools.read(cx).ui.focused_input
         {
-            return Some(WorkspaceImeTarget::HostTmuxDialogInput);
-        }
-        if self.connection_monitor.host_port_search_focused {
-            return Some(WorkspaceImeTarget::HostPortSearch);
-        }
-        if self.connection_monitor.host_schedule_search_focused {
-            return Some(WorkspaceImeTarget::HostScheduleSearch);
-        }
-        if self.connection_monitor.host_filesystem_search_focused {
-            return Some(WorkspaceImeTarget::HostFilesystemSearch);
-        }
-        if self.connection_monitor.host_package_search_focused {
-            return Some(WorkspaceImeTarget::HostPackageSearch);
-        }
-
-        if self.terminal_quick_commands_open
-            && let Some(input) = self.quick_commands.focused_input
-        {
-            return Some(WorkspaceImeTarget::QuickCommand(input));
+            return Some(match input {
+                HostToolsTextInput::ProcessSearch => WorkspaceImeTarget::HostProcessSearch,
+                HostToolsTextInput::ProcessRenice => WorkspaceImeTarget::HostProcessRenice,
+                HostToolsTextInput::DockerSearch => WorkspaceImeTarget::HostDockerSearch,
+                HostToolsTextInput::ServiceSearch => WorkspaceImeTarget::HostServiceSearch,
+                HostToolsTextInput::LogSearch => WorkspaceImeTarget::HostLogSearch,
+                HostToolsTextInput::TmuxSearch => WorkspaceImeTarget::HostTmuxSearch,
+                HostToolsTextInput::TmuxDialog => WorkspaceImeTarget::HostTmuxDialogInput,
+                HostToolsTextInput::PortSearch => WorkspaceImeTarget::HostPortSearch,
+                HostToolsTextInput::ScheduleSearch => WorkspaceImeTarget::HostScheduleSearch,
+                HostToolsTextInput::FilesystemSearch => WorkspaceImeTarget::HostFilesystemSearch,
+                HostToolsTextInput::PackageSearch => WorkspaceImeTarget::HostPackageSearch,
+            });
         }
 
-        if self.terminal_cwd_picker.open {
-            return Some(WorkspaceImeTarget::TerminalCwdSearch);
+        let terminal_tab_visible = self.active_tab(cx).is_some_and(is_terminal_tab);
+        if terminal_tab_visible {
+            let quick_command_input = {
+                let quick_commands = &self.terminal.read(cx).quick_commands;
+                quick_commands
+                    .is_open()
+                    .then(|| quick_commands.focused_input())
+                    .flatten()
+            };
+            if let Some(input) = quick_command_input {
+                return Some(WorkspaceImeTarget::QuickCommand(input));
+            }
+
+            if self.terminal.read(cx).cwd_picker_open() {
+                return Some(WorkspaceImeTarget::TerminalCwdSearch);
+            }
+
+            if self.terminal.read(cx).git_panel_open() {
+                return Some(WorkspaceImeTarget::TerminalGitBranchSearch);
+            }
+
+            if self.terminal.read(cx).project_panel_open() {
+                return Some(WorkspaceImeTarget::TerminalProjectSearch);
+            }
         }
 
-        if self.terminal_git_branch_picker.open {
-            return Some(WorkspaceImeTarget::TerminalGitBranchSearch);
-        }
-
-        if self.terminal_project_panel.open {
-            return Some(WorkspaceImeTarget::TerminalProjectSearch);
-        }
-
-        if let Some(input) = self.active_session_manager_input() {
+        if let Some(input) = self.active_session_manager_input(cx) {
             return Some(WorkspaceImeTarget::SessionManager(input));
         }
 
         if self
-            .active_tab()
+            .active_tab(cx)
             .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::Forwards)
-            && let Some(input) = self.forwarding_view.focused_input
+            && let Some(input) = self.forwarding.read(cx).view().focused_input
         {
             return Some(WorkspaceImeTarget::Forwards(input));
         }
 
         if self
-            .active_tab()
+            .active_tab(cx)
             .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::FileManager)
-            && let Some(input) = self.file_manager.focused_input
+            && let Some(input) = self.file_manager.read(cx).focused_input()
         {
             return Some(WorkspaceImeTarget::FileManager(input));
         }
 
         if self
-            .active_tab()
+            .active_tab(cx)
             .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::Launcher)
-            && let Some(input) = self.launcher.focused_input
+            && let Some(input) = self.launcher.read(cx).focused_input()
         {
             return Some(WorkspaceImeTarget::Launcher(input));
         }
 
         if self
-            .active_tab()
+            .active_tab(cx)
             .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::Graphics)
-            && let Some(input) = self.graphics.focused_input
+            && let Some(input) = self.graphics.read(cx).focused_input()
         {
             return Some(WorkspaceImeTarget::Graphics(input));
         }
 
         if self
-            .active_tab()
+            .active_tab(cx)
             .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::Sftp)
-            && let Some(input) = self.sftp_view.focused_input
+            && let Some(input) = self.sftp_view.read(cx).focused_input()
         {
             return Some(WorkspaceImeTarget::Sftp(input));
         }
 
-        if (self.ai_sidebar_visible() || self.ai.chat.inline_panel.open)
-            && self.ai.models.selector_open
-            && self.ai.models.selector_search_focused
+        let terminal_inline_panel = self.ai_entity.read(cx).terminal_inline_panel();
+        if (self.ai_sidebar_visible() || terminal_inline_panel.open)
+            && self.ai_entity.read(cx).model_selector_open()
+            && self.ai_entity.read(cx).model_selector_search_focused()
         {
             return Some(WorkspaceImeTarget::AiModelSelectorSearch);
         }
 
-        if self.ai.chat.inline_panel.open && self.ai.chat.inline_panel.prompt_focused {
+        if terminal_inline_panel.open && terminal_inline_panel.prompt_focused {
             return Some(WorkspaceImeTarget::AiInlinePrompt);
         }
 
-        if self.ai_sidebar_visible() && self.ai.chat.input_focused {
+        if self.ai_sidebar_visible()
+            && self
+                .ai_entity
+                .read(cx)
+                .chat_ui()
+                .renaming_conversation_id
+                .is_some()
+            && self
+                .ai_entity
+                .read(cx)
+                .chat_ui()
+                .renaming_conversation_focused
+        {
+            return Some(WorkspaceImeTarget::AiConversationRename);
+        }
+
+        if self.ai_sidebar_visible() && self.ai_entity.read(cx).chat_ui().input_focused {
             return Some(WorkspaceImeTarget::AiChatInput);
         }
 
         if self.ai_sidebar_visible()
-            && self.ai.chat.editing_message_id.is_some()
-            && self.ai.chat.editing_message_focused
+            && self
+                .ai_entity
+                .read(cx)
+                .chat_ui()
+                .editing_message_id
+                .is_some()
+            && self.ai_entity.read(cx).chat_ui().editing_message_focused
         {
             return Some(WorkspaceImeTarget::AiMessageEdit);
         }
 
-        if let Some(key) = self.native_plugin_ui.focused_input
-            && self.native_plugin_ui_control_is_visible(key)
+        if let Some(key) = self.plugin_ui_state(cx).focused_input
+            && self.native_plugin_ui_control_is_visible(key, cx)
         {
-            return Some(WorkspaceImeTarget::PluginControl(key));
+            let secret = self
+                .plugin_ui_state(cx)
+                .context(key)
+                .is_some_and(|context| context.control_kind == "password");
+            return Some(WorkspaceImeTarget::PluginControl { key, secret });
         }
 
-        if self.terminal_command_bar_focused && self.active_tab().is_some_and(is_terminal_tab) {
-            return Some(WorkspaceImeTarget::TerminalCommandBar);
-        }
-
-        if self.scheduled_input.open && self.scheduled_input.command_focused {
-            return Some(WorkspaceImeTarget::ScheduledInput);
-        }
-        if self.scheduled_input.open && self.scheduled_input.time_focused {
-            return Some(WorkspaceImeTarget::ScheduledInputTime);
-        }
-        if self.scheduled_input.open && self.scheduled_input.delay_focused {
-            return Some(WorkspaceImeTarget::ScheduledInputDelay);
-        }
-
-        if self
-            .terminal_cast_player
-            .as_ref()
-            .is_some_and(|player| player.search_focused)
-        {
+        if terminal_tab_visible && self.terminal.read(cx).cast_search_focused() {
             return Some(WorkspaceImeTarget::TerminalCastSearch);
         }
 
@@ -709,39 +1097,23 @@ impl WorkspaceApp {
         self.search.visible.then_some(WorkspaceImeTarget::Search)
     }
 
-    pub(super) fn active_ime_target_blinks_caret(&self) -> bool {
-        // Browser editable inputs keep their caret blinking regardless of which
-        // page owns the field. Drive the shared native blink timer from the IME
-        // owner instead of a hand-maintained list of focused booleans, otherwise
-        // newly migrated inputs such as the AI sidebar can render a stale
-        // invisible caret after text input.
-        if self.settings_caret_blink_paused() {
-            return false;
-        }
-        self.active_ime_target()
-            .is_some_and(ime_target_should_blink_caret)
-    }
-
-    fn settings_caret_blink_paused(&self) -> bool {
-        self.active_ime_target()
-            .is_some_and(|target| matches!(target, WorkspaceImeTarget::Settings(_)))
-            && self
-                .settings_caret_blink_pause_until
-                .is_some_and(|until| Instant::now() < until)
-    }
-
-    pub(super) fn marked_text_for_target(&self, target: WorkspaceImeTarget) -> Option<&str> {
-        self.marked_text_state_for_target(target)
+    pub(super) fn marked_text_for_target(
+        &self,
+        target: WorkspaceImeTarget,
+        cx: &App,
+    ) -> Option<&str> {
+        self.marked_text_state_for_target(target, cx)
             .map(|marked| marked.text.as_str())
     }
 
     fn marked_text_state_for_target(
         &self,
         target: WorkspaceImeTarget,
+        cx: &App,
     ) -> Option<&WorkspaceImeMarkedText> {
         self.ime_marked_text.as_ref().filter(|marked| {
             marked.target == target
-                && self.active_ime_target() == Some(target)
+                && self.active_ime_target(cx) == Some(target)
                 && !marked.text.is_empty()
         })
     }
@@ -749,22 +1121,24 @@ impl WorkspaceApp {
     pub(super) fn ime_selected_range_for_target(
         &self,
         target: WorkspaceImeTarget,
+        cx: &App,
     ) -> Option<Range<usize>> {
-        self.ime_selection_range_for_target(target)
+        self.ime_selection_range_for_target(target, cx)
     }
 
     pub(super) fn ime_selection_range_for_target(
         &self,
         target: WorkspaceImeTarget,
+        cx: &App,
     ) -> Option<Range<usize>> {
         self.ime_selection_for_target(target)
             .map(|selection| selection.range)
             .or_else(|| {
                 if self.selected_ime_target == Some(target) {
-                    self.text_for_ime_target(target)
+                    self.text_for_ime_target(target, cx)
                         .map(|text| 0..text.encode_utf16().count())
-                } else if self.active_ime_target() == Some(target) {
-                    self.text_for_ime_target(target).map(|text| {
+                } else if self.active_ime_target(cx) == Some(target) {
+                    self.text_for_ime_target(target, cx).map(|text| {
                         let end = text.encode_utf16().count();
                         end..end
                     })
@@ -824,7 +1198,7 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.ime_index_for_position(target, position, window) else {
+        let Some(index) = self.ime_index_for_position(target, position, window, cx) else {
             if self.clear_ime_selection() {
                 cx.notify();
             }
@@ -866,13 +1240,13 @@ impl WorkspaceApp {
             return;
         }
 
-        let Some(index) = self.ime_index_for_position(target, event.position, window) else {
+        let Some(index) = self.ime_index_for_position(target, event.position, window, cx) else {
             if self.clear_ime_selection() {
                 cx.notify();
             }
             return;
         };
-        let Some(text) = self.text_for_ime_target(target) else {
+        let Some(text) = self.text_for_ime_target(target, cx) else {
             if self.clear_ime_selection() {
                 cx.notify();
             }
@@ -908,7 +1282,7 @@ impl WorkspaceApp {
         let Some(drag) = self.ime_drag_selection else {
             return;
         };
-        let Some(index) = self.ime_index_for_position(drag.target, position, window) else {
+        let Some(index) = self.ime_index_for_position(drag.target, position, window, cx) else {
             return;
         };
         if self.set_ime_selection_from_anchor(drag.target, drag.anchor, index) {
@@ -927,7 +1301,7 @@ impl WorkspaceApp {
         let WorkspaceImeTarget::ReadOnlyText(id) = drag.target else {
             return;
         };
-        let Some(text) = self.text_for_ime_target(drag.target) else {
+        let Some(text) = self.text_for_ime_target(drag.target, cx) else {
             return;
         };
         let text_len = text.encode_utf16().count();
@@ -998,8 +1372,9 @@ impl WorkspaceApp {
         target: WorkspaceImeTarget,
         position: Point<Pixels>,
         window: &mut Window,
+        cx: &App,
     ) -> Option<usize> {
-        let text = self.text_for_ime_target(target)?;
+        let text = self.text_for_ime_target(target, cx)?;
         let text_len = text.encode_utf16().count();
         if text_len == 0 {
             return Some(0);
@@ -1020,7 +1395,7 @@ impl WorkspaceApp {
             return Some(index.min(text_len));
         }
 
-        let bounds = self.text_input_anchors.get(&target.anchor_id())?.bounds;
+        let bounds = self.text_input_anchors.bounds(target.anchor_id())?;
         let padding =
             Self::ime_target_horizontal_padding(target, self.tokens.metrics.ui_control_padding_x);
         let left = bounds.left() + padding;
@@ -1102,12 +1477,7 @@ impl WorkspaceApp {
         line_count: usize,
     ) -> Pixels {
         match target {
-            WorkspaceImeTarget::TerminalCommandBar
-            | WorkspaceImeTarget::ScheduledInput
-            | WorkspaceImeTarget::ScheduledInputTime
-            | WorkspaceImeTarget::ScheduledInputDelay
-            | WorkspaceImeTarget::AiChatInput
-            | WorkspaceImeTarget::AiMessageEdit => px(20.0),
+            WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit => px(20.0),
             WorkspaceImeTarget::Settings(input) if input.accepts_newline() => {
                 // Tauri textareas hit-test by their visual line box. Settings
                 // multiline fields are hand-rendered in GPUI, so keep the IME
@@ -1124,8 +1494,8 @@ impl WorkspaceApp {
 
     fn ime_target_horizontal_padding(target: WorkspaceImeTarget, control_padding_x: f32) -> Pixels {
         match target {
-            WorkspaceImeTarget::TerminalCommandBar
-            | WorkspaceImeTarget::AiChatInput
+            WorkspaceImeTarget::AiChatInput
+            | WorkspaceImeTarget::AiConversationRename
             | WorkspaceImeTarget::AiMessageEdit
             | WorkspaceImeTarget::Sftp(_)
             | WorkspaceImeTarget::ReadOnlyText(_) => {
@@ -1179,28 +1549,50 @@ impl WorkspaceApp {
         position_x - centered_text_left
     }
 
-    fn active_ime_text_with_marked_text(&self) -> Option<String> {
-        let target = self.active_ime_target()?;
-        let mut text = self.text_for_ime_target(target)?;
-        if let Some(marked) = self.marked_text_state_for_target(target) {
+    fn active_ime_text_with_marked_text(&self, cx: &App) -> Option<String> {
+        let target = self.active_ime_target(cx)?;
+        self.ime_text_with_marked_text_for_target(target, cx)
+    }
+
+    /// Builds the virtual text buffer seen by the platform while an IME
+    /// composition temporarily replaces the target's selected range.
+    pub(super) fn ime_text_with_marked_text_for_target(
+        &self,
+        target: WorkspaceImeTarget,
+        cx: &App,
+    ) -> Option<String> {
+        let mut text = self.text_for_ime_target(target, cx)?;
+        if let Some(marked) = self.marked_text_state_for_target(target, cx) {
+            let marked_projection = ime_text_snapshot(target, &marked.text);
             replace_utf16(
                 &mut text,
                 Some(marked.replacement_range.clone()),
-                &marked.text,
+                &marked_projection,
             );
         }
         Some(text)
+    }
+
+    /// Returns the composition range inside the virtual text buffer.
+    pub(super) fn ime_marked_virtual_range_for_target(
+        &self,
+        target: WorkspaceImeTarget,
+        cx: &App,
+    ) -> Option<Range<usize>> {
+        self.marked_text_state_for_target(target, cx)
+            .map(WorkspaceImeMarkedText::virtual_range)
     }
 
     fn marked_text_replacement_range_for_platform_range(
         &self,
         target: WorkspaceImeTarget,
         platform_range: Option<Range<usize>>,
+        cx: &App,
     ) -> Range<usize> {
         let fallback = || {
-            self.ime_selection_range_for_target(target)
+            self.ime_selection_range_for_target(target, cx)
                 .or_else(|| {
-                    self.text_for_ime_target(target).map(|text| {
+                    self.text_for_ime_target(target, cx).map(|text| {
                         let end = text.encode_utf16().count();
                         end..end
                     })
@@ -1210,7 +1602,7 @@ impl WorkspaceApp {
         let Some(platform_range) = platform_range else {
             return fallback();
         };
-        if let Some(marked) = self.marked_text_state_for_target(target)
+        if let Some(marked) = self.marked_text_state_for_target(target, cx)
             && platform_range == marked.virtual_range()
         {
             // Platform IME callbacks may address the marked substring in the
@@ -1220,11 +1612,12 @@ impl WorkspaceApp {
         platform_range
     }
 
-    fn new_connection_field_accepts_ime(&self, field: NewConnectionField) -> bool {
+    fn new_connection_field_accepts_ime(&self, field: NewConnectionField, cx: &App) -> bool {
         if field == NewConnectionField::Password
-            && self.saved_connection_form_uses_unloaded_secret()
+            && self.saved_connection_form_uses_unloaded_secret(cx)
             && self
-                .new_connection_form
+                .connection_form_state(cx)
+                .form
                 .as_ref()
                 .is_some_and(|form| !form.password_loaded)
         {
@@ -1245,7 +1638,7 @@ impl WorkspaceApp {
             return 0;
         }
 
-        if self.ime_target_is_secret(target) {
+        if ime_target_is_secret(target) {
             return self.secret_ime_index_for_relative_x(target, text, relative_x, window);
         }
 
@@ -1297,9 +1690,7 @@ impl WorkspaceApp {
 
     fn ime_target_font_family(&self, target: WorkspaceImeTarget) -> SharedString {
         match target {
-            WorkspaceImeTarget::TerminalCommandBar
-            | WorkspaceImeTarget::ScheduledInput
-            | WorkspaceImeTarget::Settings(
+            WorkspaceImeTarget::Settings(
                 SettingsInput::TerminalCommandBarFocusHandoff
                 | SettingsInput::TerminalCommandSpecsJson
                 | SettingsInput::AiMcpArgs
@@ -1314,220 +1705,235 @@ impl WorkspaceApp {
         }
     }
 
-    fn ime_target_is_secret(&self, target: WorkspaceImeTarget) -> bool {
-        matches!(
-            target,
-            WorkspaceImeTarget::NewConnection(
-                NewConnectionField::Password
-                    | NewConnectionField::Passphrase
-                    | NewConnectionField::JumpPassword
-                    | NewConnectionField::JumpPassphrase
-            ) | WorkspaceImeTarget::KeyboardInteractive(_)
-        ) || matches!(target, WorkspaceImeTarget::Settings(input) if input.is_secret())
-            || matches!(target, WorkspaceImeTarget::SessionManager(input) if input.is_secret())
-            || matches!(target, WorkspaceImeTarget::PluginControl(key)
-                if self.native_plugin_ui.context(key).is_some_and(|context| context.control_kind == "password"))
-    }
-
-    fn text_for_ime_target(&self, target: WorkspaceImeTarget) -> Option<String> {
+    fn text_for_ime_target(&self, target: WorkspaceImeTarget, cx: &App) -> Option<String> {
         match target {
             WorkspaceImeTarget::ReadOnlyText(id) => self
                 .selectable_text_values
                 .get(&id)
                 .cloned()
                 .or_else(|| self.selectable_text_group_text(id)),
-            WorkspaceImeTarget::CommandPalette => Some(self.command_palette.raw_query.clone()),
+            WorkspaceImeTarget::CommandPalette => {
+                Some(self.command_palette.read(cx).query().to_string())
+            }
             WorkspaceImeTarget::ShortcutsModalSearch => Some(self.shortcuts_modal.query.clone()),
             WorkspaceImeTarget::Search => Some(self.search.query.clone()),
-            WorkspaceImeTarget::TerminalCommandBar => self
-                .terminal_command_bar_focused
-                .then(|| self.terminal_command_bar_draft.clone()),
-            WorkspaceImeTarget::ScheduledInput => self
-                .scheduled_input
-                .open
-                .then(|| self.scheduled_input.command_draft.as_str().to_string()),
-            WorkspaceImeTarget::ScheduledInputTime => self
-                .scheduled_input
-                .open
-                .then(|| self.scheduled_input.time_draft.clone()),
-            WorkspaceImeTarget::ScheduledInputDelay => self
-                .scheduled_input
-                .open
-                .then(|| self.scheduled_input.delay_draft.clone()),
-            WorkspaceImeTarget::TerminalCwdSearch => self
-                .terminal_cwd_picker
-                .open
-                .then(|| self.terminal_cwd_picker.query.clone()),
-            WorkspaceImeTarget::TerminalGitBranchSearch => self
-                .terminal_git_branch_picker
-                .open
-                .then(|| self.terminal_git_branch_picker.query.clone()),
-            WorkspaceImeTarget::TerminalProjectSearch => self
-                .terminal_project_panel
-                .open
-                .then(|| self.terminal_project_panel.query.clone()),
+            WorkspaceImeTarget::TerminalCwdSearch => {
+                let terminal = self.terminal.read(cx);
+                terminal
+                    .cwd_picker_open()
+                    .then(|| terminal.cwd_query().to_string())
+            }
+            WorkspaceImeTarget::TerminalGitBranchSearch => {
+                let terminal = self.terminal.read(cx);
+                terminal
+                    .git_panel_open()
+                    .then(|| terminal.git_panel_query().to_string())
+            }
+            WorkspaceImeTarget::TerminalProjectSearch => {
+                let terminal = self.terminal.read(cx);
+                terminal
+                    .project_panel_open()
+                    .then(|| terminal.project_query().to_string())
+            }
             WorkspaceImeTarget::TerminalCastSearch => self
-                .terminal_cast_player
-                .as_ref()
-                .filter(|player| player.search_focused)
-                .map(|player| player.search_query.clone()),
+                .terminal
+                .read(cx)
+                .cast_search_query()
+                .map(str::to_string),
             WorkspaceImeTarget::HostProcessSearch => self
-                .connection_monitor
-                .host_process_search_focused
-                .then(|| self.connection_monitor.host_process_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::ProcessSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostProcessRenice => self
-                .connection_monitor
-                .host_process_renice_focused
-                .then(|| self.connection_monitor.host_process_renice_value.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::ProcessRenice)
+                .map(str::to_string),
             WorkspaceImeTarget::HostDockerSearch => self
-                .connection_monitor
-                .host_docker_search_focused
-                .then(|| self.connection_monitor.host_docker_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::DockerSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostServiceSearch => self
-                .connection_monitor
-                .host_service_search_focused
-                .then(|| self.connection_monitor.host_service_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::ServiceSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostLogSearch => self
-                .connection_monitor
-                .host_log_search_focused
-                .then(|| self.connection_monitor.host_log_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::LogSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostTmuxSearch => self
-                .connection_monitor
-                .host_tmux_search_focused
-                .then(|| self.connection_monitor.host_tmux_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::TmuxSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostTmuxDialogInput => self
-                .connection_monitor
-                .host_tmux_input_dialog
-                .as_ref()
-                .filter(|dialog| dialog.focused)
-                .map(|dialog| dialog.value.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::TmuxDialog)
+                .map(|value| ime_text_snapshot(target, value)),
             WorkspaceImeTarget::HostPortSearch => self
-                .connection_monitor
-                .host_port_search_focused
-                .then(|| self.connection_monitor.host_port_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::PortSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostScheduleSearch => self
-                .connection_monitor
-                .host_schedule_search_focused
-                .then(|| self.connection_monitor.host_schedule_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::ScheduleSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostFilesystemSearch => self
-                .connection_monitor
-                .host_filesystem_search_focused
-                .then(|| self.connection_monitor.host_filesystem_search_query.clone()),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::FilesystemSearch)
+                .map(str::to_string),
             WorkspaceImeTarget::HostPackageSearch => self
-                .connection_monitor
-                .host_package_search_focused
-                .then(|| self.connection_monitor.host_package_search_query.clone()),
-            WorkspaceImeTarget::QuickCommand(input) => self.quick_command_input_value(input),
+                .host_tools
+                .read(cx)
+                .ui
+                .input_value(HostToolsTextInput::PackageSearch)
+                .map(str::to_string),
+            WorkspaceImeTarget::QuickCommand(input) => self.quick_command_input_value(input, cx),
             WorkspaceImeTarget::Settings(input) => {
-                if self.focused_settings_input == Some(input) {
-                    Some(self.settings_input_draft.clone())
+                if self
+                    .settings_workspace
+                    .read(cx)
+                    .settings_entity_focused_input()
+                    == Some(input)
+                {
+                    self.settings_workspace
+                        .read(cx)
+                        .settings_entity_input_value(input)
+                        .map(|value| ime_text_snapshot(target, value))
+                } else if self.ai_entity.read(cx).focused_settings_input() == Some(input) {
+                    // Platform IME receives only a length-preserving projection
+                    // for secrets; the Entity remains the sole plaintext owner.
+                    self.ai_entity
+                        .read(cx)
+                        .settings_input_value(input)
+                        .map(|value| ime_text_snapshot(target, value))
+                } else if self.focused_settings_input == Some(input) {
+                    Some(ime_text_snapshot(target, &self.settings_input_draft))
                 } else {
                     None
                 }
             }
             WorkspaceImeTarget::SessionManager(input) => {
-                if self.session_manager.focused_input == Some(input) {
-                    Some(match input {
-                        SessionManagerInput::Search => self.session_manager.search_query.clone(),
-                        SessionManagerInput::SavedSearch => {
-                            self.session_manager.saved_search_query.clone()
-                        }
-                        SessionManagerInput::NewGroup => {
-                            self.session_manager.new_group_name.clone()
-                        }
-                        SessionManagerInput::OxideImportPassword => self
-                            .session_manager
-                            .oxide_import_dialog
-                            .as_ref()
-                            .map(|dialog| dialog.password.clone())?,
-                        SessionManagerInput::OxideExportPassword => self
-                            .session_manager
-                            .oxide_export_dialog
-                            .as_ref()
-                            .map(|dialog| dialog.password.clone())?,
-                        SessionManagerInput::OxideExportConfirmPassword => self
-                            .session_manager
-                            .oxide_export_dialog
-                            .as_ref()
-                            .map(|dialog| dialog.confirm_password.clone())?,
-                        SessionManagerInput::OxideExportDescription => self
-                            .session_manager
-                            .oxide_export_dialog
-                            .as_ref()
-                            .map(|dialog| dialog.description.clone())?,
-                    })
-                } else {
-                    None
-                }
+                session_manager_ime_text(self.session_manager.read(cx), input)
             }
             WorkspaceImeTarget::Forwards(input) => {
-                if self.forwarding_view.focused_input == Some(input) {
-                    Some(self.forward_input_value(input).to_string())
+                if self.forwarding.read(cx).view().focused_input == Some(input) {
+                    Some(self.forward_input_value(input, cx).to_string())
                 } else {
                     None
                 }
             }
             WorkspaceImeTarget::FileManager(input) => {
-                if self.file_manager.focused_input == Some(input) {
-                    Some(self.file_manager_input_value(input).to_string())
+                let file_manager = self.file_manager.read(cx);
+                if file_manager.focused_input() == Some(input) {
+                    Some(file_manager.input_value(input).to_string())
                 } else {
                     None
                 }
             }
             WorkspaceImeTarget::Launcher(input) => {
-                if self.launcher.focused_input == Some(input) {
-                    Some(self.launcher_input_value(input).to_string())
+                let launcher = self.launcher.read(cx);
+                if launcher.focused_input() == Some(input) {
+                    Some(launcher.input_value(input).to_string())
                 } else {
                     None
                 }
             }
             WorkspaceImeTarget::Graphics(input) => {
-                if self.graphics.focused_input == Some(input) {
-                    Some(self.graphics_input_value(input).to_string())
+                let graphics = self.graphics.read(cx);
+                if graphics.focused_input() == Some(input) {
+                    Some(graphics.input_value(input).to_string())
                 } else {
                     None
                 }
             }
             WorkspaceImeTarget::AiModelSelectorSearch => self
-                .ai
-                .models
-                .selector_search_focused
-                .then(|| self.ai.models.selector_search_query.clone()),
-            WorkspaceImeTarget::AiInlinePrompt => self
-                .ai
-                .chat
-                .inline_panel
-                .prompt_focused
-                .then(|| self.ai.chat.inline_panel.prompt.clone()),
+                .ai_entity
+                .read(cx)
+                .model_selector_search_focused()
+                .then(|| {
+                    self.ai_entity
+                        .read(cx)
+                        .model_selector_search_query()
+                        .to_owned()
+                }),
+            WorkspaceImeTarget::AiInlinePrompt => {
+                let panel = self.ai_entity.read(cx).terminal_inline_panel();
+                panel.prompt_focused.then(|| panel.prompt.clone())
+            }
             WorkspaceImeTarget::AiChatInput => self
-                .ai
-                .chat
+                .ai_entity
+                .read(cx)
+                .chat_ui()
                 .input_focused
-                .then(|| self.ai.chat.draft.clone()),
+                .then(|| self.ai_entity.read(cx).chat_ui().draft.clone()),
+            WorkspaceImeTarget::AiConversationRename => self
+                .ai_entity
+                .read(cx)
+                .chat_ui()
+                .renaming_conversation_focused
+                .then(|| {
+                    self.ai_entity
+                        .read(cx)
+                        .chat_ui()
+                        .renaming_conversation_draft
+                        .clone()
+                }),
             WorkspaceImeTarget::AiMessageEdit => self
-                .ai
-                .chat
+                .ai_entity
+                .read(cx)
+                .chat_ui()
                 .editing_message_focused
-                .then(|| self.ai.chat.editing_message_draft.clone()),
-            WorkspaceImeTarget::PluginControl(key) => self
-                .native_plugin_ui_control_is_visible(key)
-                .then(|| self.native_plugin_ui.text(key).map(str::to_string))
+                .then(|| {
+                    self.ai_entity
+                        .read(cx)
+                        .chat_ui()
+                        .editing_message_draft
+                        .clone()
+                }),
+            WorkspaceImeTarget::PluginControl { key, .. } => self
+                .native_plugin_ui_control_is_visible(key, cx)
+                .then(|| {
+                    self.plugin_ui_state(cx)
+                        .text(key)
+                        .map(|value| ime_text_snapshot(target, value))
+                })
                 .flatten(),
             WorkspaceImeTarget::Sftp(input) => {
-                if self.sftp_view.focused_input == Some(input) {
-                    Some(self.sftp_input_value(input).to_string())
+                if self.sftp_view.read(cx).focused_input() == Some(input) {
+                    Some(self.sftp_view.read(cx).input_value(input).to_string())
                 } else {
                     None
                 }
             }
             WorkspaceImeTarget::NewConnection(field) => {
-                let form = self.new_connection_form.as_ref()?;
-                new_connection_field_value(form, field).map(str::to_string)
+                let form = self.connection_form_state(cx).form.as_ref()?;
+                new_connection_field_value(form, field)
+                    .map(|value| ime_text_snapshot(target, value))
             }
             WorkspaceImeTarget::KeyboardInteractive(index) => self
-                .keyboard_interactive_challenge
-                .as_ref()
-                .and_then(|challenge| challenge.responses.get(index).cloned()),
+                .connection_flow
+                .read(cx)
+                .keyboard_interactive_response(index)
+                .map(|value| ime_text_snapshot(target, value)),
         }
     }
 
@@ -1537,7 +1943,7 @@ impl WorkspaceApp {
         text: &str,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return;
         };
         if platform_text_commit_is_duplicate(&mut self.pending_platform_text_commit, target, text) {
@@ -1546,7 +1952,7 @@ impl WorkspaceApp {
         }
         if text.is_empty()
             && replacement_range.as_ref().is_none_or(|range| {
-                self.marked_text_state_for_target(target)
+                self.marked_text_state_for_target(target, cx)
                     .is_some_and(|marked| *range == marked.virtual_range())
             })
         {
@@ -1555,8 +1961,8 @@ impl WorkspaceApp {
         }
         let replacement_range = effective_platform_text_replacement_range(
             replacement_range,
-            || self.ime_selection_range_for_target(target),
-            self.marked_text_state_for_target(target),
+            || self.ime_selection_range_for_target(target, cx),
+            self.marked_text_state_for_target(target, cx),
         );
         let caret = replacement_range
             .as_ref()
@@ -1583,7 +1989,7 @@ impl WorkspaceApp {
             "c" => self.copy_active_text_input(cx),
             "x" | "v"
                 if self
-                    .active_ime_target()
+                    .active_ime_target(cx)
                     .is_some_and(ime_target_is_read_only) =>
             {
                 true
@@ -1605,18 +2011,18 @@ impl WorkspaceApp {
         ) {
             return false;
         }
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
-        let Some(text) = self.text_for_ime_target(target) else {
+        let Some(text) = self.text_for_ime_target(target, cx) else {
             return false;
         };
         let range = if let Some(range) = self
-            .ime_selected_range_for_target(target)
+            .ime_selected_range_for_target(target, cx)
             .filter(|range| range.start < range.end)
         {
             range
-        } else if let Some(caret) = self.ime_selection_range_for_target(target) {
+        } else if let Some(caret) = self.ime_selection_range_for_target(target, cx) {
             let caret = caret.start.min(text.encode_utf16().count());
             let Some(range) =
                 self.text_input_delete_range_for_caret(target, &text, caret, keystroke)
@@ -1644,18 +2050,18 @@ impl WorkspaceApp {
         keystroke: &Keystroke,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
         let path_completion_visible = match target {
             WorkspaceImeTarget::FileManager(FileManagerInput::Path) => {
-                self.file_manager.path_completion.is_visible()
+                self.file_manager.read(cx).path_completion.is_visible()
             }
             WorkspaceImeTarget::Sftp(SftpInput::LocalPath) => {
-                self.sftp_view.local_path_completion.is_visible()
+                self.sftp_view.read(cx).local_path_completion.is_visible()
             }
             WorkspaceImeTarget::Sftp(SftpInput::RemotePath) => {
-                self.sftp_view.remote_path_completion.is_visible()
+                self.sftp_view.read(cx).remote_path_completion.is_visible()
             }
             _ => false,
         };
@@ -1666,23 +2072,6 @@ impl WorkspaceApp {
             keystroke.modifiers.platform || keystroke.modifiers.control || keystroke.modifiers.alt,
         ) {
             // The owning surface accepts the key after the shared text-input handler declines it.
-            return false;
-        }
-        if target == WorkspaceImeTarget::TerminalCommandBar
-            && self.terminal_command_bar_should_accept_inline_suggestion(keystroke, cx)
-        {
-            return false;
-        }
-        if target == WorkspaceImeTarget::TerminalCommandBar
-            && matches!(
-                keystroke.key.as_str(),
-                "up" | "arrowup" | "down" | "arrowdown"
-            )
-            && (!self.terminal_command_bar_draft.contains('\n')
-                || self.terminal_command_suggestions_open)
-        {
-            // Single-line command input keeps Up/Down for command suggestions;
-            // multiline drafts borrow the shared textarea navigation instead.
             return false;
         }
         if target == WorkspaceImeTarget::CommandPalette
@@ -1702,15 +2091,15 @@ impl WorkspaceApp {
                 keystroke.key.as_str(),
                 "up" | "arrowup" | "down" | "arrowdown"
             )
-            && !self.ai_chat_autocomplete_items().is_empty()
+            && !self.ai_chat_autocomplete_items(cx).is_empty()
         {
             return false;
         }
-        let Some(text) = self.text_for_ime_target(target) else {
+        let Some(text) = self.text_for_ime_target(target, cx) else {
             return false;
         };
         let text_len = text.encode_utf16().count();
-        let Some(selection) = self.ime_selection_for_navigation(target, text_len) else {
+        let Some(selection) = self.ime_selection_for_navigation(target, text_len, cx) else {
             return false;
         };
         let Some(next) =
@@ -1727,7 +2116,7 @@ impl WorkspaceApp {
         let desired_selection = selection_from_anchor(target, anchor, index);
         if desired_selection == selection
             && self.selected_ime_target.is_none()
-            && self.marked_text_state_for_target(target).is_none()
+            && self.marked_text_state_for_target(target, cx).is_none()
             && self.ime_drag_selection.is_none()
         {
             // Boundary navigation is a consumed browser input event, but an
@@ -1737,7 +2126,7 @@ impl WorkspaceApp {
         self.set_ime_selection_from_anchor(target, anchor, index);
         self.ime_marked_text = None;
         self.ime_drag_selection = None;
-        self.new_connection_caret_visible = true;
+        self.show_active_input_caret(cx);
         cx.notify();
         true
     }
@@ -1754,7 +2143,7 @@ impl WorkspaceApp {
         {
             return false;
         }
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
         if ime_target_is_read_only(target) {
@@ -1765,15 +2154,12 @@ impl WorkspaceApp {
         }
         if matches!(
             target,
-            WorkspaceImeTarget::AiChatInput
-                | WorkspaceImeTarget::AiMessageEdit
-                | WorkspaceImeTarget::TerminalCommandBar
-                | WorkspaceImeTarget::ScheduledInput
+            WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit
         ) && !keystroke.modifiers.shift
         {
             return false;
         }
-        let Some(replacement_range) = self.ime_selection_range_for_target(target) else {
+        let Some(replacement_range) = self.ime_selection_range_for_target(target, cx) else {
             return false;
         };
         let caret = replacement_range.start + 1;
@@ -1781,7 +2167,7 @@ impl WorkspaceApp {
         self.replace_ime_target_text(target, Some(replacement_range), "\n", cx);
         self.set_ime_selection_from_anchor(target, caret, caret);
         self.ime_marked_text = None;
-        self.new_connection_caret_visible = true;
+        self.show_active_input_caret(cx);
         cx.notify();
         true
     }
@@ -1798,16 +2184,21 @@ impl WorkspaceApp {
         {
             return false;
         }
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
         if ime_target_is_read_only(target) {
             return false;
         }
-        let Some(text) = self.text_for_ime_target(target) else {
+        if ime_target_is_secret(target) {
+            // Secret IME text is a geometry-only mask. Transposing that mask
+            // would overwrite the real owner with proxy characters.
+            return true;
+        }
+        let Some(text) = self.text_for_ime_target(target, cx) else {
             return false;
         };
-        let Some(selection) = self.ime_selection_range_for_target(target) else {
+        let Some(selection) = self.ime_selection_range_for_target(target, cx) else {
             return false;
         };
         if selection.start < selection.end {
@@ -1822,19 +2213,19 @@ impl WorkspaceApp {
         self.replace_ime_target_text(target, Some(0..text_len), &next_text, cx);
         self.set_ime_selection_from_anchor(target, next_caret, next_caret);
         self.ime_marked_text = None;
-        self.new_connection_caret_visible = true;
+        self.show_active_input_caret(cx);
         cx.notify();
         true
     }
 
     pub(super) fn copy_active_text_input(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
-        let Some(text) = self.text_for_ime_target(target) else {
+        let Some(text) = self.text_for_ime_target(target, cx) else {
             return false;
         };
-        let selection = self.ime_selected_range_for_target(target);
+        let selection = self.ime_selected_range_for_target(target, cx);
         match copy_shortcut_owner_for_target(target, selection.as_ref()) {
             CopyShortcutOwner::SelectedRange(range) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(utf16_slice(&text, range)));
@@ -1846,14 +2237,14 @@ impl WorkspaceApp {
     }
 
     pub(super) fn cut_active_text_input(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
-        let Some(text) = self.text_for_ime_target(target) else {
+        let Some(text) = self.text_for_ime_target(target, cx) else {
             return false;
         };
         let Some(range) = self
-            .ime_selected_range_for_target(target)
+            .ime_selected_range_for_target(target, cx)
             .filter(|range| range.start < range.end)
         else {
             return true;
@@ -1867,7 +2258,7 @@ impl WorkspaceApp {
     }
 
     pub(super) fn paste_active_text_input(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
         if ime_target_is_read_only(target) {
@@ -1876,8 +2267,11 @@ impl WorkspaceApp {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return true;
         };
-        let text = normalize_clipboard_text_for_ime_target(target, &text);
-        let replacement_range = self.ime_selection_range_for_target(target);
+        // Clipboard reads can contain private keys or passphrases. Own both the
+        // platform result and normalized copy with zeroizing drop semantics.
+        let clipboard_text = Zeroizing::new(text);
+        let text = normalize_clipboard_text_for_ime_target(target, &clipboard_text);
+        let replacement_range = self.ime_selection_range_for_target(target, cx);
         let caret = replacement_range
             .as_ref()
             .map(|range| range.start + text.encode_utf16().count());
@@ -1890,10 +2284,10 @@ impl WorkspaceApp {
     }
 
     pub(super) fn select_all_active_text_input(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(target) = self.active_ime_target() else {
+        let Some(target) = self.active_ime_target(cx) else {
             return false;
         };
-        if self.text_for_ime_target(target).is_none() {
+        if self.text_for_ime_target(target, cx).is_none() {
             return false;
         }
         self.selected_ime_target = Some(target);
@@ -1908,6 +2302,7 @@ impl WorkspaceApp {
         &self,
         target: WorkspaceImeTarget,
         text_len: usize,
+        cx: &App,
     ) -> Option<WorkspaceImeSelection> {
         self.ime_selection_for_target(target)
             .or_else(|| {
@@ -1918,7 +2313,7 @@ impl WorkspaceApp {
                 })
             })
             .or_else(|| {
-                (self.active_ime_target() == Some(target)).then_some(WorkspaceImeSelection {
+                (self.active_ime_target(cx) == Some(target)).then_some(WorkspaceImeSelection {
                     target,
                     range: text_len..text_len,
                     reversed: false,
@@ -2064,20 +2459,20 @@ impl WorkspaceApp {
         }
     }
 
-    fn terminal_command_bar_should_accept_inline_suggestion(
-        &self,
-        keystroke: &Keystroke,
+    fn replace_host_tools_text_input(
+        &mut self,
+        input: HostToolsTextInput,
+        replacement_range: Option<Range<usize>>,
+        text: &str,
         cx: &mut Context<Self>,
-    ) -> bool {
-        matches!(keystroke.key.as_str(), "right" | "arrowright")
-            && !keystroke.modifiers.shift
-            && !keystroke.modifiers.platform
-            && !keystroke.modifiers.alt
-            && !keystroke.modifiers.control
-            && self
-                .terminal_command_bar_visible_suggestions(cx)
-                .iter()
-                .any(|candidate| candidate.inline_safe)
+    ) {
+        let changed = self.host_tools.update(cx, |host_tools, _cx| {
+            host_tools.replace_text_input(input, replacement_range, text)
+        });
+        if changed {
+            self.show_active_input_caret(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn replace_ime_target_text(
@@ -2090,445 +2485,311 @@ impl WorkspaceApp {
         match target {
             WorkspaceImeTarget::ReadOnlyText(_) => {}
             WorkspaceImeTarget::CommandPalette => {
-                replace_utf16(&mut self.command_palette.raw_query, replacement_range, text);
-                let (mode, _) = parse_command_palette_query(&self.command_palette.raw_query);
-                self.command_palette.mode = mode;
-                self.command_palette.selected_index = 0;
-                self.new_connection_caret_visible = true;
+                self.command_palette.update(cx, |palette, cx| {
+                    palette.replace_query_utf16(replacement_range, text, cx);
+                });
+                self.show_active_input_caret(cx);
                 cx.notify();
             }
             WorkspaceImeTarget::ShortcutsModalSearch => {
                 replace_utf16(&mut self.shortcuts_modal.query, replacement_range, text);
                 self.shortcuts_modal.scroll_handle = gpui::UniformListScrollHandle::new();
-                self.new_connection_caret_visible = true;
+                self.show_active_input_caret(cx);
                 cx.notify();
             }
             WorkspaceImeTarget::Search => {
                 replace_utf16(&mut self.search.query, replacement_range, text);
                 self.update_search_query(cx);
             }
-            WorkspaceImeTarget::TerminalCommandBar => {
-                if self.terminal_command_bar_focused {
-                    replace_utf16(
-                        &mut self.terminal_command_bar_draft,
-                        replacement_range,
-                        text,
-                    );
-                    // Auto-open the completion dropdown when the user types and
-                    // there are matches.  Nothing is highlighted by default;
-                    // the user presses Up/Down to select a row.  The render
-                    // layer hides the popover when command_suggestions is empty.
-                    self.terminal_command_suggestions_open = true;
-                    self.terminal_command_suggestion_highlighted = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
-            }
-            WorkspaceImeTarget::ScheduledInput => {
-                if self.scheduled_input.open {
-                    replace_utf16(
-                        &mut self.scheduled_input.command_draft,
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
-            }
-            WorkspaceImeTarget::ScheduledInputTime => {
-                if self.scheduled_input.open {
-                    replace_utf16(
-                        &mut self.scheduled_input.time_draft,
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
-            }
-            WorkspaceImeTarget::ScheduledInputDelay => {
-                if self.scheduled_input.open {
-                    replace_utf16(
-                        &mut self.scheduled_input.delay_draft,
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
-            }
             WorkspaceImeTarget::TerminalCwdSearch => {
-                if self.terminal_cwd_picker.open {
-                    replace_utf16(&mut self.terminal_cwd_picker.query, replacement_range, text);
-                    self.terminal_cwd_picker.highlighted_path = None;
-                    self.new_connection_caret_visible = true;
+                if self.terminal.update(cx, |terminal, _cx| {
+                    terminal.replace_cwd_query(replacement_range, text)
+                }) {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::TerminalGitBranchSearch => {
-                if self.terminal_git_branch_picker.open {
-                    replace_utf16(
-                        &mut self.terminal_git_branch_picker.query,
-                        replacement_range,
-                        text,
-                    );
-                    // Filtering rebuilds the visible branch rows; drop the stale
-                    // highlighted branch until keyboard navigation chooses one.
-                    self.terminal_git_branch_picker.highlighted_branch = None;
-                    self.new_connection_caret_visible = true;
+                if self.terminal.update(cx, |terminal, _cx| {
+                    terminal.replace_git_panel_query(replacement_range, text)
+                }) {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::TerminalProjectSearch => {
-                if self.terminal_project_panel.open {
-                    replace_utf16(
-                        &mut self.terminal_project_panel.query,
-                        replacement_range,
-                        text,
-                    );
-                    self.terminal_project_panel.highlighted_task_id = None;
-                    self.ensure_terminal_project_task_highlight(cx);
-                    self.new_connection_caret_visible = true;
+                if self.terminal.read(cx).project_panel_open()
+                    && let Some(key) = self.active_terminal_project_key(cx)
+                    && self.terminal.update(cx, |terminal, _cx| {
+                        terminal.replace_project_query(&key, replacement_range, text)
+                    })
+                {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::TerminalCastSearch => {
-                if let Some(player) = self.terminal_cast_player.as_mut()
-                    && player.search_focused
-                {
-                    replace_utf16(&mut player.search_query, replacement_range, text);
-                    self.update_terminal_cast_search(cx);
-                    self.new_connection_caret_visible = true;
+                if self.terminal.update(cx, |terminal, cx| {
+                    terminal.replace_cast_search(replacement_range, text, cx)
+                }) {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::HostProcessSearch => {
-                if self.connection_monitor.host_process_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_process_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_process_expanded_pid = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::ProcessSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostProcessRenice => {
-                if self.connection_monitor.host_process_renice_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_process_renice_value,
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::ProcessRenice,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostDockerSearch => {
-                if self.connection_monitor.host_docker_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_docker_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_docker_expanded_id = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::DockerSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostServiceSearch => {
-                if self.connection_monitor.host_service_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_service_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_service_expanded_id = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::ServiceSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostLogSearch => {
-                if self.connection_monitor.host_log_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_log_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_log_expanded_index = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::LogSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostTmuxSearch => {
-                if self.connection_monitor.host_tmux_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_tmux_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_tmux_expanded_session_id = None;
-                    self.connection_monitor.host_tmux_expanded_window_id = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::TmuxSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostTmuxDialogInput => {
-                if let Some(dialog) = self.connection_monitor.host_tmux_input_dialog.as_mut()
-                    && dialog.focused
-                {
-                    replace_utf16(&mut dialog.value, replacement_range, text);
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::TmuxDialog,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostPortSearch => {
-                if self.connection_monitor.host_port_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_port_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_port_expanded_index = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::PortSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostScheduleSearch => {
-                if self.connection_monitor.host_schedule_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_schedule_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_schedule_expanded_index = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::ScheduleSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostFilesystemSearch => {
-                if self.connection_monitor.host_filesystem_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_filesystem_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_filesystem_expanded_index = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::FilesystemSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::HostPackageSearch => {
-                if self.connection_monitor.host_package_search_focused {
-                    replace_utf16(
-                        &mut self.connection_monitor.host_package_search_query,
-                        replacement_range,
-                        text,
-                    );
-                    self.connection_monitor.host_package_expanded_index = None;
-                    self.new_connection_caret_visible = true;
-                    cx.notify();
-                }
+                self.replace_host_tools_text_input(
+                    HostToolsTextInput::PackageSearch,
+                    replacement_range,
+                    text,
+                    cx,
+                );
             }
             WorkspaceImeTarget::QuickCommand(input) => {
-                if self.quick_commands.focused_input == Some(input) {
-                    replace_utf16(
-                        self.quick_command_input_value_mut(input),
-                        replacement_range,
-                        text,
-                    );
-                    if input == QuickCommandInput::Search {
-                        // Browser filtering invalidates the active option until
-                        // ArrowUp/ArrowDown or hover establishes a fresh row.
-                        self.quick_commands.highlighted_command = None;
-                    }
-                    self.new_connection_caret_visible = true;
+                if self.terminal.update(cx, |terminal, _cx| {
+                    terminal
+                        .quick_commands
+                        .replace_input(input, replacement_range, text)
+                }) {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::Settings(input) => {
-                if self.focused_settings_input == Some(input) {
+                let entity_input_focused = self
+                    .settings_workspace
+                    .read(cx)
+                    .settings_entity_focused_input()
+                    == Some(input);
+                if entity_input_focused {
+                    self.settings_workspace.update(cx, |settings, cx| {
+                        settings.replace_settings_entity_input(input, replacement_range, text, cx);
+                    });
+                } else if self.ai_entity.read(cx).focused_settings_input() == Some(input) {
+                    self.ai_entity.update(cx, |ai, cx| {
+                        ai.replace_settings_input(input, replacement_range, text, cx);
+                    });
+                } else if self.focused_settings_input == Some(input) {
                     replace_utf16(&mut self.settings_input_draft, replacement_range, text);
                     self.apply_settings_input_draft(input, cx);
                 }
             }
             WorkspaceImeTarget::SessionManager(input) => {
-                if self.session_manager.focused_input == Some(input) {
-                    match input {
-                        SessionManagerInput::Search => {
-                            replace_utf16(
-                                &mut self.session_manager.search_query,
-                                replacement_range,
-                                text,
-                            );
-                            self.clear_session_selection_for_invisible_rows();
-                        }
-                        SessionManagerInput::SavedSearch => {
-                            replace_utf16(
-                                &mut self.session_manager.saved_search_query,
-                                replacement_range,
-                                text,
-                            );
-                        }
-                        SessionManagerInput::NewGroup => {
-                            replace_utf16(
-                                &mut self.session_manager.new_group_name,
-                                replacement_range,
-                                text,
-                            );
-                        }
-                        SessionManagerInput::OxideImportPassword => {
-                            if let Some(dialog) = self.session_manager.oxide_import_dialog.as_mut()
-                            {
-                                replace_utf16(&mut dialog.password, replacement_range, text);
-                                dialog.error = None;
-                            }
-                        }
-                        SessionManagerInput::OxideExportPassword => {
-                            if let Some(dialog) = self.session_manager.oxide_export_dialog.as_mut()
-                            {
-                                replace_utf16(&mut dialog.password, replacement_range, text);
-                                dialog.error = None;
-                            }
-                        }
-                        SessionManagerInput::OxideExportConfirmPassword => {
-                            if let Some(dialog) = self.session_manager.oxide_export_dialog.as_mut()
-                            {
-                                replace_utf16(
-                                    &mut dialog.confirm_password,
-                                    replacement_range,
-                                    text,
-                                );
-                                dialog.error = None;
-                            }
-                        }
-                        SessionManagerInput::OxideExportDescription => {
-                            if let Some(dialog) = self.session_manager.oxide_export_dialog.as_mut()
-                            {
-                                replace_utf16(&mut dialog.description, replacement_range, text);
-                                dialog.error = None;
-                            }
-                        }
+                let search_changed = self.session_manager.update(cx, |session_manager, cx| {
+                    if session_manager.focused_input() != Some(input) {
+                        return false;
                     }
-                    cx.notify();
+                    // The Entity owns secret buffers and applies the platform
+                    // replacement without copying their contents to WorkspaceApp.
+                    if !session_manager.replace_input(input, replacement_range, text, cx) {
+                        return false;
+                    }
+                    input == SessionManagerInput::Search
+                });
+                if search_changed {
+                    self.clear_session_selection_for_invisible_rows(cx);
                 }
             }
             WorkspaceImeTarget::Forwards(input) => {
-                if self.forwarding_view.focused_input == Some(input) {
-                    replace_utf16(self.forward_input_value_mut(input), replacement_range, text);
-                    self.forwarding_view.error = None;
-                    self.new_connection_caret_visible = true;
+                if self.forwarding.read(cx).view().focused_input == Some(input) {
+                    self.forwarding.update(cx, |forwarding, _cx| {
+                        forwarding.replace_input_text(input, replacement_range, text);
+                    });
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::FileManager(input) => {
-                if self.file_manager.focused_input == Some(input) {
-                    replace_utf16(
-                        self.file_manager_input_value_mut(input),
-                        replacement_range,
-                        text,
-                    );
+                if self.file_manager.update(cx, |file_manager, cx| {
+                    file_manager.replace_input(input, replacement_range, text, cx)
+                }) {
                     if input == FileManagerInput::Path {
-                        self.refresh_file_manager_path_completion();
+                        self.refresh_file_manager_path_completion(cx);
                     }
-                    self.new_connection_caret_visible = true;
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::Launcher(input) => {
-                if self.launcher.focused_input == Some(input) {
-                    replace_utf16(
-                        self.launcher_input_value_mut(input),
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
+                if self.launcher.update(cx, |launcher, cx| {
+                    launcher.replace_input(input, replacement_range, text, cx)
+                }) {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::Graphics(input) => {
-                if self.graphics.focused_input == Some(input) {
-                    replace_utf16(
-                        self.graphics_input_value_mut(input),
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
+                if self.graphics.update(cx, |graphics, cx| {
+                    graphics.replace_input(input, replacement_range, text, cx)
+                }) {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::AiModelSelectorSearch => {
-                if self.ai.models.selector_search_focused {
-                    replace_utf16(
-                        &mut self.ai.models.selector_search_query,
-                        replacement_range,
-                        text,
-                    );
+                if self.ai_entity.read(cx).model_selector_search_focused() {
+                    self.ai_entity.update(cx, |ai, _cx| {
+                        ai.replace_model_selector_search(replacement_range, text);
+                    });
                     // Search changes rebuild the visible model rows; clear the
                     // Radix-style active item so keyboard focus cannot point at
                     // a filtered-out model.
-                    self.ai.models.selector_highlighted_model = None;
-                    self.new_connection_caret_visible = true;
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::AiInlinePrompt => {
-                if self.ai.chat.inline_panel.prompt_focused {
-                    replace_utf16(
-                        &mut self.ai.chat.inline_panel.prompt,
-                        replacement_range,
-                        text,
-                    );
-                    self.ai.chat.inline_panel.error = None;
-                    self.new_connection_caret_visible = true;
+                let changed = self.ai_entity.update(cx, |ai, _cx| {
+                    let panel = ai.terminal_inline_panel_mut();
+                    if !panel.prompt_focused {
+                        return false;
+                    }
+                    replace_utf16(&mut panel.prompt, replacement_range, text);
+                    panel.error = None;
+                    true
+                });
+                if changed {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::AiChatInput => {
-                if self.ai.chat.input_focused {
-                    replace_utf16(&mut self.ai.chat.draft, replacement_range, text);
-                    self.ai.chat.autocomplete_suppressed = false;
-                    self.ai.chat.autocomplete_index = 0;
-                    self.new_connection_caret_visible = true;
+                let changed = self
+                    .ai_entity
+                    .update(cx, |ai, _cx| ai.replace_chat_input(replacement_range, text));
+                if changed {
+                    self.show_active_input_caret(cx);
+                    cx.notify();
+                }
+            }
+            WorkspaceImeTarget::AiConversationRename => {
+                let changed = self.ai_entity.update(cx, |ai, _cx| {
+                    ai.replace_conversation_rename(replacement_range, text)
+                });
+                if changed {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::AiMessageEdit => {
-                if self.ai.chat.editing_message_focused {
-                    replace_utf16(
-                        &mut self.ai.chat.editing_message_draft,
-                        replacement_range,
-                        text,
-                    );
-                    self.new_connection_caret_visible = true;
+                let changed = self.ai_entity.update(cx, |ai, _cx| {
+                    ai.replace_message_edit(replacement_range, text)
+                });
+                if changed {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
-            WorkspaceImeTarget::PluginControl(key) => {
-                if self.native_plugin_ui.focused_input == Some(key)
-                    && self.native_plugin_ui_control_is_visible(key)
+            WorkspaceImeTarget::PluginControl { key, .. } => {
+                if self.plugin_ui_state(cx).focused_input == Some(key)
+                    && self.native_plugin_ui_control_is_visible(key, cx)
                 {
-                    if let Some(value) = self.native_plugin_ui.text_mut(key) {
-                        replace_utf16(value, replacement_range, text);
-                    }
-                    self.new_connection_caret_visible = true;
+                    self.update_plugin_ui_state(cx, |ui| {
+                        if let Some(value) = ui.text_mut(key) {
+                            replace_utf16(value, replacement_range, text);
+                        }
+                    });
+                    self.show_active_input_caret(cx);
                     self.dispatch_native_plugin_ui_input_event(key, cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::Sftp(input) => {
-                if self.sftp_view.focused_input == Some(input) {
-                    replace_utf16(self.sftp_input_value_mut(input), replacement_range, text);
+                if self.sftp_view.read(cx).focused_input() == Some(input) {
+                    self.sftp_view.update(cx, |sftp, _cx| {
+                        replace_utf16(sftp.input_value_mut(input), replacement_range, text);
+                    });
                     if matches!(input, SftpInput::LocalPath | SftpInput::RemotePath) {
-                        self.refresh_sftp_path_completion(input);
+                        self.refresh_sftp_path_completion(input, cx);
                     }
-                    self.new_connection_caret_visible = true;
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::NewConnection(field) => {
-                if let Some(form) = self.new_connection_form.as_mut() {
+                let changed = self.update_connection_form_state(cx, |state| {
+                    let Some(form) = state.form.as_mut() else {
+                        return false;
+                    };
                     if form.selected_field == Some(field) && replacement_range.is_none() {
                         *connection_field_value_mut(form, field) = String::new();
                     }
@@ -2539,17 +2800,27 @@ impl WorkspaceApp {
                     );
                     form.selected_field = None;
                     form.error = None;
-                    self.new_connection_caret_visible = true;
+                    if field == NewConnectionField::IdentityAgent {
+                        refresh_identity_agent_availability(form);
+                    }
+                    true
+                });
+                if changed {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
             WorkspaceImeTarget::KeyboardInteractive(index) => {
-                if let Some(challenge) = self.keyboard_interactive_challenge.as_mut()
-                    && !challenge.timed_out()
-                    && let Some(response) = challenge.responses.get_mut(index)
-                {
-                    replace_utf16(response, replacement_range, text);
-                    self.new_connection_caret_visible = true;
+                let replaced = self.connection_flow.update(cx, |connection_flow, cx| {
+                    connection_flow.replace_keyboard_interactive_response(
+                        index,
+                        replacement_range,
+                        text,
+                        cx,
+                    )
+                });
+                if replaced {
+                    self.show_active_input_caret(cx);
                     cx.notify();
                 }
             }
@@ -2578,6 +2849,7 @@ fn new_connection_field_value(
         NewConnectionField::ManagedKeyId => &form.managed_key_id,
         NewConnectionField::CertPath => &form.cert_path,
         NewConnectionField::Passphrase => &form.passphrase,
+        NewConnectionField::IdentityAgent => &form.identity_agent,
         NewConnectionField::Group => &form.group,
         NewConnectionField::PostConnectCommand => &form.post_connect_command,
         NewConnectionField::UpstreamProxyHost => &form.upstream_proxy_host,
@@ -2599,6 +2871,7 @@ fn new_connection_field_value(
         NewConnectionField::JumpManagedKeyId => &form.jump_server_form.as_ref()?.managed_key_id,
         NewConnectionField::JumpCertPath => &form.jump_server_form.as_ref()?.cert_path,
         NewConnectionField::JumpPassphrase => &form.jump_server_form.as_ref()?.passphrase,
+        NewConnectionField::JumpIdentityAgent => &form.jump_server_form.as_ref()?.identity_agent,
     })
 }
 
@@ -2616,6 +2889,7 @@ fn connection_field_value_mut(
         NewConnectionField::ManagedKeyId => &mut form.managed_key_id,
         NewConnectionField::CertPath => &mut form.cert_path,
         NewConnectionField::Passphrase => &mut form.passphrase,
+        NewConnectionField::IdentityAgent => &mut form.identity_agent,
         NewConnectionField::Group => &mut form.group,
         NewConnectionField::PostConnectCommand => &mut form.post_connect_command,
         NewConnectionField::UpstreamProxyHost => &mut form.upstream_proxy_host,
@@ -2685,23 +2959,44 @@ fn connection_field_value_mut(
                 .expect("jump passphrase field without jump form")
                 .passphrase
         }
+        NewConnectionField::JumpIdentityAgent => {
+            &mut form
+                .jump_server_form
+                .as_mut()
+                .expect("jump identity agent field without jump form")
+                .identity_agent
+        }
     }
 }
 
-fn normalize_clipboard_text_for_ime_target(target: WorkspaceImeTarget, text: &str) -> String {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+fn normalize_clipboard_text_for_ime_target(
+    target: WorkspaceImeTarget,
+    text: &str,
+) -> Zeroizing<String> {
+    // Normalize in one zeroizing allocation so CRLF conversion never creates
+    // an unprotected intermediate copy of secret clipboard contents.
+    let mut normalized = Zeroizing::new(String::with_capacity(text.len()));
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' {
+            if characters.peek() == Some(&'\n') {
+                characters.next();
+            }
+            normalized.push('\n');
+        } else {
+            normalized.push(character);
+        }
+    }
     if ime_target_accepts_newline(target) {
         normalized
     } else {
-        normalized.lines().collect::<Vec<_>>().join(" ")
+        Zeroizing::new(normalized.lines().collect::<Vec<_>>().join(" "))
     }
 }
 
 fn ime_target_accepts_newline(target: WorkspaceImeTarget) -> bool {
     match target {
         WorkspaceImeTarget::ReadOnlyText(_) => true,
-        WorkspaceImeTarget::TerminalCommandBar => true,
-        WorkspaceImeTarget::ScheduledInput => true,
         WorkspaceImeTarget::Settings(input) => input.accepts_newline(),
         WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit => true,
         WorkspaceImeTarget::SessionManager(SessionManagerInput::OxideExportDescription) => true,
@@ -2711,6 +3006,25 @@ fn ime_target_accepts_newline(target: WorkspaceImeTarget) -> bool {
 
 fn ime_target_is_read_only(target: WorkspaceImeTarget) -> bool {
     matches!(target, WorkspaceImeTarget::ReadOnlyText(_))
+}
+
+fn ime_target_is_secret(target: WorkspaceImeTarget) -> bool {
+    matches!(
+        target,
+        WorkspaceImeTarget::NewConnection(
+            NewConnectionField::Password
+                | NewConnectionField::Passphrase
+                | NewConnectionField::UpstreamProxyPassword
+                | NewConnectionField::JumpPassword
+                | NewConnectionField::JumpPassphrase
+        ) | WorkspaceImeTarget::KeyboardInteractive(_)
+            | WorkspaceImeTarget::HostTmuxDialogInput
+    ) || matches!(target, WorkspaceImeTarget::Settings(input) if input.is_secret())
+        || matches!(target, WorkspaceImeTarget::SessionManager(input) if input.is_secret())
+        || matches!(
+            target,
+            WorkspaceImeTarget::PluginControl { secret: true, .. }
+        )
 }
 
 fn ime_target_should_blink_caret(target: WorkspaceImeTarget) -> bool {
@@ -2885,7 +3199,7 @@ fn platform_text_commit_is_duplicate(
     let Some(pending) = pending_commit.as_mut() else {
         return false;
     };
-    if pending.target != target || pending.text != text {
+    if pending.target != target || pending.text.as_str() != text {
         return false;
     }
     if pending.consumed {
@@ -2934,21 +3248,25 @@ fn path_completion_owns_vertical_navigation(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{Keystroke, Modifiers, px};
+    use gpui::{Bounds, Keystroke, Modifiers, point, px, size};
+    use zeroize::{Zeroize, Zeroizing};
 
     use super::{
-        CopyShortcutOwner, FileManagerInput, PendingPlatformTextCommit, SettingsInput, SftpInput,
-        TextInputContentAlign, WorkspaceApp, WorkspaceImeMarkedText, WorkspaceImeTarget,
+        CopyShortcutOwner, FileManagerInput, HostToolsPlainTextImeFrame, HostToolsTextInput,
+        NewConnectionField, PendingPlatformTextCommit, SettingsInput, SftpInput, TextInputAnchor,
+        TextInputAnchorId, TextInputAnchorStore, TextInputContentAlign, WorkspaceApp,
+        WorkspaceCaretState, WorkspaceCaretVisibility, WorkspaceImeMarkedText, WorkspaceImeTarget,
         active_ime_should_defer_input_key, collapsed_copy_shortcut_is_owned_by_target,
         control_k_delete_end, copy_shortcut_owner_for_target,
-        effective_platform_text_replacement_range, ime_target_accepts_newline,
-        ime_target_should_blink_caret, keystroke_commits_platform_text,
+        effective_platform_text_replacement_range, ime_target_is_secret,
+        ime_target_should_blink_caret, ime_text_snapshot, keystroke_commits_platform_text,
         keystroke_uses_text_edit_modifier, line_end_for_utf16_offset, line_range_for_utf16_offset,
         line_start_for_utf16_offset, next_utf16_boundary, next_word_boundary,
         normalize_clipboard_text_for_ime_target, path_completion_owns_vertical_navigation,
         platform_text_commit_is_duplicate, previous_utf16_boundary, previous_word_boundary,
-        soft_wrapped_line_ranges_utf16, transpose_text_at_utf16_offset,
-        vertical_line_navigation_destination, word_range_for_utf16_offset,
+        secret_ime_proxy, soft_wrapped_line_ranges_utf16, transpose_text_at_utf16_offset,
+        utf16_offset_for_char_index, vertical_line_navigation_destination,
+        word_range_for_utf16_offset, workspace_ime_target_for_plain_host_tools_input,
     };
 
     fn key(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> Keystroke {
@@ -2957,6 +3275,45 @@ mod tests {
             key_char: key_char.map(str::to_string),
             modifiers,
         }
+    }
+
+    #[test]
+    fn caret_state_pauses_settings_blink_until_scroll_deadline() {
+        let now = std::time::Instant::now();
+        let visibility = WorkspaceCaretVisibility::default();
+        let mut caret = WorkspaceCaretState::new(visibility.clone());
+        let target = WorkspaceImeTarget::Settings(SettingsInput::KeybindingSearch);
+        assert!(caret.sync_active_target(Some(target)));
+        assert!(caret.pause_settings_caret(now + std::time::Duration::from_millis(700)));
+        assert_eq!(
+            caret.next_tick_delay(now),
+            Some(std::time::Duration::from_millis(700))
+        );
+        assert!(!caret.advance_tick(now + std::time::Duration::from_millis(699)));
+        assert!(visibility.visible());
+        assert!(caret.advance_tick(now + std::time::Duration::from_millis(700)));
+        assert!(!visibility.visible());
+    }
+
+    #[test]
+    fn caret_state_resets_phase_and_pause_when_visible_owner_changes() {
+        let now = std::time::Instant::now();
+        let visibility = WorkspaceCaretVisibility::default();
+        let mut caret = WorkspaceCaretState::new(visibility.clone());
+        let settings_target = WorkspaceImeTarget::Settings(SettingsInput::KeybindingSearch);
+        caret.sync_active_target(Some(settings_target));
+        caret.pause_settings_caret(now + std::time::Duration::from_secs(1));
+        caret.advance_tick(now + std::time::Duration::from_secs(1));
+        assert!(!visibility.visible());
+
+        assert!(caret.sync_active_target(Some(WorkspaceImeTarget::Search)));
+        assert!(visibility.visible());
+        assert_eq!(
+            caret.next_tick_delay(now),
+            Some(super::CARET_BLINK_INTERVAL)
+        );
+        assert!(caret.sync_active_target(Some(WorkspaceImeTarget::ReadOnlyText(7))));
+        assert_eq!(caret.next_tick_delay(now), None);
     }
 
     #[test]
@@ -3074,17 +3431,6 @@ mod tests {
     }
 
     #[test]
-    fn terminal_command_bar_preserves_multiline_clipboard_text() {
-        let target = WorkspaceImeTarget::TerminalCommandBar;
-
-        assert!(ime_target_accepts_newline(target));
-        assert_eq!(
-            normalize_clipboard_text_for_ime_target(target, "printf one\r\nprintf two"),
-            "printf one\nprintf two"
-        );
-    }
-
-    #[test]
     fn editable_ime_targets_drive_the_shared_caret_blink_timer() {
         assert!(ime_target_should_blink_caret(
             WorkspaceImeTarget::AiChatInput
@@ -3092,20 +3438,60 @@ mod tests {
         assert!(ime_target_should_blink_caret(
             WorkspaceImeTarget::AiModelSelectorSearch
         ));
+        assert!(ime_target_should_blink_caret(
+            WorkspaceImeTarget::AiConversationRename
+        ));
         assert!(!ime_target_should_blink_caret(
             WorkspaceImeTarget::ReadOnlyText(1)
         ));
     }
 
     #[test]
-    fn self_padded_text_targets_do_not_shift_hit_testing() {
+    fn text_input_anchor_store_clones_share_geometry_updates() {
+        let store = TextInputAnchorStore::default();
+        let cloned = store.clone();
+        let anchor_id = TextInputAnchorId(42);
+        cloned.update(TextInputAnchor {
+            id: anchor_id,
+            bounds: Bounds {
+                origin: point(px(12.0), px(24.0)),
+                size: size(px(80.0), px(30.0)),
+            },
+        });
+
         assert_eq!(
-            WorkspaceApp::ime_target_horizontal_padding(
-                WorkspaceImeTarget::TerminalCommandBar,
-                12.0,
-            ),
-            px(0.0)
+            store.bounds(anchor_id),
+            Some(Bounds {
+                origin: point(px(12.0), px(24.0)),
+                size: size(px(80.0), px(30.0)),
+            })
         );
+    }
+
+    #[test]
+    fn plain_host_tools_ime_frame_rejects_secret_tmux_dialog_input() {
+        assert_eq!(
+            workspace_ime_target_for_plain_host_tools_input(HostToolsTextInput::ProcessRenice),
+            Some(WorkspaceImeTarget::HostProcessRenice)
+        );
+        assert_eq!(
+            workspace_ime_target_for_plain_host_tools_input(HostToolsTextInput::TmuxDialog),
+            None
+        );
+        assert!(
+            HostToolsPlainTextImeFrame::new(
+                HostToolsTextInput::TmuxDialog,
+                true,
+                None,
+                None,
+                TextInputAnchorStore::default(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn self_padded_text_targets_do_not_shift_hit_testing() {
         assert_eq!(
             WorkspaceApp::ime_target_horizontal_padding(WorkspaceImeTarget::AiChatInput, 12.0),
             px(0.0)
@@ -3149,7 +3535,7 @@ mod tests {
     fn platform_text_commit_dedupes_only_same_deferred_key() {
         let mut pending = Some(PendingPlatformTextCommit {
             target: WorkspaceImeTarget::CommandPalette,
-            text: "a".to_string(),
+            text: Zeroizing::new("a".to_string()),
             generation: 7,
             consumed: false,
         });
@@ -3168,7 +3554,7 @@ mod tests {
 
         let mut next_key = Some(PendingPlatformTextCommit {
             target: WorkspaceImeTarget::CommandPalette,
-            text: "a".to_string(),
+            text: Zeroizing::new("a".to_string()),
             generation: 8,
             consumed: false,
         });
@@ -3183,7 +3569,7 @@ mod tests {
     fn platform_text_commit_does_not_dedupe_other_targets_or_text() {
         let mut pending = Some(PendingPlatformTextCommit {
             target: WorkspaceImeTarget::CommandPalette,
-            text: "a".to_string(),
+            text: Zeroizing::new("a".to_string()),
             generation: 1,
             consumed: true,
         });
@@ -3227,7 +3613,7 @@ mod tests {
         let marked = WorkspaceImeMarkedText {
             target: WorkspaceImeTarget::CommandPalette,
             replacement_range: 2..2,
-            text: "拼".to_string(),
+            text: Zeroizing::new("拼".to_string()),
         };
         let virtual_range = marked.virtual_range();
 
@@ -3262,6 +3648,119 @@ mod tests {
         assert_eq!(next_utf16_boundary(value, 1), 3);
         assert_eq!(previous_utf16_boundary(value, 3), 1);
         assert_eq!(previous_utf16_boundary(value, 4), 3);
+    }
+
+    #[test]
+    fn secret_ime_proxy_redacts_content_and_preserves_utf16_boundaries() {
+        let secret = "a密😄b";
+        let proxy = secret_ime_proxy(secret);
+
+        assert!(!proxy.contains('a'));
+        assert!(!proxy.contains('密'));
+        assert!(!proxy.contains('😄'));
+        assert_eq!(proxy.encode_utf16().count(), secret.encode_utf16().count());
+        for character_index in 0..=secret.chars().count() {
+            assert_eq!(
+                utf16_offset_for_char_index(&proxy, character_index),
+                utf16_offset_for_char_index(secret, character_index)
+            );
+        }
+    }
+
+    #[test]
+    fn classified_secret_ime_targets_project_only_masked_utf16_geometry() {
+        let secret = "token密😄";
+        let targets = [
+            WorkspaceImeTarget::Settings(SettingsInput::AiProviderApiKey(0)),
+            WorkspaceImeTarget::NewConnection(NewConnectionField::Password),
+            WorkspaceImeTarget::NewConnection(NewConnectionField::UpstreamProxyPassword),
+            WorkspaceImeTarget::KeyboardInteractive(0),
+            WorkspaceImeTarget::HostTmuxDialogInput,
+            WorkspaceImeTarget::PluginControl {
+                key: 42,
+                secret: true,
+            },
+        ];
+
+        for target in targets {
+            assert!(ime_target_is_secret(target));
+            let projection = ime_text_snapshot(target, secret);
+            assert!(!projection.contains(secret));
+            assert_eq!(
+                projection.encode_utf16().count(),
+                secret.encode_utf16().count()
+            );
+        }
+        assert_eq!(
+            ime_text_snapshot(WorkspaceImeTarget::Search, secret),
+            secret
+        );
+    }
+
+    #[test]
+    fn managed_private_key_clipboard_normalization_preserves_pem_lines() {
+        let normalized = normalize_clipboard_text_for_ime_target(
+            WorkspaceImeTarget::Settings(SettingsInput::ManagedKeyPastePrivateKey),
+            "-----BEGIN TEST KEY-----\r\nfake-material\r-----END TEST KEY-----",
+        );
+
+        assert_eq!(
+            normalized.as_str(),
+            "-----BEGIN TEST KEY-----\nfake-material\n-----END TEST KEY-----"
+        );
+    }
+
+    #[test]
+    fn single_line_secret_clipboard_normalization_flattens_line_breaks() {
+        let normalized = normalize_clipboard_text_for_ime_target(
+            WorkspaceImeTarget::Settings(SettingsInput::ManagedKeyPastePassphrase),
+            "fake\r\npassphrase",
+        );
+
+        assert_eq!(normalized.as_str(), "fake passphrase");
+    }
+
+    #[test]
+    fn platform_commit_and_marked_text_debug_are_redacted() {
+        let secret = "debug-secret";
+        let mut pending = PendingPlatformTextCommit {
+            target: WorkspaceImeTarget::Settings(SettingsInput::AiProviderApiKey(0)),
+            text: Zeroizing::new(secret.to_string()),
+            generation: 9,
+            consumed: false,
+        };
+        let marked = WorkspaceImeMarkedText {
+            target: pending.target,
+            replacement_range: 0..0,
+            text: Zeroizing::new(secret.to_string()),
+        };
+
+        assert!(!format!("{pending:?}").contains(secret));
+        assert!(!format!("{marked:?}").contains(secret));
+        assert!(format!("{pending:?}").contains("<redacted>"));
+        assert!(format!("{marked:?}").contains("<redacted>"));
+
+        pending.text.zeroize();
+        assert!(pending.text.is_empty());
+    }
+
+    #[test]
+    fn marked_text_replacement_and_release_clear_owned_secret() {
+        let mut marked = WorkspaceImeMarkedText {
+            target: WorkspaceImeTarget::KeyboardInteractive(0),
+            replacement_range: 0..0,
+            text: Zeroizing::new("old-composition-secret".to_string()),
+        };
+        let allocation = marked.text.as_ptr();
+
+        marked.replace(2..4, "新值");
+
+        assert_eq!(marked.replacement_range, 2..4);
+        assert_eq!(marked.text.as_str(), "新值");
+        assert_eq!(marked.text.as_ptr(), allocation);
+
+        marked.text.zeroize();
+        assert!(marked.text.is_empty());
     }
 
     #[test]

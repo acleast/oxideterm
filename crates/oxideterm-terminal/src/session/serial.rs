@@ -155,7 +155,7 @@ pub struct SerialSession {
     config: SerialSessionConfig,
     term: Arc<FairMutex<Term<LocalEventListener>>>,
     parser: Processor,
-    event_rx: Receiver<AlacEvent>,
+    event_rx: LocalEventReceiver,
     worker_rx: crate::backpressure::ByteBoundedReceiver<SerialWorkerEvent>,
     pending_events: Vec<TerminalEvent>,
     resize: TerminalResize,
@@ -292,13 +292,12 @@ impl SerialSession {
             cell_width: resize.cell_width,
             cell_height: resize.cell_height,
         };
-        let (event_tx, event_rx) = unbounded();
-        let (worker_tx, worker_rx) = crate::backpressure::byte_bounded_channel(
+        let (listener, event_rx) = local_event_channel();
+        let (worker_tx, worker_rx) = crate::backpressure::byte_bounded_channel_with_activity(
             crate::backpressure::TRANSPORT_OUTPUT_BACKLOG_BYTES,
+            listener.activity_sender(),
         );
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
-        let listener = LocalEventListener { tx: event_tx };
-
+        let (command_tx, command_rx) = crossbeam_channel::bounded(256);
         let term_config = interactive_terminal_config(scrollback_lines);
         let term = Arc::new(FairMutex::new(Term::new(term_config, &size, listener)));
 
@@ -364,7 +363,9 @@ impl SerialSession {
         let started = Instant::now();
         let mut report = TerminalDrainReport::default();
         loop {
-            if report.drained_bytes >= budget.max_bytes || report.events_drained >= budget.max_events
+            if budget.time_exhausted(started)
+                || report.drained_bytes >= budget.max_bytes
+                || report.events_drained >= budget.max_events
             {
                 report.budget_exhausted =
                     !self.output_queue.is_empty() || !self.worker_rx.is_empty();
@@ -447,13 +448,14 @@ impl SerialSession {
     }
 
     fn feed_transport_output(&mut self, bytes: &[u8]) {
-        let processed_output = apply_terminal_output_processor(&self.output_processor, bytes);
-        let bytes = processed_output.as_ref();
         let events = self.modem_consumer.process_server_output(bytes);
         self.handle_modem_consumer_events(events);
     }
 
     fn feed_plain_transport_output(&mut self, bytes: &[u8]) {
+        // Modem framing is defined on raw serial bytes, before display plugins.
+        let processed_output = apply_terminal_output_processor(&self.output_processor, bytes);
+        let bytes = processed_output.as_ref();
         let terminal_bytes = self.prepare_display_output(bytes);
         if terminal_bytes.is_empty() {
             return;
@@ -510,10 +512,19 @@ impl SerialSession {
     }
 
     fn flush_modem_server_writes(&mut self) -> bool {
+        let Some(transfer) = self.modem_consumer.active_transfer_input() else {
+            return false;
+        };
         let mut changed = false;
-        for bytes in self.modem_consumer.take_server_writes() {
-            let _ = self.write_protocol_bytes(&bytes);
-            changed = true;
+        while let Some(bytes) = transfer.take_server_write() {
+            let byte_len = bytes.len();
+            if self.write_protocol_bytes(&bytes).is_ok() {
+                transfer.complete_server_write(byte_len);
+                changed = true;
+            } else {
+                transfer.restore_server_write(bytes);
+                break;
+            }
         }
         changed
     }
@@ -652,7 +663,7 @@ impl TerminalSessionBackend for SerialSession {
         if self.flush_modem_server_writes() {
             report.mark_changed();
         }
-        while report.events_drained < budget.max_events {
+        while report.events_drained < budget.max_events && !budget.time_exhausted(started) {
             let Ok(event) = self.event_rx.try_recv() else {
                 break;
             };
@@ -661,11 +672,17 @@ impl TerminalSessionBackend for SerialSession {
                 report.mark_changed();
             }
         }
-        if report.events_drained >= budget.max_events && !self.event_rx.is_empty() {
+        if (report.events_drained >= budget.max_events || budget.time_exhausted(started))
+            && !self.event_rx.is_empty()
+        {
             report.budget_exhausted = true;
         }
         report.drain_duration = started.elapsed();
         report
+    }
+
+    fn activity_receiver(&self) -> TerminalActivityReceiver {
+        self.event_rx.activity_receiver()
     }
 
     fn take_events(&mut self) -> Vec<TerminalEvent> {
@@ -784,7 +801,8 @@ impl TerminalSessionBackend for SerialSession {
     }
 
     fn finish_modem_transfer(&mut self) {
-        self.modem_consumer.finish_transfer();
+        let trailing_output = self.modem_consumer.finish_transfer();
+        self.feed_plain_transport_output(&trailing_output);
     }
 
     fn mode(&self) -> TermMode {
@@ -855,47 +873,15 @@ impl TerminalSessionBackend for SerialSession {
     }
 
     fn search_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
-        let query = query.trim();
-        if query.is_empty() {
-            return Vec::new();
-        }
-
         let term = self.term.lock();
-        let grid = term.grid();
-        let top_line = -(term.total_lines().saturating_sub(term.screen_lines()) as i32);
-        let bottom_line = term.screen_lines() as i32;
-        let mut matches = Vec::new();
-        let mut logical_text = String::new();
-        let mut logical_map = Vec::new();
+        search_matches_from_term(&term, self.resize.cols, query)
+    }
 
-        for line in top_line..bottom_line {
-            let row = &grid[Line(line)];
-            append_grid_line_text(
-                row[..].iter(),
-                line,
-                self.resize.cols,
-                &mut logical_text,
-                &mut logical_map,
-            );
-
-            let wrapped = row.last().is_some_and(|cell| {
-                cell.flags
-                    .contains(alacritty_terminal::term::cell::Flags::WRAPLINE)
-            });
-            if wrapped && line + 1 < bottom_line {
-                continue;
-            }
-
-            matches.extend(search_logical_line_matches(
-                &logical_text,
-                &logical_map,
-                query,
-                self.resize.cols,
-            ));
-            logical_text.clear();
-            logical_map.clear();
-        }
-        matches
+    fn search_source(&self) -> Option<crate::TerminalSearchSource> {
+        Some(crate::TerminalSearchSource::new(
+            self.term.clone(),
+            self.resize.cols,
+        ))
     }
 
     fn clear_buffer(&mut self) {
@@ -925,6 +911,21 @@ impl TerminalSessionBackend for SerialSession {
                 cell_height: self.resize.cell_height,
             },
             &self.graphics,
+        )
+    }
+
+    fn snapshot_incremental(&self, previous: &TerminalSnapshot) -> TerminalSnapshot {
+        let mut term = self.term.lock();
+        incremental_snapshot_from_term(
+            &mut term,
+            TerminalSize {
+                cols: self.resize.cols,
+                rows: self.resize.rows,
+                cell_width: self.resize.cell_width,
+                cell_height: self.resize.cell_height,
+            },
+            &self.graphics,
+            previous,
         )
     }
 
@@ -1560,12 +1561,11 @@ mod serial_tests {
             cell_width: resize.cell_width,
             cell_height: resize.cell_height,
         };
-        let (event_tx, event_rx) = unbounded();
+        let (listener, event_rx) = local_event_channel();
         let (_worker_tx, worker_rx) = crate::backpressure::byte_bounded_channel(
             crate::backpressure::TRANSPORT_OUTPUT_BACKLOG_BYTES,
         );
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
-        let listener = LocalEventListener { tx: event_tx };
         let mut term_config = Config::default();
         term_config.scrolling_history = 100;
 

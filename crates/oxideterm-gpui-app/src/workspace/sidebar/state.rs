@@ -1,5 +1,40 @@
 use super::*;
-use crate::workspace::settings::settings_store_modified_time;
+
+const SIDEBAR_VIEWPORT_MIN_WIDTH_RATIO: f32 = 0.16;
+const SIDEBAR_VIEWPORT_MAX_WIDTH_RATIO: f32 = 0.45;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::workspace) struct ResponsiveSidebarWidthBounds {
+    pub min: f32,
+    pub max: f32,
+}
+
+pub(in crate::workspace) fn responsive_sidebar_width_bounds(
+    viewport_width: f32,
+    absolute_min_width: f32,
+    absolute_max_width: f32,
+) -> ResponsiveSidebarWidthBounds {
+    // Relative limits let wide windows use their available space, while the
+    // absolute limits preserve usable controls on ordinary and compact windows.
+    let viewport_width = viewport_width.max(0.0);
+    let min = absolute_min_width.max(viewport_width * SIDEBAR_VIEWPORT_MIN_WIDTH_RATIO);
+    let max = absolute_max_width
+        .max(viewport_width * SIDEBAR_VIEWPORT_MAX_WIDTH_RATIO)
+        .min(viewport_width.max(min))
+        .max(min);
+    ResponsiveSidebarWidthBounds { min, max }
+}
+
+pub(in crate::workspace) fn clamp_responsive_sidebar_width(
+    width: f32,
+    viewport_width: f32,
+    absolute_min_width: f32,
+    absolute_max_width: f32,
+) -> f32 {
+    let bounds =
+        responsive_sidebar_width_bounds(viewport_width, absolute_min_width, absolute_max_width);
+    width.clamp(bounds.min, bounds.max)
+}
 
 fn should_collapse_context_sidebar_panel(
     sidebar_visible: bool,
@@ -9,12 +44,12 @@ fn should_collapse_context_sidebar_panel(
     sidebar_visible && active_panel == requested_panel
 }
 
-pub(in crate::workspace) fn should_collapse_primary_sidebar_section(
+pub(super) fn should_collapse_primary_sidebar_section(
     sidebar_collapsed: bool,
-    active_section: SidebarSection,
+    visible_section: SidebarSection,
     requested_section: SidebarSection,
 ) -> bool {
-    !sidebar_collapsed && active_section == requested_section
+    !sidebar_collapsed && visible_section == requested_section
 }
 
 pub(in crate::workspace) fn context_sidebar_panel_visible(
@@ -41,11 +76,16 @@ impl WorkspaceApp {
         collapsed: bool,
         cx: &mut Context<Self>,
     ) {
-        if collapsed && self.session_manager.focused_input == Some(SessionManagerInput::SavedSearch)
-        {
-            // A closing sidebar must release its synthetic IME owner before
-            // the visual exit animation finishes, or it can swallow terminal keys.
-            self.session_manager.focused_input = None;
+        let released_saved_search = collapsed
+            && self.session_manager.update(cx, |session_manager, cx| {
+                if session_manager.focused_input() != Some(SessionManagerInput::SavedSearch) {
+                    return false;
+                }
+                // A closing sidebar must release its synthetic IME owner before
+                // the visual exit animation finishes, or it can swallow terminal keys.
+                session_manager.clear_input_focus(cx)
+            });
+        if released_saved_search {
             self.ime_marked_text = None;
         }
         self.sidebar_collapsed = collapsed;
@@ -107,22 +147,22 @@ impl WorkspaceApp {
         .detach();
     }
 
-    pub(in crate::workspace) fn persist_sidebar_settings(&mut self) {
+    pub(in crate::workspace) fn persist_sidebar_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_store.settings_mut().sidebar_ui.collapsed = self.sidebar_collapsed;
         self.settings_store.settings_mut().sidebar_ui.width = self.sidebar_width.round() as i64;
         self.settings_store.settings_mut().sidebar_ui.active_section = self
             .effective_sidebar_panel_section()
             .as_settings_key()
             .to_string();
-        self.persist_sidebar_settings_store();
+        self.persist_sidebar_settings_store(cx);
     }
 
-    fn persist_sidebar_settings_store(&mut self) {
+    fn persist_sidebar_settings_store(&mut self, cx: &mut Context<Self>) {
         if self.settings_store.save().is_ok() {
-            // The settings poller must not mistake this in-process sidebar
-            // write for an external CLI or cloud-sync update.
-            self.settings_store_last_modified =
-                settings_store_modified_time(self.settings_store.path());
+            // Internal writes advance the Entity-owned watcher before its next tick.
+            self.settings_workspace.update(cx, |settings, _cx| {
+                settings.acknowledge_external_store_state()
+            });
         }
     }
 
@@ -147,13 +187,17 @@ impl WorkspaceApp {
         section: SidebarSection,
         cx: &mut Context<Self>,
     ) {
-        self.clear_ai_sidebar_keyboard_focus();
-        if section != SidebarSection::Connections
-            && self.session_manager.focused_input == Some(SessionManagerInput::SavedSearch)
-        {
-            // Switching the sidebar body transfers keyboard ownership away
-            // from the saved-connections search field.
-            self.session_manager.focused_input = None;
+        self.clear_ai_sidebar_keyboard_focus(cx);
+        let released_saved_search = section != SidebarSection::Connections
+            && self.session_manager.update(cx, |session_manager, cx| {
+                if session_manager.focused_input() != Some(SessionManagerInput::SavedSearch) {
+                    return false;
+                }
+                // Switching the sidebar body transfers keyboard ownership away
+                // from the saved-connections search field.
+                session_manager.clear_input_focus(cx)
+            });
+        if released_saved_search {
             self.ime_marked_text = None;
         }
         self.active_sidebar_section = section;
@@ -163,15 +207,33 @@ impl WorkspaceApp {
         if self.sidebar_collapsed {
             self.set_sidebar_collapsed_with_motion(false, cx);
         }
-        self.persist_sidebar_settings();
+        self.persist_sidebar_settings(cx);
         cx.notify();
+    }
+
+    pub(in crate::workspace) fn toggle_sidebar_section(
+        &mut self,
+        section: SidebarSection,
+        cx: &mut Context<Self>,
+    ) {
+        // Activity-bar panel buttons are symmetric toggles: selecting another
+        // panel opens it, while selecting the visible panel hides the sidebar.
+        if should_collapse_primary_sidebar_section(
+            self.sidebar_collapsed,
+            self.effective_sidebar_panel_section(),
+            section,
+        ) {
+            self.toggle_sidebar(cx);
+        } else {
+            self.set_sidebar_section(section, cx);
+        }
     }
 
     pub(in crate::workspace) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.set_sidebar_collapsed_with_motion(!self.sidebar_collapsed, cx);
         self.sidebar_resizing = false;
         self.sidebar_resize_hotzone_hovered = false;
-        self.persist_sidebar_settings();
+        self.persist_sidebar_settings(cx);
         cx.notify();
     }
 
@@ -182,9 +244,12 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn set_sidebar_width(
         &mut self,
         width: f32,
+        viewport_width: f32,
         cx: &mut Context<Self>,
     ) -> bool {
-        let next_width = width.clamp(
+        let next_width = clamp_responsive_sidebar_width(
+            width,
+            viewport_width,
             self.tokens.metrics.sidebar_min_width,
             self.tokens.metrics.sidebar_max_width,
         );
@@ -206,8 +271,12 @@ impl WorkspaceApp {
     ) {
         let was_resizing = self.sidebar_resizing;
         self.sidebar_resizing = true;
-        let width_changed =
-            self.set_sidebar_width(self.sidebar_width_from_cursor(event.position.x, window), cx);
+        let viewport_width = f32::from(window.viewport_size().width);
+        let width_changed = self.set_sidebar_width(
+            self.sidebar_width_from_cursor(event.position.x, window),
+            viewport_width,
+            cx,
+        );
         if !was_resizing && !width_changed {
             cx.notify();
         }
@@ -230,13 +299,17 @@ impl WorkspaceApp {
         }
         // Match the AI sidebar: root-level movement owns the captured drag,
         // and the visible width is derived from the current window cursor.
-        self.set_sidebar_width(self.sidebar_width_from_cursor(event.position.x, window), cx);
+        self.set_sidebar_width(
+            self.sidebar_width_from_cursor(event.position.x, window),
+            f32::from(window.viewport_size().width),
+            cx,
+        );
     }
 
     pub(in crate::workspace) fn finish_sidebar_resize(&mut self, cx: &mut Context<Self>) {
         if self.sidebar_resizing {
             self.sidebar_resizing = false;
-            self.persist_sidebar_settings();
+            self.persist_sidebar_settings(cx);
             cx.notify();
         }
     }
@@ -246,13 +319,12 @@ impl WorkspaceApp {
         cursor_x: Pixels,
         window: &Window,
     ) -> f32 {
-        let window_width = f32::from(window.inner_window_bounds().get_bounds().size.width);
-        f32::from(cursor_x).clamp(
+        let viewport_width = f32::from(window.viewport_size().width);
+        clamp_responsive_sidebar_width(
+            f32::from(cursor_x),
+            viewport_width,
             self.tokens.metrics.sidebar_min_width,
-            self.tokens
-                .metrics
-                .sidebar_max_width
-                .min(window_width.max(self.tokens.metrics.sidebar_min_width)),
+            self.tokens.metrics.sidebar_max_width,
         )
     }
 
@@ -286,6 +358,7 @@ impl WorkspaceApp {
             self.push_ai_settings_toast(
                 self.i18n.t("ai.sidebar.not_enabled_hint"),
                 TerminalNoticeVariant::Warning,
+                cx,
             );
             cx.notify();
             return false;
@@ -298,19 +371,19 @@ impl WorkspaceApp {
             .ai_sidebar_collapsed = false;
         self.set_context_sidebar_rendered_with_motion(true, cx);
         if panel == ContextSidebarPanel::Assistant {
-            self.ensure_ai_chat_initialized();
-            self.bootstrap_ai_mcp_registry();
+            self.ensure_ai_chat_initialized(cx);
+            self.bootstrap_ai_mcp_registry(cx);
         } else {
             // Non-AI context panels share the old right-sidebar shell, but must
             // not keep AI-specific focus or floating popovers alive.
-            self.close_ai_sidebar_popovers();
-            self.active_context_sidebar_tool = ContextSidebarTool::Monitor;
-            self.refresh_connection_monitor_pool_stats();
-            self.sync_connection_monitor_selection(cx);
+            self.close_ai_sidebar_popovers(cx);
+            self.host_tools.update(cx, |host_tools, cx| {
+                host_tools.reset_active_tool(cx);
+            });
         }
-        self.clear_ai_sidebar_keyboard_focus();
-        self.sync_host_gpu_sampling(cx);
-        self.persist_sidebar_settings_store();
+        self.sync_host_tools_lifecycle(panel == ContextSidebarPanel::HostTools, cx);
+        self.clear_ai_sidebar_keyboard_focus(cx);
+        self.persist_sidebar_settings_store(cx);
         cx.notify();
         true
     }
@@ -321,27 +394,37 @@ impl WorkspaceApp {
             .sidebar_ui
             .ai_sidebar_collapsed = true;
         self.set_context_sidebar_rendered_with_motion(false, cx);
-        self.ai.chat.sidebar_resizing = false;
+        self.ai_entity.update(cx, |ai, _cx| {
+            ai.set_chat_sidebar_resizing(false);
+        });
         self.sidebar_resize_hotzone_hovered = false;
-        self.sync_host_gpu_sampling(cx);
-        self.clear_ai_sidebar_keyboard_focus();
-        self.close_ai_sidebar_popovers();
-        self.persist_sidebar_settings_store();
+        self.sync_host_tools_lifecycle(false, cx);
+        self.clear_ai_sidebar_keyboard_focus(cx);
+        self.close_ai_sidebar_popovers(cx);
+        self.persist_sidebar_settings_store(cx);
         cx.notify();
     }
 
     pub(in crate::workspace) fn set_ai_sidebar_width(
         &mut self,
         width: f32,
+        viewport_width: f32,
         cx: &mut Context<Self>,
     ) -> bool {
-        let next_width = width.clamp(AI_SIDEBAR_MIN_WIDTH, AI_SIDEBAR_MAX_WIDTH);
-        if (next_width - self.ai.chat.sidebar_width).abs() < f32::EPSILON {
+        let next_width = clamp_responsive_sidebar_width(
+            width,
+            viewport_width,
+            AI_SIDEBAR_ABSOLUTE_MIN_WIDTH,
+            AI_SIDEBAR_ABSOLUTE_MAX_WIDTH,
+        );
+        if (next_width - self.ai_entity.read(cx).chat_ui().sidebar_width).abs() < f32::EPSILON {
             return false;
         }
         // Same repaint contract as the main sidebar: pointer capture may keep
         // sending moves after the width is clamped at a boundary.
-        self.ai.chat.sidebar_width = next_width;
+        self.ai_entity.update(cx, |ai, _cx| {
+            ai.set_chat_sidebar_width(next_width);
+        });
         cx.notify();
         true
     }
@@ -352,12 +435,15 @@ impl WorkspaceApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let was_resizing = self.ai.chat.sidebar_resizing;
-        self.ai.chat.sidebar_resizing = true;
+        let was_resizing = self.ai_entity.read(cx).chat_ui().sidebar_resizing;
+        self.ai_entity.update(cx, |ai, _cx| {
+            ai.set_chat_sidebar_resizing(true);
+        });
         // Mirror the browser sidebar: the first press updates the width from
         // the pointer position so a resize drag is visible before the next move.
         let width_changed = self.set_ai_sidebar_width(
             self.ai_sidebar_width_from_cursor(event.position.x, window),
+            f32::from(window.viewport_size().width),
             cx,
         );
         if !was_resizing && !width_changed {
@@ -371,7 +457,7 @@ impl WorkspaceApp {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.ai.chat.sidebar_resizing {
+        if !self.ai_entity.read(cx).chat_ui().sidebar_resizing {
             return;
         }
         if !event.dragging() {
@@ -384,18 +470,21 @@ impl WorkspaceApp {
         // sidebar edge, matching browser resize handles.
         self.set_ai_sidebar_width(
             self.ai_sidebar_width_from_cursor(event.position.x, window),
+            f32::from(window.viewport_size().width),
             cx,
         );
     }
 
     pub(in crate::workspace) fn finish_ai_sidebar_resize(&mut self, cx: &mut Context<Self>) {
-        if self.ai.chat.sidebar_resizing {
-            self.ai.chat.sidebar_resizing = false;
+        if self.ai_entity.read(cx).chat_ui().sidebar_resizing {
+            let sidebar_width = self
+                .ai_entity
+                .update(cx, |ai, _cx| ai.finish_chat_sidebar_resize());
             self.settings_store
                 .settings_mut()
                 .sidebar_ui
-                .ai_sidebar_width = self.ai.chat.sidebar_width.round() as i64;
-            self.persist_sidebar_settings_store();
+                .ai_sidebar_width = sidebar_width.round() as i64;
+            self.persist_sidebar_settings_store(cx);
             cx.notify();
         }
     }
@@ -411,11 +500,64 @@ impl WorkspaceApp {
         let viewport_width = f32::from(window.viewport_size().width);
         ai_sidebar_width_from_cursor_value(f32::from(cursor_x), viewport_width)
     }
+
+    pub(in crate::workspace) fn clamp_sidebar_widths_to_viewport(
+        &mut self,
+        viewport_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let primary_width = clamp_responsive_sidebar_width(
+            self.sidebar_width,
+            viewport_width,
+            self.tokens.metrics.sidebar_min_width,
+            self.tokens.metrics.sidebar_max_width,
+        );
+        let context_width = clamp_responsive_sidebar_width(
+            self.ai_entity.read(cx).chat_ui().sidebar_width,
+            viewport_width,
+            AI_SIDEBAR_ABSOLUTE_MIN_WIDTH,
+            AI_SIDEBAR_ABSOLUTE_MAX_WIDTH,
+        );
+        let primary_changed = (primary_width - self.sidebar_width).abs() >= f32::EPSILON;
+        let context_changed =
+            (context_width - self.ai_entity.read(cx).chat_ui().sidebar_width).abs() >= f32::EPSILON;
+        if !primary_changed && !context_changed {
+            return;
+        }
+        // Window resizes update effective widths without persisting a synthetic
+        // user resize; persistence remains owned by completed drag gestures.
+        self.sidebar_width = primary_width;
+        if context_changed {
+            self.ai_entity.update(cx, |ai, _cx| {
+                ai.set_chat_sidebar_width(context_width);
+            });
+        }
+        cx.notify();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primary_sidebar_section_click_collapses_only_the_visible_open_panel() {
+        assert!(should_collapse_primary_sidebar_section(
+            false,
+            SidebarSection::Sessions,
+            SidebarSection::Sessions,
+        ));
+        assert!(!should_collapse_primary_sidebar_section(
+            true,
+            SidebarSection::Sessions,
+            SidebarSection::Sessions,
+        ));
+        assert!(!should_collapse_primary_sidebar_section(
+            false,
+            SidebarSection::Sessions,
+            SidebarSection::Sftp,
+        ));
+    }
 
     #[test]
     fn context_sidebar_panel_click_collapses_only_the_visible_active_panel() {
@@ -433,25 +575,6 @@ mod tests {
             false,
             ContextSidebarPanel::HostTools,
             ContextSidebarPanel::HostTools,
-        ));
-    }
-
-    #[test]
-    fn primary_sidebar_section_click_collapses_only_the_visible_active_section() {
-        assert!(should_collapse_primary_sidebar_section(
-            false,
-            SidebarSection::Connections,
-            SidebarSection::Connections,
-        ));
-        assert!(!should_collapse_primary_sidebar_section(
-            false,
-            SidebarSection::Sessions,
-            SidebarSection::Connections,
-        ));
-        assert!(!should_collapse_primary_sidebar_section(
-            true,
-            SidebarSection::Connections,
-            SidebarSection::Connections,
         ));
     }
 
@@ -495,7 +618,12 @@ pub(in crate::workspace) fn ai_sidebar_width_from_cursor_value(
     // The context sidebar is anchored to the right edge, so dragging left must
     // increase width and dragging right must decrease width. Keep this math in
     // a pure helper so regressions do not require constructing a GPUI Window.
-    (viewport_width - cursor_x).clamp(AI_SIDEBAR_MIN_WIDTH, AI_SIDEBAR_MAX_WIDTH)
+    clamp_responsive_sidebar_width(
+        viewport_width - cursor_x,
+        viewport_width,
+        AI_SIDEBAR_ABSOLUTE_MIN_WIDTH,
+        AI_SIDEBAR_ABSOLUTE_MAX_WIDTH,
+    )
 }
 
 #[cfg(test)]
@@ -508,15 +636,12 @@ mod sidebar_resize_state_tests {
     }
 
     #[test]
-    pub(in crate::workspace) fn ai_sidebar_width_from_cursor_clamps_to_sidebar_limits() {
+    pub(in crate::workspace) fn ai_sidebar_width_from_cursor_clamps_to_responsive_limits() {
         assert_eq!(
             ai_sidebar_width_from_cursor_value(995.0, 1000.0),
-            AI_SIDEBAR_MIN_WIDTH
+            AI_SIDEBAR_ABSOLUTE_MIN_WIDTH
         );
-        assert_eq!(
-            ai_sidebar_width_from_cursor_value(0.0, 2000.0),
-            AI_SIDEBAR_MAX_WIDTH
-        );
+        assert_eq!(ai_sidebar_width_from_cursor_value(0.0, 2000.0), 900.0);
     }
 
     #[test]
@@ -533,7 +658,55 @@ mod sidebar_resize_state_tests {
         );
         assert_eq!(
             ai_sidebar_width_from_cursor_value(cursor_x, restored_window_width),
-            AI_SIDEBAR_MIN_WIDTH
+            AI_SIDEBAR_ABSOLUTE_MIN_WIDTH
+        );
+    }
+
+    #[test]
+    fn compact_viewports_keep_absolute_sidebar_fallbacks() {
+        assert_eq!(
+            responsive_sidebar_width_bounds(1000.0, 200.0, 600.0),
+            ResponsiveSidebarWidthBounds {
+                min: 200.0,
+                max: 600.0,
+            }
+        );
+        assert_eq!(
+            responsive_sidebar_width_bounds(
+                1000.0,
+                AI_SIDEBAR_ABSOLUTE_MIN_WIDTH,
+                AI_SIDEBAR_ABSOLUTE_MAX_WIDTH,
+            ),
+            ResponsiveSidebarWidthBounds {
+                min: AI_SIDEBAR_ABSOLUTE_MIN_WIDTH,
+                max: AI_SIDEBAR_ABSOLUTE_MAX_WIDTH,
+            }
+        );
+    }
+
+    #[test]
+    fn wide_viewports_expand_both_sidebar_limits_proportionally() {
+        assert_eq!(
+            responsive_sidebar_width_bounds(2000.0, 200.0, 600.0),
+            ResponsiveSidebarWidthBounds {
+                min: 320.0,
+                max: 900.0,
+            }
+        );
+        assert_eq!(
+            responsive_sidebar_width_bounds(
+                2000.0,
+                AI_SIDEBAR_ABSOLUTE_MIN_WIDTH,
+                AI_SIDEBAR_ABSOLUTE_MAX_WIDTH,
+            ),
+            ResponsiveSidebarWidthBounds {
+                min: 320.0,
+                max: 900.0,
+            }
+        );
+        assert_eq!(
+            clamp_responsive_sidebar_width(1200.0, 2000.0, 200.0, 600.0),
+            900.0
         );
     }
 }

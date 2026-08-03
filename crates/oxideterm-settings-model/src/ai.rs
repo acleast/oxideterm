@@ -15,9 +15,18 @@ use oxideterm_ai::{
     update_provider as ai_update_provider_values,
 };
 use oxideterm_settings::{
+    AI_TOOL_CANCEL_BACKGROUND_TASK, AI_TOOL_CONTROL_HOST_TOOL, AI_TOOL_CREATE_BACKGROUND_TASK,
+    AI_TOOL_GET_BACKGROUND_TASK, AI_TOOL_GET_CLOUD_SYNC_STATE, AI_TOOL_GET_TRANSPORT_SESSION_STATE,
+    AI_TOOL_INSPECT_HOST_TOOLS, AI_TOOL_LIST_BACKGROUND_TASKS, AI_TOOL_LIST_CREDENTIALS,
+    AI_TOOL_LIST_FORWARDS, AI_TOOL_LIST_PLUGINS, AI_TOOL_LIST_REMOTE_DESKTOP_SESSIONS,
+    AI_TOOL_LIST_TRANSPORT_PROFILES, AI_TOOL_LOAD_SKILL, AI_TOOL_MANAGE_CLOUD_SYNC,
+    AI_TOOL_MANAGE_CREDENTIAL, AI_TOOL_MANAGE_FORWARD, AI_TOOL_MANAGE_PLUGIN,
+    AI_TOOL_MANAGE_REMOTE_DESKTOP_SESSION, AI_TOOL_MANAGE_SERIAL_SESSION,
+    AI_TOOL_MANAGE_TELNET_SESSION, AI_TOOL_OPEN_TRANSPORT_PROFILE, AI_TOOL_READ_SKILL_RESOURCE,
     AcpAgentAuthState, AcpAgentCapabilityPolicy, AcpAgentConfig, AcpAgentRuntimeStatus,
     PersistedSettings,
 };
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::SettingsInput;
 
@@ -38,6 +47,69 @@ pub struct AiToolPolicyGroup {
     pub title_key: &'static str,
     pub description_key: &'static str,
     pub items: Vec<AiToolPolicyItem>,
+}
+
+/// Aggregate auto-approval state for one policy category.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AiToolPolicyGroupState {
+    Locked,
+    NoneApproved,
+    PartiallyApproved,
+    AllApproved,
+}
+
+impl AiToolPolicyGroup {
+    /// Derives the aggregate state from mutable policy items only.
+    pub fn state(&self) -> AiToolPolicyGroupState {
+        let (mutable_count, approved_count) = self
+            .items
+            .iter()
+            .filter(|item| !item.locked && item.key.is_some())
+            .fold((0_usize, 0_usize), |(total, approved), item| {
+                (total + 1, approved + usize::from(item.checked))
+            });
+        if mutable_count == 0 {
+            return AiToolPolicyGroupState::Locked;
+        }
+
+        if approved_count == 0 {
+            AiToolPolicyGroupState::NoneApproved
+        } else if approved_count == mutable_count {
+            AiToolPolicyGroupState::AllApproved
+        } else {
+            AiToolPolicyGroupState::PartiallyApproved
+        }
+    }
+
+    /// Returns the value applied by the next category-level toggle.
+    pub fn next_bulk_value(&self) -> Option<bool> {
+        match self.state() {
+            AiToolPolicyGroupState::Locked => None,
+            AiToolPolicyGroupState::AllApproved => Some(false),
+            AiToolPolicyGroupState::NoneApproved | AiToolPolicyGroupState::PartiallyApproved => {
+                Some(true)
+            }
+        }
+    }
+}
+
+/// Applies one auto-approval value to every mutable item in a category.
+pub fn set_ai_tool_policy_group_approval(
+    settings: &mut PersistedSettings,
+    group: &AiToolPolicyGroup,
+    approved: bool,
+) {
+    // Locked discovery tools are system policy and must never be changed by a
+    // group-level convenience control.
+    for item in group.items.iter().filter(|item| !item.locked) {
+        if let Some(key) = item.key {
+            settings
+                .ai
+                .tool_use
+                .auto_approve_tools
+                .insert(key.to_string(), serde_json::json!(approved));
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,32 +197,134 @@ pub fn ai_tool_policy_groups(settings: &PersistedSettings) -> Vec<AiToolPolicyGr
         AiToolPolicyGroup {
             title_key: "settings_view.ai.tool_policy_read_title",
             description_key: "settings_view.ai.tool_policy_read_desc",
-            items: vec![AiToolPolicyItem {
-                key: None,
-                label_key: "settings_view.ai.tool_policy_read_auto",
-                checked: true,
-                locked: true,
-            }],
+            items: vec![
+                AiToolPolicyItem {
+                    key: None,
+                    label_key: "settings_view.ai.tool_policy_read_auto",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LIST_BACKGROUND_TASKS),
+                    label_key: "settings_view.ai.tool_policy_read_background_tasks",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_GET_BACKGROUND_TASK),
+                    label_key: "settings_view.ai.tool_policy_read_background_task_details",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_INSPECT_HOST_TOOLS),
+                    label_key: "settings_view.ai.tool_policy_read_host_tools",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LIST_FORWARDS),
+                    label_key: "settings_view.ai.tool_policy_read_forwards",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LIST_PLUGINS),
+                    label_key: "settings_view.ai.tool_policy_read_plugins",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LIST_TRANSPORT_PROFILES),
+                    label_key: "settings_view.ai.tool_policy_read_transport_profiles",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_GET_TRANSPORT_SESSION_STATE),
+                    label_key: "settings_view.ai.tool_policy_read_transport_session_state",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LIST_REMOTE_DESKTOP_SESSIONS),
+                    label_key: "settings_view.ai.tool_policy_read_remote_desktop_sessions",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_GET_CLOUD_SYNC_STATE),
+                    label_key: "settings_view.ai.tool_policy_read_cloud_sync",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LIST_CREDENTIALS),
+                    label_key: "settings_view.ai.tool_policy_read_credentials",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some("list_memory_entries"),
+                    label_key: "settings_view.ai.tool_policy_read_memory_entries",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_LOAD_SKILL),
+                    label_key: "settings_view.ai.tool_policy_read_load_skill",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_READ_SKILL_RESOURCE),
+                    label_key: "settings_view.ai.tool_policy_read_skill_resource",
+                    checked: true,
+                    locked: true,
+                },
+            ],
         },
         AiToolPolicyGroup {
             title_key: "settings_view.ai.tool_policy_execute_title",
             description_key: "settings_view.ai.tool_policy_execute_desc",
-            items: vec![AiToolPolicyItem {
-                key: Some("run_command"),
-                label_key: "settings_view.ai.tool_policy_execute_run_command",
-                checked: checked("run_command"),
-                locked: false,
-            }],
-        },
-        AiToolPolicyGroup {
-            title_key: "settings_view.ai.tool_policy_interactive_title",
-            description_key: "settings_view.ai.tool_policy_interactive_desc",
-            items: vec![AiToolPolicyItem {
-                key: Some("send_terminal_input"),
-                label_key: "settings_view.ai.tool_policy_interactive_send_input",
-                checked: checked("send_terminal_input"),
-                locked: false,
-            }],
+            items: vec![
+                AiToolPolicyItem {
+                    key: Some("run_command"),
+                    label_key: "settings_view.ai.tool_policy_execute_run_command",
+                    checked: checked("run_command"),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some("send_terminal_input"),
+                    label_key: "settings_view.ai.tool_policy_interactive_send_input",
+                    checked: checked("send_terminal_input"),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some("wait_terminal_output"),
+                    label_key: "settings_view.ai.tool_policy_wait_terminal_output",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some("get_terminal_command_status"),
+                    label_key: "settings_view.ai.tool_policy_terminal_command_status",
+                    checked: true,
+                    locked: true,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_SERIAL_SESSION),
+                    label_key: "settings_view.ai.tool_policy_manage_serial_session",
+                    checked: checked(AI_TOOL_MANAGE_SERIAL_SESSION),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_TELNET_SESSION),
+                    label_key: "settings_view.ai.tool_policy_manage_telnet_session",
+                    checked: checked(AI_TOOL_MANAGE_TELNET_SESSION),
+                    locked: false,
+                },
+            ],
         },
         AiToolPolicyGroup {
             title_key: "settings_view.ai.tool_policy_navigation_title",
@@ -168,12 +342,6 @@ pub fn ai_tool_policy_groups(settings: &PersistedSettings) -> Vec<AiToolPolicyGr
                     checked: checked("open_app_surface"),
                     locked: false,
                 },
-            ],
-        },
-        AiToolPolicyGroup {
-            title_key: "settings_view.ai.tool_policy_write_title",
-            description_key: "settings_view.ai.tool_policy_write_desc",
-            items: vec![
                 AiToolPolicyItem {
                     key: Some("write_resource:settings"),
                     label_key: "settings_view.ai.tool_policy_write_settings",
@@ -196,6 +364,78 @@ pub fn ai_tool_policy_groups(settings: &PersistedSettings) -> Vec<AiToolPolicyGr
                     key: Some("remember_preference"),
                     label_key: "settings_view.ai.tool_policy_remember_preference",
                     checked: checked("remember_preference"),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_OPEN_TRANSPORT_PROFILE),
+                    label_key: "settings_view.ai.tool_policy_open_transport_profile",
+                    checked: checked(AI_TOOL_OPEN_TRANSPORT_PROFILE),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some("manage_memory_entry"),
+                    label_key: "settings_view.ai.tool_policy_manage_memory_entry",
+                    checked: checked("manage_memory_entry"),
+                    locked: false,
+                },
+            ],
+        },
+        AiToolPolicyGroup {
+            title_key: "settings_view.ai.tool_policy_background_title",
+            description_key: "settings_view.ai.tool_policy_background_desc",
+            items: vec![
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_CREATE_BACKGROUND_TASK),
+                    label_key: "settings_view.ai.tool_policy_create_background_task",
+                    checked: checked(AI_TOOL_CREATE_BACKGROUND_TASK),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_CANCEL_BACKGROUND_TASK),
+                    label_key: "settings_view.ai.tool_policy_cancel_background_task",
+                    checked: checked(AI_TOOL_CANCEL_BACKGROUND_TASK),
+                    locked: false,
+                },
+            ],
+        },
+        AiToolPolicyGroup {
+            title_key: "settings_view.ai.tool_policy_operations_title",
+            description_key: "settings_view.ai.tool_policy_operations_desc",
+            items: vec![
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_CONTROL_HOST_TOOL),
+                    label_key: "settings_view.ai.tool_policy_control_host_tool",
+                    checked: checked(AI_TOOL_CONTROL_HOST_TOOL),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_FORWARD),
+                    label_key: "settings_view.ai.tool_policy_manage_forward",
+                    checked: checked(AI_TOOL_MANAGE_FORWARD),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_PLUGIN),
+                    label_key: "settings_view.ai.tool_policy_manage_plugin",
+                    checked: checked(AI_TOOL_MANAGE_PLUGIN),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_REMOTE_DESKTOP_SESSION),
+                    label_key: "settings_view.ai.tool_policy_manage_remote_desktop",
+                    checked: checked(AI_TOOL_MANAGE_REMOTE_DESKTOP_SESSION),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_CLOUD_SYNC),
+                    label_key: "settings_view.ai.tool_policy_manage_cloud_sync",
+                    checked: checked(AI_TOOL_MANAGE_CLOUD_SYNC),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_MANAGE_CREDENTIAL),
+                    label_key: "settings_view.ai.tool_policy_manage_credentials",
+                    checked: checked(AI_TOOL_MANAGE_CREDENTIAL),
                     locked: false,
                 },
             ],
@@ -504,10 +744,8 @@ mod tests {
             "enabled": true
         }));
 
-        let mut draft = AiMcpServerDraft {
-            name: "new-server".to_string(),
-            ..AiMcpServerDraft::default()
-        };
+        let mut draft = AiMcpServerDraft::default();
+        draft.name = "new-server".to_string();
         assert!(ai_mcp_draft_valid(&draft, &settings));
 
         draft.name = "existing".to_string();
@@ -536,30 +774,47 @@ mod tests {
 
     #[test]
     fn ai_mcp_draft_debug_redacts_secret_values() {
-        let draft = AiMcpServerDraft {
-            args: "--api-key=arg-secret --token next-secret".to_string(),
-            env: vec![("API_KEY".to_string(), "env-secret".to_string())],
-            auth_token: "auth-secret".to_string(),
-            headers: vec![("Authorization".to_string(), "header-secret".to_string())],
-            ..AiMcpServerDraft::default()
-        };
+        let mut draft = AiMcpServerDraft::default();
+        draft.command = "command-secret".to_string();
+        draft.args = "positional-secret --api-key=arg-secret".to_string();
+        draft.env = vec![("API_KEY".to_string(), "env-secret".to_string())];
+        draft.url = "https://url-secret@example.test?token=query-secret".to_string();
+        draft.auth_token = "auth-secret".to_string();
+        draft.headers = vec![("Authorization".to_string(), "header-secret".to_string())];
 
         let debug = format!("{draft:?}");
 
         assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("command-secret"));
+        assert!(!debug.contains("positional-secret"));
         assert!(!debug.contains("arg-secret"));
-        assert!(!debug.contains("next-secret"));
         assert!(!debug.contains("env-secret"));
+        assert!(!debug.contains("url-secret"));
+        assert!(!debug.contains("query-secret"));
         assert!(!debug.contains("auth-secret"));
         assert!(!debug.contains("header-secret"));
     }
 
     #[test]
+    fn ai_mcp_draft_zeroize_clears_all_secret_capable_fields() {
+        let mut draft = AiMcpServerDraft::default();
+        draft.args = "--token arg-secret".to_string();
+        draft.env = vec![("API_KEY".to_string(), "env-secret".to_string())];
+        draft.auth_token = "auth-secret".to_string();
+        draft.headers = vec![("Authorization".to_string(), "header-secret".to_string())];
+
+        draft.zeroize();
+
+        assert!(draft.args.is_empty());
+        assert!(draft.env.is_empty());
+        assert!(draft.auth_token.is_empty());
+        assert!(draft.headers.is_empty());
+    }
+
+    #[test]
     fn ai_mcp_draft_input_adapter_trims_identity_fields_only() {
-        let mut draft = AiMcpServerDraft {
-            env: vec![(String::new(), String::new())],
-            ..AiMcpServerDraft::default()
-        };
+        let mut draft = AiMcpServerDraft::default();
+        draft.env = vec![(String::new(), String::new())];
 
         assert!(apply_ai_mcp_draft_input(
             Some(&mut draft),
@@ -592,6 +847,10 @@ mod tests {
             .insert("run_command".to_string(), serde_json::json!(true));
 
         let groups = ai_tool_policy_groups(&settings);
+        let policy_keys = groups
+            .iter()
+            .flat_map(|group| group.items.iter().filter_map(|item| item.key))
+            .collect::<HashSet<_>>();
 
         assert!(groups.iter().any(|group| {
             group
@@ -608,6 +867,74 @@ mod tests {
                 .values()
                 .filter(|value| value.as_bool() == Some(true))
                 .count()
+        );
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.title_key)
+                .collect::<Vec<_>>(),
+            vec![
+                "settings_view.ai.tool_policy_read_title",
+                "settings_view.ai.tool_policy_execute_title",
+                "settings_view.ai.tool_policy_navigation_title",
+                "settings_view.ai.tool_policy_background_title",
+                "settings_view.ai.tool_policy_operations_title",
+            ]
+        );
+        assert!(
+            groups[0]
+                .items
+                .iter()
+                .all(|item| item.checked && item.locked)
+        );
+        assert!(policy_keys.contains(AI_TOOL_LIST_BACKGROUND_TASKS));
+        assert!(policy_keys.contains(AI_TOOL_GET_BACKGROUND_TASK));
+        assert!(policy_keys.contains(AI_TOOL_INSPECT_HOST_TOOLS));
+        assert!(policy_keys.contains(AI_TOOL_LIST_FORWARDS));
+        assert!(policy_keys.contains(AI_TOOL_LIST_PLUGINS));
+        assert!(policy_keys.contains(AI_TOOL_CREATE_BACKGROUND_TASK));
+        assert!(policy_keys.contains(AI_TOOL_CANCEL_BACKGROUND_TASK));
+        assert!(policy_keys.contains(AI_TOOL_CONTROL_HOST_TOOL));
+        assert!(policy_keys.contains(AI_TOOL_MANAGE_FORWARD));
+        assert!(policy_keys.contains(AI_TOOL_MANAGE_PLUGIN));
+    }
+
+    #[test]
+    fn ai_tool_policy_group_bulk_toggle_preserves_locked_policy() {
+        let mut settings = PersistedSettings::default();
+        settings
+            .ai
+            .tool_use
+            .auto_approve_tools
+            .insert("run_command".to_string(), serde_json::json!(true));
+
+        let groups = ai_tool_policy_groups(&settings);
+        let locked_group = groups[0].clone();
+        let terminal_group = groups[1].clone();
+        assert_eq!(locked_group.state(), AiToolPolicyGroupState::Locked);
+        assert_eq!(locked_group.next_bulk_value(), None);
+        assert_eq!(
+            terminal_group.state(),
+            AiToolPolicyGroupState::PartiallyApproved
+        );
+        assert_eq!(terminal_group.next_bulk_value(), Some(true));
+
+        let locked_policy_before = settings.ai.tool_use.auto_approve_tools.clone();
+        set_ai_tool_policy_group_approval(&mut settings, &locked_group, false);
+        assert_eq!(
+            settings.ai.tool_use.auto_approve_tools,
+            locked_policy_before
+        );
+
+        set_ai_tool_policy_group_approval(&mut settings, &terminal_group, true);
+        let terminal_group = ai_tool_policy_groups(&settings)[1].clone();
+        assert_eq!(terminal_group.state(), AiToolPolicyGroupState::AllApproved);
+        assert_eq!(terminal_group.next_bulk_value(), Some(false));
+
+        set_ai_tool_policy_group_approval(&mut settings, &terminal_group, false);
+        assert_eq!(
+            ai_tool_policy_groups(&settings)[1].state(),
+            AiToolPolicyGroupState::NoneApproved
         );
     }
 
@@ -703,7 +1030,6 @@ mod tests {
 
 pub const AI_MODEL_REFRESH_MISSING_API_KEY: &str = "__missing_api_key__";
 
-#[derive(Clone)]
 pub struct AiMcpServerDraft {
     pub name: String,
     pub transport: McpTransport,
@@ -719,6 +1045,39 @@ pub struct AiMcpServerDraft {
     pub show_auth_token: bool,
 }
 
+impl Zeroize for AiMcpServerDraft {
+    fn zeroize(&mut self) {
+        // Arguments, environment values, headers, and tokens may all contain
+        // credentials supplied by the user.
+        self.name.zeroize();
+        self.command.zeroize();
+        self.args.zeroize();
+        for (key, value) in &mut self.env {
+            key.zeroize();
+            value.zeroize();
+        }
+        self.env.clear();
+        self.url.zeroize();
+        self.auth_header_name.zeroize();
+        self.auth_token.zeroize();
+        for (key, value) in &mut self.headers {
+            key.zeroize();
+            value.zeroize();
+        }
+        self.headers.clear();
+        self.retry_on_disconnect = false;
+        self.show_auth_token = false;
+    }
+}
+
+impl ZeroizeOnDrop for AiMcpServerDraft {}
+
+impl Drop for AiMcpServerDraft {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 impl fmt::Debug for AiMcpServerDraft {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         // MCP drafts may hold auth tokens plus env/header/argument values
@@ -726,65 +1085,23 @@ impl fmt::Debug for AiMcpServerDraft {
         // cannot leak them.
         formatter
             .debug_struct("AiMcpServerDraft")
-            .field("name", &self.name)
+            .field("name", &redacted_if_present(&self.name))
             .field("transport", &self.transport)
-            .field("command", &self.command)
-            .field("args", &redacted_args_debug(&self.args))
-            .field("env", &redacted_pairs_debug(&self.env))
-            .field("url", &self.url)
-            .field("auth_header_name", &self.auth_header_name)
+            .field("command", &redacted_if_present(&self.command))
+            .field("args", &redacted_if_present(&self.args))
+            .field("env_entry_count", &self.env.len())
+            .field("url", &redacted_if_present(&self.url))
+            .field(
+                "auth_header_name",
+                &redacted_if_present(&self.auth_header_name),
+            )
             .field("auth_header_mode", &self.auth_header_mode)
             .field("auth_token", &redacted_if_present(&self.auth_token))
-            .field("headers", &redacted_pairs_debug(&self.headers))
+            .field("header_entry_count", &self.headers.len())
             .field("retry_on_disconnect", &self.retry_on_disconnect)
             .field("show_auth_token", &self.show_auth_token)
             .finish()
     }
-}
-
-fn redacted_pairs_debug(values: &[(String, String)]) -> Vec<(&str, &'static str)> {
-    values
-        .iter()
-        .map(|(key, _)| (key.as_str(), "<redacted>"))
-        .collect()
-}
-
-fn redacted_args_debug(args: &str) -> Vec<String> {
-    let mut redact_next = false;
-    args.split_whitespace()
-        .map(|arg| {
-            if redact_next {
-                redact_next = false;
-                return "<redacted>".to_string();
-            }
-
-            if let Some((name, _value)) = arg.split_once('=') {
-                if is_sensitive_arg_name(name) {
-                    return format!("{name}=<redacted>");
-                }
-            }
-
-            if is_sensitive_arg_name(arg) {
-                redact_next = true;
-            }
-            arg.to_string()
-        })
-        .collect()
-}
-
-fn is_sensitive_arg_name(arg: &str) -> bool {
-    let normalized = arg
-        .trim_start_matches('-')
-        .replace('_', "-")
-        .to_ascii_lowercase();
-    normalized == "key"
-        || normalized.ends_with("-key")
-        || normalized.contains("api-key")
-        || normalized.contains("apikey")
-        || normalized.contains("token")
-        || normalized.contains("password")
-        || normalized.contains("passphrase")
-        || normalized.contains("secret")
 }
 
 fn redacted_if_present(value: &str) -> Option<&'static str> {
@@ -854,35 +1171,46 @@ pub fn ai_mcp_configs(settings: &PersistedSettings) -> Vec<oxideterm_ai::McpServ
 }
 
 pub fn ai_mcp_draft_valid(draft: &AiMcpServerDraft, settings: &PersistedSettings) -> bool {
+    let configured_names = ai_mcp_configs(settings)
+        .into_iter()
+        .map(|server| server.name)
+        .collect();
+    ai_mcp_draft_valid_for_names(draft, &configured_names)
+}
+
+pub fn ai_mcp_draft_valid_for_names(
+    draft: &AiMcpServerDraft,
+    configured_names: &HashSet<String>,
+) -> bool {
     let name = draft.name.trim();
     !name.is_empty()
         && name
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
-        && !ai_mcp_configs(settings)
-            .iter()
-            .any(|server| server.name == name)
+        && !configured_names.contains(name)
 }
 
 pub fn ai_mcp_draft_input_value(
     draft: Option<&AiMcpServerDraft>,
     input: SettingsInput,
-) -> Option<String> {
+) -> Option<&str> {
     let draft = draft?;
     match input {
-        SettingsInput::AiMcpName => Some(draft.name.clone()),
-        SettingsInput::AiMcpCommand => Some(draft.command.clone()),
-        SettingsInput::AiMcpArgs => Some(draft.args.clone()),
-        SettingsInput::AiMcpUrl => Some(draft.url.clone()),
-        SettingsInput::AiMcpAuthHeaderName => Some(draft.auth_header_name.clone()),
-        SettingsInput::AiMcpAuthToken => Some(draft.auth_token.clone()),
-        SettingsInput::AiMcpEnvKey(index) => draft.env.get(index).map(|(key, _)| key.clone()),
-        SettingsInput::AiMcpEnvValue(index) => draft.env.get(index).map(|(_, value)| value.clone()),
+        SettingsInput::AiMcpName => Some(&draft.name),
+        SettingsInput::AiMcpCommand => Some(&draft.command),
+        SettingsInput::AiMcpArgs => Some(&draft.args),
+        SettingsInput::AiMcpUrl => Some(&draft.url),
+        SettingsInput::AiMcpAuthHeaderName => Some(&draft.auth_header_name),
+        SettingsInput::AiMcpAuthToken => Some(&draft.auth_token),
+        SettingsInput::AiMcpEnvKey(index) => draft.env.get(index).map(|(key, _)| key.as_str()),
+        SettingsInput::AiMcpEnvValue(index) => {
+            draft.env.get(index).map(|(_, value)| value.as_str())
+        }
         SettingsInput::AiMcpHeaderKey(index) => {
-            draft.headers.get(index).map(|(key, _)| key.clone())
+            draft.headers.get(index).map(|(key, _)| key.as_str())
         }
         SettingsInput::AiMcpHeaderValue(index) => {
-            draft.headers.get(index).map(|(_, value)| value.clone())
+            draft.headers.get(index).map(|(_, value)| value.as_str())
         }
         _ => None,
     }

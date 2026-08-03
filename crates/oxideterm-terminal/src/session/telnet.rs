@@ -6,6 +6,14 @@ const TELNET_COMMAND_DO: u8 = 253;
 const TELNET_COMMAND_WONT: u8 = 252;
 const TELNET_COMMAND_WILL: u8 = 251;
 const TELNET_COMMAND_SB: u8 = 250;
+const TELNET_COMMAND_GA: u8 = 249;
+const TELNET_COMMAND_EL: u8 = 248;
+const TELNET_COMMAND_EC: u8 = 247;
+const TELNET_COMMAND_AYT: u8 = 246;
+const TELNET_COMMAND_AO: u8 = 245;
+const TELNET_COMMAND_IP: u8 = 244;
+const TELNET_COMMAND_BRK: u8 = 243;
+const TELNET_COMMAND_NOP: u8 = 241;
 const TELNET_COMMAND_SE: u8 = 240;
 const TELNET_OPTION_BINARY: u8 = 0;
 const TELNET_OPTION_ECHO: u8 = 1;
@@ -19,7 +27,7 @@ pub struct TelnetSession {
     config: TelnetSessionConfig,
     term: Arc<FairMutex<Term<LocalEventListener>>>,
     parser: Processor,
-    event_rx: Receiver<AlacEvent>,
+    event_rx: LocalEventReceiver,
     worker_rx: crate::backpressure::ByteBoundedReceiver<TelnetWorkerEvent>,
     pending_events: Vec<TerminalEvent>,
     resize: TerminalResize,
@@ -45,6 +53,7 @@ pub struct TelnetSession {
 #[derive(Debug)]
 enum TelnetCommand {
     Data(Vec<u8>),
+    Control(TelnetControlCommand),
     Resize { cols: u16, rows: u16 },
     Close,
 }
@@ -223,19 +232,14 @@ impl TelnetSession {
             cell_width: resize.cell_width,
             cell_height: resize.cell_height,
         };
-        let (event_tx, event_rx) = unbounded();
-        let (worker_tx, worker_rx) = crate::backpressure::byte_bounded_channel(
+        let (listener, event_rx) = local_event_channel();
+        let (worker_tx, worker_rx) = crate::backpressure::byte_bounded_channel_with_activity(
             crate::backpressure::TRANSPORT_OUTPUT_BACKLOG_BYTES,
+            listener.activity_sender(),
         );
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(256);
-        let listener = LocalEventListener { tx: event_tx };
-
         let term_config = interactive_terminal_config(scrollback_lines);
-        let term = Arc::new(FairMutex::new(Term::new(
-            term_config,
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config, &size, listener)));
 
         let runtime = Runtime::new().ok();
         if let Some(runtime) = runtime.as_ref() {
@@ -288,7 +292,8 @@ impl TelnetSession {
         let started = Instant::now();
         let mut report = TerminalDrainReport::default();
         loop {
-            if report.drained_bytes >= budget.max_bytes
+            if budget.time_exhausted(started)
+                || report.drained_bytes >= budget.max_bytes
                 || report.events_drained >= budget.max_events
             {
                 report.budget_exhausted =
@@ -369,13 +374,14 @@ impl TelnetSession {
     }
 
     fn feed_transport_output(&mut self, bytes: &[u8]) {
-        let processed_output = self.process_terminal_output(bytes);
-        let bytes = processed_output.as_ref();
         let events = self.modem_consumer.process_server_output(bytes);
         self.handle_modem_consumer_events(events);
     }
 
     fn feed_plain_transport_output(&mut self, bytes: &[u8]) {
+        // Preserve protocol bytes before optional plugin display transforms.
+        let processed_output = self.process_terminal_output(bytes);
+        let bytes = processed_output.as_ref();
         for kind in self.magic_scan.scan(bytes) {
             self.pending_events.push(TerminalEvent::MagicDetected(kind));
         }
@@ -427,10 +433,19 @@ impl TelnetSession {
     }
 
     fn flush_modem_server_writes(&mut self) -> bool {
+        let Some(transfer) = self.modem_consumer.active_transfer_input() else {
+            return false;
+        };
         let mut changed = false;
-        for bytes in self.modem_consumer.take_server_writes() {
-            let _ = self.write_protocol_bytes(&bytes);
-            changed = true;
+        while let Some(bytes) = transfer.take_server_write() {
+            let byte_len = bytes.len();
+            if self.write_protocol_bytes(&bytes).is_ok() {
+                transfer.complete_server_write(byte_len);
+                changed = true;
+            } else {
+                transfer.restore_server_write(bytes);
+                break;
+            }
         }
         changed
     }
@@ -526,6 +541,19 @@ impl TelnetSession {
             .try_send(command)
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
+
+    fn control_command_byte(command: TelnetControlCommand) -> u8 {
+        match command {
+            TelnetControlCommand::NoOperation => TELNET_COMMAND_NOP,
+            TelnetControlCommand::Break => TELNET_COMMAND_BRK,
+            TelnetControlCommand::InterruptProcess => TELNET_COMMAND_IP,
+            TelnetControlCommand::AbortOutput => TELNET_COMMAND_AO,
+            TelnetControlCommand::AreYouThere => TELNET_COMMAND_AYT,
+            TelnetControlCommand::EraseCharacter => TELNET_COMMAND_EC,
+            TelnetControlCommand::EraseLine => TELNET_COMMAND_EL,
+            TelnetControlCommand::GoAhead => TELNET_COMMAND_GA,
+        }
+    }
 }
 
 impl TerminalSessionBackend for TelnetSession {
@@ -558,7 +586,7 @@ impl TerminalSessionBackend for TelnetSession {
         if self.flush_modem_server_writes() {
             report.mark_changed();
         }
-        while report.events_drained < budget.max_events {
+        while report.events_drained < budget.max_events && !budget.time_exhausted(started) {
             let Ok(event) = self.event_rx.try_recv() else {
                 break;
             };
@@ -567,11 +595,17 @@ impl TerminalSessionBackend for TelnetSession {
                 report.mark_changed();
             }
         }
-        if report.events_drained >= budget.max_events && !self.event_rx.is_empty() {
+        if (report.events_drained >= budget.max_events || budget.time_exhausted(started))
+            && !self.event_rx.is_empty()
+        {
             report.budget_exhausted = true;
         }
         report.drain_duration = started.elapsed();
         report
+    }
+
+    fn activity_receiver(&self) -> TerminalActivityReceiver {
+        self.event_rx.activity_receiver()
     }
 
     fn take_events(&mut self) -> Vec<TerminalEvent> {
@@ -587,6 +621,13 @@ impl TerminalSessionBackend for TelnetSession {
             self.send_command(TelnetCommand::Data(bytes.to_vec()))?;
         }
         Ok(())
+    }
+
+    fn send_telnet_control(&mut self, command: TelnetControlCommand) -> Result<()> {
+        if !self.lifecycle.is_running() {
+            bail!("Telnet session is not running")
+        }
+        self.send_command(TelnetCommand::Control(command))
     }
 
     fn write_text(&mut self, text: &str) -> Result<()> {
@@ -634,7 +675,8 @@ impl TerminalSessionBackend for TelnetSession {
     }
 
     fn finish_modem_transfer(&mut self) {
-        self.modem_consumer.finish_transfer();
+        let trailing_output = self.modem_consumer.finish_transfer();
+        self.feed_plain_transport_output(&trailing_output);
     }
 
     fn mode(&self) -> TermMode {
@@ -709,47 +751,15 @@ impl TerminalSessionBackend for TelnetSession {
     }
 
     fn search_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
-        let query = query.trim();
-        if query.is_empty() {
-            return Vec::new();
-        }
-
         let term = self.term.lock();
-        let grid = term.grid();
-        let top_line = -(term.total_lines().saturating_sub(term.screen_lines()) as i32);
-        let bottom_line = term.screen_lines() as i32;
-        let mut matches = Vec::new();
-        let mut logical_text = String::new();
-        let mut logical_map = Vec::new();
+        search_matches_from_term(&term, self.resize.cols, query)
+    }
 
-        for line in top_line..bottom_line {
-            let row = &grid[Line(line)];
-            append_grid_line_text(
-                row[..].iter(),
-                line,
-                self.resize.cols,
-                &mut logical_text,
-                &mut logical_map,
-            );
-
-            let wrapped = row.last().is_some_and(|cell| {
-                cell.flags
-                    .contains(alacritty_terminal::term::cell::Flags::WRAPLINE)
-            });
-            if wrapped && line + 1 < bottom_line {
-                continue;
-            }
-
-            matches.extend(search_logical_line_matches(
-                &logical_text,
-                &logical_map,
-                query,
-                self.resize.cols,
-            ));
-            logical_text.clear();
-            logical_map.clear();
-        }
-        matches
+    fn search_source(&self) -> Option<crate::TerminalSearchSource> {
+        Some(crate::TerminalSearchSource::new(
+            self.term.clone(),
+            self.resize.cols,
+        ))
     }
 
     fn clear_buffer(&mut self) {
@@ -779,6 +789,21 @@ impl TerminalSessionBackend for TelnetSession {
                 cell_height: self.resize.cell_height,
             },
             &self.graphics,
+        )
+    }
+
+    fn snapshot_incremental(&self, previous: &TerminalSnapshot) -> TerminalSnapshot {
+        let mut term = self.term.lock();
+        incremental_snapshot_from_term(
+            &mut term,
+            TerminalSize {
+                cols: self.resize.cols,
+                rows: self.resize.rows,
+                cell_width: self.resize.cell_width,
+                cell_height: self.resize.cell_height,
+            },
+            &self.graphics,
+            previous,
         )
     }
 
@@ -893,6 +918,15 @@ async fn run_telnet_worker(
                             break;
                         }
                     }
+                    Some(TelnetCommand::Control(command)) => {
+                        // Protocol controls must bypass normal data escaping so
+                        // the peer receives one IAC command rather than literal bytes.
+                        let bytes = [TELNET_COMMAND_IAC, TelnetSession::control_command_byte(command)];
+                        if writer.write_all(&bytes).await.is_err() {
+                            let _ = worker_tx.send_control(TelnetWorkerEvent::Closed);
+                            break;
+                        }
+                    }
                     Some(TelnetCommand::Resize { cols, rows }) => {
                         codec.set_window_size(cols, rows);
                         if writer.write_all(&codec.naws_message()).await.is_err() {
@@ -925,6 +959,22 @@ fn telnet_escape_iac_payload(bytes: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod telnet_tests {
     use super::*;
+
+    #[test]
+    fn telnet_control_commands_map_to_protocol_bytes() {
+        assert_eq!(
+            TelnetSession::control_command_byte(TelnetControlCommand::InterruptProcess),
+            TELNET_COMMAND_IP
+        );
+        assert_eq!(
+            TelnetSession::control_command_byte(TelnetControlCommand::AreYouThere),
+            TELNET_COMMAND_AYT
+        );
+        assert_eq!(
+            TelnetSession::control_command_byte(TelnetControlCommand::Break),
+            TELNET_COMMAND_BRK
+        );
+    }
 
     #[test]
     fn telnet_codec_filters_negotiation_and_answers_supported_options() {

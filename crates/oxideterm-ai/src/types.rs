@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -7,6 +7,33 @@ use crate::{
     policy::{AiPolicySafetyMode, AiToolUsePolicy},
     profiles::AiExecutionBackend,
 };
+
+/// Shares one zeroizing provider-key buffer across related request rounds.
+///
+/// Cloning this handle never duplicates the secret bytes. The buffer is
+/// zeroized when the final request/configuration owner releases it.
+#[derive(Clone)]
+pub struct SharedAiProviderKey(Arc<Zeroizing<String>>);
+
+impl SharedAiProviderKey {
+    pub fn new(api_key: Zeroizing<String>) -> Self {
+        Self(Arc::new(api_key))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for SharedAiProviderKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SharedAiProviderKey(<redacted>)")
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AiProviderTemplate {
@@ -113,6 +140,8 @@ pub struct AiChatMessageMetadata {
     pub compacted_at_ms: Option<i64>,
     #[serde(default)]
     pub original_messages: Option<Vec<AiChatMessage>>,
+    #[serde(default)]
+    pub original_user_count: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -132,6 +161,9 @@ pub struct AiConversation {
     pub session_metadata: Option<serde_json::Value>,
     #[serde(default = "default_messages_loaded")]
     pub messages_loaded: bool,
+    // Keep additive fields at the end because MessagePack stores structs positionally.
+    #[serde(default)]
+    pub turn_count: usize,
 }
 
 fn default_messages_loaded() -> bool {
@@ -211,11 +243,15 @@ pub struct AiChatStreamConfig {
     pub provider_type: String,
     pub base_url: String,
     pub model: String,
-    pub api_key: Option<Zeroizing<String>>,
+    pub api_key: Option<SharedAiProviderKey>,
     pub max_response_tokens: Option<i64>,
     pub reasoning_effort: Option<String>,
     pub safety_mode: AiPolicySafetyMode,
     pub profile_id: Option<String>,
+    /// Already-scoped, redacted memory selected at the application boundary.
+    pub memory_context: Option<String>,
+    /// Entry identifiers used for local usage accounting; never sent to providers.
+    pub memory_entry_ids: Vec<String>,
     pub tool_policy: AiToolUsePolicy,
     pub tools: Vec<AiToolDefinition>,
     pub tool_choice: AiToolChoice,
@@ -225,6 +261,11 @@ pub struct AiChatStreamConfig {
 pub enum AiStreamEvent {
     Content(String),
     Thinking(String),
+    /// Opaque provider metadata that must survive a provider-owned replay.
+    ProviderResponsePart {
+        provider_type: String,
+        part: serde_json::Value,
+    },
     ToolCall {
         id: String,
         name: String,

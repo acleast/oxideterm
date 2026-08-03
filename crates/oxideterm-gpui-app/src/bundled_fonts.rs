@@ -104,7 +104,13 @@ pub(crate) fn load_terminal_font_open_critical(
     register_faces(text_system, &faces)
 }
 
-pub(crate) fn load_terminal_cjk_fallback_regular(text_system: &TextSystem) -> Result<()> {
+pub(crate) fn load_terminal_cjk_fallback_regular(
+    text_system: &TextSystem,
+    cjk_font_family: &str,
+) -> Result<()> {
+    if !should_load_terminal_cjk_fallback(cjk_font_family) {
+        return Ok(());
+    }
     register_faces(text_system, &[BundledTerminalFace::MapleRegular])
 }
 
@@ -136,6 +142,10 @@ fn critical_faces_for_family(family: FontFamily) -> &'static [BundledTerminalFac
 
 fn critical_faces_for_settings(settings: &PersistedSettings) -> Vec<BundledTerminalFace> {
     let mut faces = critical_faces_for_family(settings.terminal.font_family).to_vec();
+    if faces.is_empty() {
+        // System and custom choices still need a bundled monospace fallback if lookup fails.
+        faces.extend_from_slice(critical_faces_for_family(FontFamily::Jetbrains));
+    }
     if settings.terminal.cjk_font_family.trim() == oxideterm_settings::MAPLE_MONO_SUBSET_FAMILY
         && !faces.contains(&BundledTerminalFace::MapleRegular)
     {
@@ -144,6 +154,11 @@ fn critical_faces_for_settings(settings: &PersistedSettings) -> Vec<BundledTermi
         faces.push(BundledTerminalFace::MapleRegular);
     }
     faces
+}
+
+fn should_load_terminal_cjk_fallback(cjk_font_family: &str) -> bool {
+    let cjk_font_family = cjk_font_family.trim();
+    cjk_font_family.is_empty() || cjk_font_family == oxideterm_settings::MAPLE_MONO_SUBSET_FAMILY
 }
 
 fn secondary_faces_for_explicit_settings(settings: &PersistedSettings) -> Vec<BundledTerminalFace> {
@@ -210,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_terminal_faces_use_runtime_family_names() {
+    fn bundled_terminal_faces_use_one_runtime_family_name() {
         for face in ALL_TERMINAL_FACES {
             let expected_family = match face {
                 BundledTerminalFace::JetBrainsRegular
@@ -231,9 +246,34 @@ mod tests {
                 }
             };
 
+            let runtime_family_names = sfnt_runtime_family_names(face.bytes());
+            assert!(
+                !runtime_family_names.is_empty(),
+                "{face:?} must declare a runtime family name"
+            );
+            assert!(
+                runtime_family_names
+                    .iter()
+                    .all(|family| family == expected_family),
+                "{face:?} declares conflicting runtime family names: {runtime_family_names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn system_and_custom_settings_load_bundled_monospace_fallback() {
+        for font_family in [
+            FontFamily::Cascadia,
+            FontFamily::Consolas,
+            FontFamily::Menlo,
+            FontFamily::Custom,
+        ] {
+            let mut settings = PersistedSettings::default();
+            settings.terminal.font_family = font_family;
+
             assert_eq!(
-                sfnt_family_name(face.bytes()).as_deref(),
-                Some(expected_family)
+                critical_faces_for_settings(&settings),
+                critical_faces_for_family(FontFamily::Jetbrains)
             );
         }
     }
@@ -278,6 +318,17 @@ mod tests {
     }
 
     #[test]
+    fn terminal_cjk_fallback_loads_only_for_auto_or_maple() {
+        assert!(should_load_terminal_cjk_fallback(""));
+        assert!(should_load_terminal_cjk_fallback("   "));
+        assert!(should_load_terminal_cjk_fallback(
+            oxideterm_settings::MAPLE_MONO_SUBSET_FAMILY
+        ));
+        assert!(!should_load_terminal_cjk_fallback("PingFang SC"));
+        assert!(!should_load_terminal_cjk_fallback("Noto Sans Mono CJK SC"));
+    }
+
+    #[test]
     fn secondary_cjk_faces_are_loaded_only_for_explicit_maple_settings() {
         let mut settings = PersistedSettings::default();
         assert!(secondary_faces_for_explicit_settings(&settings).is_empty());
@@ -298,11 +349,17 @@ mod tests {
         bytes.starts_with(b"\0\x01\0\0") || bytes.starts_with(b"OTTO") || bytes.starts_with(b"ttcf")
     }
 
-    fn sfnt_family_name(bytes: &[u8]) -> Option<String> {
-        let face = ttf_parser::Face::parse(bytes, 0).ok()?;
+    fn sfnt_runtime_family_names(bytes: &[u8]) -> Vec<String> {
+        let Ok(face) = ttf_parser::Face::parse(bytes, 0) else {
+            return Vec::new();
+        };
         face.names()
             .into_iter()
-            .find(|name| name.name_id == ttf_parser::name_id::FAMILY)
-            .and_then(|name| name.to_string())
+            .filter(|name| {
+                name.name_id == ttf_parser::name_id::FAMILY
+                    || name.name_id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY
+            })
+            .filter_map(|name| name.to_string())
+            .collect()
     }
 }

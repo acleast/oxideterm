@@ -59,6 +59,8 @@ pub struct TerminalCommandBarSettings {
     pub show_current_directory: bool,
     pub smart_completion: bool,
     pub quick_commands_enabled: bool,
+    #[serde(default)]
+    pub quick_bar_enabled: bool,
     pub quick_commands_confirm_before_run: bool,
     pub quick_commands_show_toast: bool,
     pub focus_handoff_commands: Vec<String>,
@@ -104,6 +106,7 @@ impl Default for TerminalCommandBarSettings {
             show_current_directory: true,
             smart_completion: true,
             quick_commands_enabled: true,
+            quick_bar_enabled: false,
             quick_commands_confirm_before_run: false,
             quick_commands_show_toast: true,
             focus_handoff_commands: RECOMMENDED_FOCUS_HANDOFF_COMMANDS
@@ -274,6 +277,10 @@ pub struct TerminalSettings {
     pub osc52_clipboard_read: bool,
     pub copy_on_select: bool,
     pub middle_click_paste: bool,
+    // Right-click paste stays opt-in because right click normally opens the
+    // terminal context menu and can be reported to mouse-aware applications.
+    #[serde(default)]
+    pub right_click_paste: bool,
     #[serde(default = "default_open_links_with_modifier")]
     pub open_links_with_modifier: bool,
     #[serde(default = "default_detect_file_paths_as_links")]
@@ -333,6 +340,7 @@ impl Default for TerminalSettings {
             osc52_clipboard_read: false,
             copy_on_select: false,
             middle_click_paste: false,
+            right_click_paste: false,
             open_links_with_modifier: true,
             detect_file_paths_as_links: true,
             selection_requires_shift: false,
@@ -471,6 +479,19 @@ mod tests {
     }
 
     #[test]
+    fn terminal_settings_default_right_click_paste_when_missing() {
+        let mut value = serde_json::to_value(TerminalSettings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("rightClickPaste");
+
+        let settings: TerminalSettings = serde_json::from_value(value).unwrap();
+
+        assert!(!settings.right_click_paste);
+    }
+
+    #[test]
     fn terminal_settings_require_modifier_for_links_when_setting_is_missing() {
         let mut value = serde_json::to_value(TerminalSettings::default()).unwrap();
         value
@@ -535,5 +556,15 @@ mod tests {
         let settings: TerminalCommandBarSettings = serde_json::from_value(value).unwrap();
 
         assert!(settings.project_tasks);
+    }
+
+    #[test]
+    fn command_bar_settings_default_quick_bar_to_disabled_when_missing() {
+        let mut value = serde_json::to_value(TerminalCommandBarSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("quickBarEnabled");
+
+        let settings: TerminalCommandBarSettings = serde_json::from_value(value).unwrap();
+
+        assert!(!settings.quick_bar_enabled);
     }
 }

@@ -211,6 +211,10 @@ pub fn text_input_with_content_align(
         } else {
             rgb(theme.text)
         })
+        // Text inputs are single-line controls. This also constrains the
+        // custom caret/selection overlay, whose StyledText otherwise wraps
+        // when a centered flex child is measured below its content width.
+        .whitespace_nowrap()
         .cursor(CursorStyle::IBeam)
         .overflow_hidden()
         .child({
@@ -319,6 +323,44 @@ fn text_input_value_segments_with_marked_text(
                 .child(marked_display.to_string()),
         )
         .when(!after.is_empty(), |row| row.child(after))
+}
+
+pub fn text_input_value_segments_with_marked_range(
+    tokens: &ThemeTokens,
+    display: &str,
+    marked_range: Range<usize>,
+) -> Div {
+    let (before, marked, after) = text_input_projected_marked_parts(display, marked_range);
+
+    // Multiline editors already project composition into their display text.
+    // This renderer marks the projected range without drawing a second copy.
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .text_color(rgb(tokens.ui.text))
+        .when(!before.is_empty(), |row| row.child(before))
+        .child(
+            div()
+                .underline()
+                .text_color(rgb(tokens.ui.text))
+                .child(marked),
+        )
+        .when(!after.is_empty(), |row| row.child(after))
+}
+
+fn text_input_projected_marked_parts(
+    display: &str,
+    marked_range: Range<usize>,
+) -> (String, String, String) {
+    let len = display.encode_utf16().count();
+    let start = marked_range.start.min(len);
+    let end = marked_range.end.max(start).min(len);
+    let before = utf16_slice(display, 0..start);
+    let marked = utf16_slice(display, start..end);
+    let after = utf16_slice(display, end..len);
+
+    (before, marked, after)
 }
 
 fn text_input_marked_display_parts(display: &str, marked_range: Range<usize>) -> (String, String) {
@@ -583,7 +625,10 @@ fn secret_mask_offset_for_utf16(raw_value: &str, offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{text_input_marked_display_parts, text_input_secret_mask, text_input_visual_range};
+    use super::{
+        text_input_marked_display_parts, text_input_projected_marked_parts, text_input_secret_mask,
+        text_input_visual_range,
+    };
 
     #[test]
     fn secret_mask_uses_one_visible_glyph_per_scalar() {
@@ -614,6 +659,14 @@ mod tests {
         assert_eq!(
             text_input_marked_display_parts("a🔒b", 1..3),
             ("a".to_string(), "b".to_string())
+        );
+    }
+
+    #[test]
+    fn projected_marked_parts_render_composition_once_at_utf16_range() {
+        assert_eq!(
+            text_input_projected_marked_parts("a感激b", 1..3),
+            ("a".to_string(), "感激".to_string(), "b".to_string())
         );
     }
 }

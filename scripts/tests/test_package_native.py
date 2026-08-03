@@ -48,13 +48,6 @@ class WindowsInstallerScriptTests(unittest.TestCase):
         self.assertIn("WriteRegStr HKCU", script)
         self.assertIn('VIProductVersion "1.2.0.0"', script)
         self.assertIn('"ProductVersion" "1.2.0-gpui-preview.2"', script)
-        icon_path = package_native.nsis_path(Path(r"C:\icons\icon.ico"))
-        self.assertIn(f'!define MUI_ICON "{icon_path}"', script)
-        self.assertIn(f'!define MUI_UNICON "{icon_path}"', script)
-        self.assertIn(
-            r'!define MUI_FINISHPAGE_RUN "$INSTDIR\oxideterm-native.exe"',
-            script,
-        )
         self.assertIn("normal_install:", script)
         self.assertIn("!insertmacro MUI_PAGE_COMPONENTS", script)
         self.assertIn('Section "Application Files"', script)
@@ -103,7 +96,27 @@ class WindowsInstallerScriptTests(unittest.TestCase):
 
         self.assertEqual(script.count(display_icon_entry), 2)
 
-    def test_stable_installer_does_not_silently_upgrade_legacy_install(self) -> None:
+    def test_modern_ui_uses_the_application_icon(self) -> None:
+        icon_path = Path(r"C:\icons\icon.ico")
+        script = package_native.windows_installer_script(
+            binary=Path("oxideterm-native.exe"),
+            version="1.2.0-gpui-preview.2",
+            identity=self.identity(),
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\OxideTerm_setup.exe"),
+            icon_path=icon_path,
+        )
+        resolved_icon = package_native.nsis_path(icon_path)
+        installer_icon = f'!define MUI_ICON "{resolved_icon}"'
+        uninstaller_icon = f'!define MUI_UNICON "{resolved_icon}"'
+
+        self.assertIn(installer_icon, script)
+        self.assertIn(uninstaller_icon, script)
+        self.assertLess(script.index(installer_icon), script.index("!include MUI2.nsh"))
+        self.assertNotIn('\nIcon "', script)
+        self.assertNotIn("\nUninstallIcon ", script)
+
+    def test_stable_installer_detects_tauri_current_user_install(self) -> None:
         identity = package_native.release_identity("v2.0.0", "2.0.0")
         script = package_native.windows_installer_script(
             binary=Path("oxideterm-native.exe"),
@@ -114,10 +127,17 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             icon_path=Path(r"C:\icons\icon.ico"),
         )
 
-        self.assertNotIn('$LOCALAPPDATA\\OxideTerm\\oxideterm.exe', script)
-        self.assertNotIn('IsLegacyUpgrade', script)
-        self.assertEqual(script.count('SetSilent silent'), 1)
-        self.assertIn('IfErrors normal_install_mode oxide_update_mode', script)
+        self.assertIn('$LOCALAPPDATA\\OxideTerm\\oxideterm.exe', script)
+        self.assertIn('StrCpy $INSTDIR "$LOCALAPPDATA\\OxideTerm"', script)
+        self.assertIn('StrCpy $IsOxideUpdate "1"', script)
+        self.assertIn('StrCpy $IsLegacyUpgrade "1"', script)
+        self.assertIn('SetSilent silent', script)
+        self.assertIn(
+            'CreateShortcut "$SMPROGRAMS\\OxideTerm\\OxideTerm.lnk" '
+            '"$INSTDIR\\oxideterm-native.exe"',
+            script,
+        )
+        self.assertIn('IfFileExists "$DESKTOP\\OxideTerm.lnk"', script)
 
 
 class MacosBridgeArchiveTests(unittest.TestCase):
@@ -241,6 +261,73 @@ class MacosDmgDetachTests(unittest.TestCase):
             sleep.call_count, package_native.MACOS_DMG_DETACH_MAX_ATTEMPTS - 1
         )
 
+    def test_retries_busy_force_detach_before_succeeding(self) -> None:
+        device = "/dev/disk9"
+        detach_command = ["hdiutil", "detach", device]
+        force_detach_command = ["hdiutil", "detach", "-force", device]
+        busy_error = subprocess.CalledProcessError(
+            package_native.MACOS_RESOURCE_BUSY_EXIT_CODE, detach_command
+        )
+        failed_attempts = [
+            busy_error for _ in range(package_native.MACOS_DMG_DETACH_MAX_ATTEMPTS)
+        ]
+
+        with (
+            patch.object(
+                package_native,
+                "run",
+                side_effect=[*failed_attempts, busy_error, None],
+            ) as run_mock,
+            patch.object(
+                package_native, "macos_dmg_device_is_attached", return_value=True
+            ),
+            patch.object(package_native.time, "sleep") as sleep,
+        ):
+            package_native.detach_macos_dmg(device)
+
+        self.assertEqual(
+            run_mock.call_args_list,
+            [call(detach_command)] * package_native.MACOS_DMG_DETACH_MAX_ATTEMPTS
+            + [call(force_detach_command), call(force_detach_command)],
+        )
+        self.assertEqual(
+            sleep.call_count, package_native.MACOS_DMG_DETACH_MAX_ATTEMPTS
+        )
+
+    def test_reports_busy_after_force_detach_retry_limit(self) -> None:
+        device = "/dev/disk9"
+        detach_command = ["hdiutil", "detach", device]
+        force_detach_command = ["hdiutil", "detach", "-force", device]
+        busy_error = subprocess.CalledProcessError(
+            package_native.MACOS_RESOURCE_BUSY_EXIT_CODE, detach_command
+        )
+        failed_attempt_count = (
+            package_native.MACOS_DMG_DETACH_MAX_ATTEMPTS
+            + package_native.MACOS_DMG_FORCE_DETACH_MAX_ATTEMPTS
+        )
+
+        with (
+            patch.object(
+                package_native,
+                "run",
+                side_effect=[busy_error for _ in range(failed_attempt_count)],
+            ) as run_mock,
+            patch.object(
+                package_native, "macos_dmg_device_is_attached", return_value=True
+            ),
+            patch.object(package_native.time, "sleep") as sleep,
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            package_native.detach_macos_dmg(device)
+
+        self.assertEqual(
+            run_mock.call_args_list,
+            [call(detach_command)] * package_native.MACOS_DMG_DETACH_MAX_ATTEMPTS
+            + [call(force_detach_command)]
+            * package_native.MACOS_DMG_FORCE_DETACH_MAX_ATTEMPTS,
+        )
+        self.assertEqual(sleep.call_count, failed_attempt_count - 2)
+
     def test_does_not_retry_non_busy_detach_error(self) -> None:
         device = "/dev/disk9"
         detach_command = ["hdiutil", "detach", device]
@@ -276,9 +363,7 @@ class MacosDmgDetachTests(unittest.TestCase):
 
         run_mock.assert_called_once_with(detach_command)
         device_is_attached.assert_called_once_with(device)
-        sleep.assert_called_once_with(
-            package_native.MACOS_DMG_DETACH_RETRY_DELAY_SECONDS
-        )
+        sleep.assert_not_called()
 
 
 class ReleaseDocumentTests(unittest.TestCase):
@@ -311,6 +396,29 @@ class ReleaseDocumentTests(unittest.TestCase):
                 (destination / "AGENT_THIRD_PARTY_NOTICES.md").stat().st_size,
                 0,
             )
+
+    def test_portable_update_manifest_owns_only_release_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package_root = Path(directory)
+            binary = package_root / "oxideterm-native"
+            update_helper = package_root / "oxideterm-update-helper"
+
+            package_native.write_portable_update_manifest(
+                package_root, binary, update_helper
+            )
+
+            manifest = package_native.json.loads(
+                (package_root / "portable-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["appExecutable"], binary.name)
+            self.assertEqual(
+                manifest["updateHelper"],
+                f"tools/{update_helper.name}",
+            )
+            self.assertIn("resources", manifest["managedEntries"])
+            self.assertIn("tools", manifest["managedEntries"])
+            self.assertNotIn("data", manifest["managedEntries"])
+            self.assertNotIn("portable.json", manifest["managedEntries"])
 
 
 class ReleaseVersionTests(unittest.TestCase):

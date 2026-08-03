@@ -2,7 +2,7 @@ struct PlaybackTerminalSession {
     term: Arc<FairMutex<Term<LocalEventListener>>>,
     listener: LocalEventListener,
     parser: Processor,
-    event_rx: Receiver<AlacEvent>,
+    event_rx: LocalEventReceiver,
     pending_events: Vec<TerminalEvent>,
     size: TerminalSize,
     graphics_options: GraphicsOptions,
@@ -20,8 +20,7 @@ impl PlaybackTerminalSession {
         graphics_options: GraphicsOptions,
         scrollback_lines: usize,
     ) -> Self {
-        let (event_tx, event_rx) = unbounded();
-        let listener = LocalEventListener { tx: event_tx };
+        let (listener, event_rx) = local_event_channel();
         let size = TerminalSize {
             cols: cols.max(2),
             rows: rows.max(2),
@@ -136,48 +135,10 @@ impl PlaybackTerminalSession {
     }
 
     fn search_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
-        let query = query.trim();
-        if query.is_empty() {
-            return Vec::new();
-        }
-
         let term = self.term.lock();
-        let grid = term.grid();
-        let top_line = -(term.total_lines().saturating_sub(term.screen_lines()) as i32);
-        let bottom_line = term.screen_lines() as i32;
-        let mut matches = Vec::new();
-        let mut logical_text = String::new();
-        let mut logical_map = Vec::new();
-
-        for line in top_line..bottom_line {
-            let row = &grid[Line(line)];
-            append_grid_line_text(
-                row[..].iter(),
-                line,
-                self.size.cols,
-                &mut logical_text,
-                &mut logical_map,
-            );
-
-            let wrapped = row
-                .last()
-                .is_some_and(|cell| cell.flags.contains(alacritty_terminal::term::cell::Flags::WRAPLINE));
-            if wrapped && line + 1 < bottom_line {
-                continue;
-            }
-
-            matches.extend(search_logical_line_matches(
-                &logical_text,
-                &logical_map,
-                query,
-                self.size.cols,
-            ));
-            logical_text.clear();
-            logical_map.clear();
-        }
-
-        matches
+        search_matches_from_term(&term, self.size.cols, query)
     }
+
 }
 
 impl TerminalSessionBackend for PlaybackTerminalSession {
@@ -214,6 +175,10 @@ impl TerminalSessionBackend for PlaybackTerminalSession {
             report.mark_changed();
         }
         report
+    }
+
+    fn activity_receiver(&self) -> TerminalActivityReceiver {
+        self.event_rx.activity_receiver()
     }
 
     fn take_events(&mut self) -> Vec<TerminalEvent> {
@@ -309,6 +274,13 @@ impl TerminalSessionBackend for PlaybackTerminalSession {
         PlaybackTerminalSession::search_matches(self, query)
     }
 
+    fn search_source(&self) -> Option<crate::TerminalSearchSource> {
+        Some(crate::TerminalSearchSource::new(
+            self.term.clone(),
+            self.size.cols,
+        ))
+    }
+
     fn clear_buffer(&mut self) {
         let mut term = self.term.lock();
         clear_terminal_buffer(&mut term);
@@ -323,6 +295,11 @@ impl TerminalSessionBackend for PlaybackTerminalSession {
     fn snapshot(&self) -> TerminalSnapshot {
         let term = self.term.lock();
         snapshot_from_term(&term, self.size, &self.graphics)
+    }
+
+    fn snapshot_incremental(&self, previous: &TerminalSnapshot) -> TerminalSnapshot {
+        let mut term = self.term.lock();
+        incremental_snapshot_from_term(&mut term, self.size, &self.graphics, previous)
     }
 
     fn snapshot_with_display_offset(

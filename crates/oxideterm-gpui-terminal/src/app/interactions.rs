@@ -1,4 +1,4 @@
-use std::{env, sync::Arc, time::Duration};
+use std::{env, time::Duration};
 
 use gpui::{
     ClipboardItem, Context, KeyDownEvent, KeyUpEvent, Modifiers, MouseButton, MouseDownEvent,
@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::{
     FreeTypeDragAction, FreeTypeDragState, PendingTerminalEditorClipboard, ScrollbarDrag,
-    ScrollbarGeometry, TerminalContextMenu, TerminalPane, autosuggest_mode_available,
+    ScrollbarGeometry, TerminalContextMenu, TerminalPane, TerminalPaneEvent,
     command_mark_ui_available,
 };
 use crate::command_facts::TerminalAutosuggestInputState;
@@ -91,6 +91,7 @@ impl TerminalPane {
             // after Workspace confirms the active scope has one fillable
             // credential and mirrors that as the visible inline hint.
             self.privilege_prompt_submit_requested = true;
+            cx.emit(TerminalPaneEvent::PrivilegePromptSubmitRequested);
             cx.notify();
             return true;
         }
@@ -181,49 +182,6 @@ impl TerminalPane {
         } else {
             KittyKeyEventType::Press
         };
-        // Inline autosuggest: Up/Down cycles through multiple ghost text
-        // candidates; Right arrow accepts the currently shown suggestion.
-        // Only active at the shell prompt when the cursor is at the end of
-        // the typed input so shell history navigation still works elsewhere.
-        if self.terminal_accepts_input()
-            && autosuggest_mode_available(mode)
-            && self.autosuggest_prompt_active()
-            && self.input_tracker.state().is_cursor_at_end
-            && !self.ghost_text_candidates.is_empty()
-            && !modifiers.platform
-            && !modifiers.control
-            && !modifiers.alt
-            && !modifiers.shift
-        {
-            match key {
-                "down" | "arrowdown" => {
-                    let len = self.ghost_text_candidates.len();
-                    self.ghost_text_index = (self.ghost_text_index + 1) % len;
-                    cx.notify();
-                    return true;
-                }
-                "up" | "arrowup" => {
-                    let len = self.ghost_text_candidates.len();
-                    self.ghost_text_index = if self.ghost_text_index == 0 {
-                        len - 1
-                    } else {
-                        self.ghost_text_index - 1
-                    };
-                    cx.notify();
-                    return true;
-                }
-                "right" | "arrowright" => {
-                    let index = self
-                        .ghost_text_index
-                        .min(self.ghost_text_candidates.len() - 1);
-                    if let Some(ghost) = self.ghost_text_candidates.get(index).cloned() {
-                        self.send_user_protocol_bytes(ghost.as_bytes(), cx);
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-        }
         if let Some(sequence) = configurable_key_escape_sequence(
             &event.keystroke,
             &mode,
@@ -1009,10 +967,6 @@ impl TerminalPane {
         cx.notify();
     }
 
-    fn current_search_matches(&mut self) -> Arc<[TerminalSearchMatch]> {
-        self.refresh_search_cache()
-    }
-
     pub(super) fn select_next_search_match(&mut self, forward: bool, cx: &mut Context<Self>) {
         let matches = self.current_search_matches();
         if matches.is_empty() {
@@ -1108,6 +1062,11 @@ impl TerminalPane {
         if event.button == MouseButton::Middle
             && self.settings.middle_click_paste
             && !mouse_tracking_active(mode)
+        {
+            return;
+        }
+        if event.button == MouseButton::Right
+            && right_click_paste_requested(self.settings.right_click_paste, mode, event.modifiers)
         {
             return;
         }
@@ -1268,6 +1227,13 @@ impl TerminalPane {
         if event.button == MouseButton::Middle
             && self.settings.middle_click_paste
             && !mouse_tracking_active(mode)
+        {
+            self.last_mouse_report_point = None;
+            self.paste_from_clipboard(cx);
+            return;
+        }
+        if event.button == MouseButton::Right
+            && right_click_paste_requested(self.settings.right_click_paste, mode, event.modifiers)
         {
             self.last_mouse_report_point = None;
             self.paste_from_clipboard(cx);
@@ -1667,10 +1633,20 @@ impl TerminalPane {
             cx.notify();
         }
     }
+
+    pub(crate) fn right_click_paste_requested(&self, mode: TermMode, modifiers: Modifiers) -> bool {
+        right_click_paste_requested(self.settings.right_click_paste, mode, modifiers)
+    }
 }
 
 fn mouse_tracking_active(mode: TermMode) -> bool {
     mode.intersects(TermMode::MOUSE_MODE)
+}
+
+fn right_click_paste_requested(enabled: bool, mode: TermMode, modifiers: Modifiers) -> bool {
+    // Shift remains the local escape hatch for the context menu. Applications
+    // that requested mouse tracking continue to own unmodified right clicks.
+    enabled && !modifiers.shift && !mouse_tracking_active(mode)
 }
 
 fn terminal_selection_autoscroll_delta_rows(
@@ -2632,6 +2608,33 @@ mod tests {
             hyperlink: None,
             cursor: false,
         }
+    }
+
+    #[test]
+    fn right_click_paste_preserves_context_menu_and_remote_mouse_ownership() {
+        assert!(right_click_paste_requested(
+            true,
+            TermMode::NONE,
+            Modifiers::default()
+        ));
+        assert!(!right_click_paste_requested(
+            false,
+            TermMode::NONE,
+            Modifiers::default()
+        ));
+        assert!(!right_click_paste_requested(
+            true,
+            TermMode::NONE,
+            Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            }
+        ));
+        assert!(!right_click_paste_requested(
+            true,
+            TermMode::MOUSE_MODE,
+            Modifiers::default()
+        ));
     }
 
     fn test_row(text: &str, active_input: bool) -> TerminalRow {

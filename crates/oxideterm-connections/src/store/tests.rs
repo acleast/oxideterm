@@ -33,12 +33,286 @@ mod tests {
             identity_agent: None,
             agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
+            x11_forwarding: ConnectionX11ForwardingOptions::default(),
+            dedicated_new_terminal_connection: false,
             post_connect_command: None,
+            terminal: ConnectionTerminalOptions::default(),
         }
     }
 
     fn load_empty_store(name: &str) -> ConnectionStore {
         ConnectionStore::load(temp_store_path(name)).expect("store should load")
+    }
+
+    #[test]
+    fn terminal_options_round_trip_without_changing_legacy_defaults() {
+        let default_options = serde_json::to_value(ConnectionOptions::default()).unwrap();
+        assert!(default_options.get("terminal").is_none());
+        assert!(default_options.get("x11_forwarding").is_none());
+        assert!(
+            default_options
+                .get("dedicated_new_terminal_connection")
+                .is_none()
+        );
+
+        let options = ConnectionOptions {
+            dedicated_new_terminal_connection: true,
+            terminal: ConnectionTerminalOptions {
+                encoding: Some(ConnectionTerminalEncoding::Utf8),
+                backspace_sequence: Some(ConnectionTerminalBackspaceSequence::ControlH),
+                delete_sequence: Some(ConnectionTerminalDeleteSequence::Delete),
+            },
+            ..ConnectionOptions::default()
+        };
+        let serialized = serde_json::to_value(&options).unwrap();
+        assert_eq!(serialized["terminal"]["encoding"], "utf-8");
+        assert_eq!(serialized["terminal"]["backspaceSequence"], "controlH");
+        assert_eq!(serialized["terminal"]["deleteSequence"], "delete");
+        assert_eq!(serialized["dedicated_new_terminal_connection"], true);
+        assert_eq!(
+            serde_json::to_value(ConnectionTerminalEncoding::EucJp).unwrap(),
+            "euc-jp"
+        );
+        assert_eq!(
+            serde_json::to_value(ConnectionTerminalEncoding::Windows1252).unwrap(),
+            "windows-1252"
+        );
+
+        let decoded: ConnectionOptions = serde_json::from_value(serialized).unwrap();
+        assert_eq!(decoded.terminal, options.terminal);
+        assert!(decoded.dedicated_new_terminal_connection);
+
+        let legacy: ConnectionOptions = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(legacy.terminal.inherits_application_defaults());
+        assert!(!legacy.dedicated_new_terminal_connection);
+        assert_eq!(
+            legacy.x11_forwarding,
+            ConnectionX11ForwardingOptions::default()
+        );
+    }
+
+    #[test]
+    fn x11_policy_round_trips_without_runtime_authority_material() {
+        let options = ConnectionOptions {
+            x11_forwarding: ConnectionX11ForwardingOptions {
+                enabled: true,
+                mode: ConnectionX11ForwardingMode::Trusted,
+                untrusted_timeout_seconds: 900,
+            },
+            ..ConnectionOptions::default()
+        };
+
+        let serialized = serde_json::to_value(&options).unwrap();
+        assert_eq!(serialized["x11_forwarding"]["enabled"], true);
+        assert_eq!(serialized["x11_forwarding"]["mode"], "trusted");
+        assert_eq!(serialized["x11_forwarding"]["untrusted_timeout_seconds"], 900);
+        let text = serialized.to_string();
+        assert!(!text.contains("DISPLAY"));
+        assert!(!text.contains("MIT-MAGIC-COOKIE-1"));
+
+        let decoded: ConnectionOptions = serde_json::from_value(serialized).unwrap();
+        assert_eq!(decoded.x11_forwarding, options.x11_forwarding);
+    }
+
+    #[test]
+    fn group_rename_and_delete_apply_to_the_entire_saved_session_subtree() {
+        let store_path = temp_store_path("group-subtree-maintenance");
+        let mut store = ConnectionStore::load(&store_path).unwrap();
+
+        let mut connection_request = request("ssh-in-subtree", SavedAuth::Agent);
+        connection_request.group = Some("Production/Core".to_string());
+        store.upsert(connection_request).unwrap();
+
+        let mut serial = SerialProfile::new("Console", "/dev/tty.test");
+        serial.group = Some("Production/Core/Serial".to_string());
+        let serial_id = serial.id.clone();
+        store.data.serial_profiles.push(serial);
+
+        let mut telnet = TelnetProfile::new("Router", "router.example.com", 23);
+        telnet.group = Some("Production/Network".to_string());
+        let telnet_id = telnet.id.clone();
+        store.data.telnet_profiles.push(telnet);
+
+        let mut remote = RemoteDesktopProfile::new(
+            "Desktop",
+            RemoteDesktopProtocol::Rdp,
+            "desktop.example.com",
+            3389,
+        );
+        remote.group = Some("Production/Core".to_string());
+        let remote_id = remote.id.clone();
+        store.data.remote_desktop_profiles.push(remote);
+        store.data.groups.push("Unrelated".to_string());
+        store.data.groups.push("Production-Backup".to_string());
+        store.normalize();
+        store.save().unwrap();
+
+        let updated = store
+            .rename_group("Production", "Live".to_string())
+            .unwrap();
+
+        assert!(updated >= 4);
+        assert!(
+            store
+                .groups()
+                .iter()
+                .all(|group| !group_path_is_within(group, "Production"))
+        );
+        assert!(store.groups().contains(&"Live/Core".to_string()));
+        assert_eq!(store.get("ssh-in-subtree").unwrap().group.as_deref(), Some("Live/Core"));
+        assert_eq!(
+            store
+                .serial_profiles()
+                .iter()
+                .find(|profile| profile.id == serial_id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Live/Core/Serial")
+        );
+        assert_eq!(
+            store
+                .telnet_profiles()
+                .iter()
+                .find(|profile| profile.id == telnet_id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Live/Network")
+        );
+        assert_eq!(
+            store
+                .remote_desktop_profiles()
+                .iter()
+                .find(|profile| profile.id == remote_id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Live/Core")
+        );
+        assert!(store.groups().contains(&"Unrelated".to_string()));
+        assert!(store.groups().contains(&"Production-Backup".to_string()));
+
+        store.delete_group("Live").unwrap();
+        let reloaded = ConnectionStore::load(&store_path).unwrap();
+        assert!(
+            reloaded
+                .groups()
+                .iter()
+                .all(|group| !group_path_is_within(group, "Live"))
+        );
+        assert!(reloaded.get("ssh-in-subtree").unwrap().group.is_none());
+        assert!(reloaded.serial_profiles()[0].group.is_none());
+        assert!(reloaded.telnet_profiles()[0].group.is_none());
+        assert!(reloaded.remote_desktop_profiles()[0].group.is_none());
+        assert!(reloaded.groups().contains(&"Unrelated".to_string()));
+        assert!(
+            reloaded
+                .groups()
+                .contains(&"Production-Backup".to_string())
+        );
+        let _ = fs::remove_file(store_path);
+    }
+
+    #[test]
+    fn group_rename_rejects_existing_destinations_and_own_descendants() {
+        let mut store = load_empty_store("group-rename-conflicts");
+        store.create_group("Source/Child".to_string()).unwrap();
+        store.create_group("Destination".to_string()).unwrap();
+
+        assert!(
+            store
+                .rename_group("Source", "Destination".to_string())
+                .is_err()
+        );
+        assert!(
+            store
+                .rename_group("Source", "Source/Child/New".to_string())
+                .is_err()
+        );
+        assert!(store.groups().contains(&"Source/Child".to_string()));
+        assert!(store.groups().contains(&"Destination".to_string()));
+        let _ = fs::remove_file(store.path());
+    }
+
+    #[test]
+    fn upsert_runtime_handoff_preserves_secret_allocations_and_persists_no_plaintext() {
+        let store_path = temp_store_path("runtime-secret-handoff");
+        let mut store = ConnectionStore::load(&store_path).expect("store should load");
+        let target_secret = SecretString::from("target-secret-marker");
+        let target_pointer = target_secret.expose_secret().as_ptr();
+        let proxy_secret = SecretString::from("proxy-secret-marker");
+        let proxy_pointer = proxy_secret.expose_secret().as_ptr();
+        let upstream_secret = SecretString::from("upstream-secret-marker");
+        let upstream_pointer = upstream_secret.expose_secret().as_ptr();
+        let mut request = request(
+            "conn-runtime-handoff",
+            SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: Some(target_secret),
+            },
+        );
+        request.proxy_chain.push(SavedProxyHop {
+            host: "jump.example.com".to_string(),
+            port: 22,
+            username: "ops".to_string(),
+            auth: SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: Some(proxy_secret),
+            },
+            agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
+            legacy_ssh_compatibility: false,
+        });
+        request.upstream_proxy = SavedUpstreamProxyPolicy::Custom {
+            proxy: SavedUpstreamProxyConfig {
+                protocol: SavedUpstreamProxyProtocol::Socks5,
+                host: "proxy.example.com".to_string(),
+                port: 1080,
+                auth: SavedUpstreamProxyAuth::Password {
+                    username: "proxy-user".to_string(),
+                    keychain_id: None,
+                    plaintext_password: Some(upstream_secret),
+                },
+                remote_dns: true,
+                no_proxy: String::new(),
+            },
+        };
+
+        let (_connection, handoff) = store
+            .upsert_with_runtime_secrets(request)
+            .expect("connection should save");
+
+        assert_eq!(
+            handoff
+                .auth
+                .as_ref()
+                .expect("target runtime secret")
+                .expose_secret()
+                .as_ptr(),
+            target_pointer
+        );
+        assert_eq!(
+            handoff.proxy_chain[0]
+                .as_ref()
+                .expect("proxy runtime secret")
+                .expose_secret()
+                .as_ptr(),
+            proxy_pointer
+        );
+        assert_eq!(
+            handoff
+                .upstream_proxy
+                .as_ref()
+                .expect("upstream runtime secret")
+                .expose_secret()
+                .as_ptr(),
+            upstream_pointer
+        );
+        let persisted = fs::read_to_string(store_path).expect("persisted connection store");
+        for secret in [
+            "target-secret-marker",
+            "proxy-secret-marker",
+            "upstream-secret-marker",
+        ] {
+            assert!(!persisted.contains(secret));
+            assert!(!format!("{handoff:?}").contains(secret));
+        }
     }
 
     #[test]
@@ -1515,7 +1789,14 @@ mod tests {
             identity_agent: None,
             agent_forwarding_socket: None,
             legacy_ssh_compatibility: true,
+            x11_forwarding: ConnectionX11ForwardingOptions {
+                enabled: true,
+                mode: ConnectionX11ForwardingMode::Untrusted,
+                untrusted_timeout_seconds: 1_800,
+            },
+            dedicated_new_terminal_connection: true,
             post_connect_command: Some("uname -a".to_string()),
+            terminal: ConnectionTerminalOptions::default(),
         };
         source.save().unwrap();
 
@@ -1537,6 +1818,15 @@ mod tests {
         assert_eq!(imported.options.term_type.as_deref(), Some("xterm-direct"));
         assert!(imported.options.agent_forwarding);
         assert!(imported.options.legacy_ssh_compatibility);
+        assert_eq!(
+            imported.options.x11_forwarding,
+            ConnectionX11ForwardingOptions {
+                enabled: true,
+                mode: ConnectionX11ForwardingMode::Untrusted,
+                untrusted_timeout_seconds: 1_800,
+            }
+        );
+        assert!(imported.options.dedicated_new_terminal_connection);
         assert_eq!(
             imported.options.post_connect_command.as_deref(),
             Some("uname -a")
@@ -1685,6 +1975,11 @@ mod tests {
             icon_background_color: Some("#052e16".to_string()),
             host: "192.168.1.1".to_string(),
             port: 23,
+            terminal: ConnectionTerminalOptions {
+                encoding: Some(ConnectionTerminalEncoding::Big5),
+                backspace_sequence: None,
+                delete_sequence: Some(ConnectionTerminalDeleteSequence::ControlH),
+            },
             connect_on_open: true,
             created_at: now,
             updated_at: now,
@@ -1700,6 +1995,10 @@ mod tests {
         assert_eq!(value["telnet_profiles"][0]["id"], "telnet-1");
         assert_eq!(value["telnet_profiles"][0]["icon"], "network");
         assert_eq!(value["telnet_profiles"][0]["color"], "#86efac");
+        assert_eq!(
+            value["telnet_profiles"][0]["terminal"]["encoding"],
+            "big5"
+        );
         assert_eq!(
             value["telnet_profiles"][0]["icon_background_color"],
             "#052e16"

@@ -679,7 +679,10 @@ mod tests {
                 identity_agent: None,
                 agent_forwarding_socket: None,
                 legacy_ssh_compatibility: false,
+                dedicated_new_terminal_connection: false,
+                x11_forwarding: Default::default(),
                 post_connect_command: None,
+                terminal: Default::default(),
             })
             .unwrap();
         let connections_snapshot = source.export_saved_connections_snapshot().unwrap();

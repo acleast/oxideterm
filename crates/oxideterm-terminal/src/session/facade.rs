@@ -187,6 +187,10 @@ impl TerminalSession {
         self.backend.read_pending_with_budget(budget)
     }
 
+    pub fn activity_receiver(&self) -> TerminalActivityReceiver {
+        self.backend.activity_receiver()
+    }
+
     pub fn take_events(&mut self) -> Vec<TerminalEvent> {
         self.backend.take_events()
     }
@@ -241,6 +245,10 @@ impl TerminalSession {
 
     pub fn send_serial_break(&mut self) -> Result<()> {
         self.backend.send_serial_break()
+    }
+
+    pub fn send_telnet_control(&mut self, command: TelnetControlCommand) -> Result<()> {
+        self.backend.send_telnet_control(command)
     }
 
     pub fn set_trzsz_policy(&mut self, policy: Option<TrzszTransferPolicy>) {
@@ -373,6 +381,10 @@ impl TerminalSession {
         self.backend.search_matches(query)
     }
 
+    pub fn search_source(&self) -> Option<crate::TerminalSearchSource> {
+        self.backend.search_source()
+    }
+
     pub fn clear_buffer(&mut self) {
         self.backend.clear_buffer();
     }
@@ -387,6 +399,10 @@ impl TerminalSession {
 
     pub fn snapshot(&self) -> TerminalSnapshot {
         self.backend.snapshot()
+    }
+
+    pub fn snapshot_incremental(&self, previous: &TerminalSnapshot) -> TerminalSnapshot {
+        self.backend.snapshot_incremental(previous)
     }
 
     pub fn snapshot_with_display_offset(

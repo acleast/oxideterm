@@ -6,6 +6,19 @@ pub enum TerminalSessionKind {
     Serial,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Telnet protocol controls that are framed as IAC commands, not terminal data.
+pub enum TelnetControlCommand {
+    NoOperation,
+    Break,
+    InterruptProcess,
+    AbortOutput,
+    AreYouThere,
+    EraseCharacter,
+    EraseLine,
+    GoAhead,
+}
+
 pub type TerminalOutputProcessor = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -117,6 +130,7 @@ pub trait TerminalSessionBackend: Send {
     }
     fn read_pending(&mut self) -> bool;
     fn read_pending_with_budget(&mut self, budget: TerminalDrainBudget) -> TerminalDrainReport;
+    fn activity_receiver(&self) -> TerminalActivityReceiver;
     fn take_events(&mut self) -> Vec<TerminalEvent>;
     fn write_input(&mut self, bytes: &[u8]) -> Result<()>;
     fn write_protocol_bytes(&mut self, bytes: &[u8]) -> Result<()>;
@@ -143,6 +157,9 @@ pub trait TerminalSessionBackend: Send {
     }
     fn send_serial_break(&mut self) -> Result<()> {
         bail!("Serial break is only supported by serial sessions")
+    }
+    fn send_telnet_control(&mut self, _command: TelnetControlCommand) -> Result<()> {
+        bail!("Telnet controls are only supported by Telnet sessions")
     }
     fn set_trzsz_policy(&mut self, _policy: Option<TrzszTransferPolicy>) {}
     fn take_trzsz_transfer(&mut self) -> Option<TrzszTransfer> {
@@ -171,6 +188,9 @@ pub trait TerminalSessionBackend: Send {
     fn scroll_to_bottom(&mut self);
     fn scroll_to_display_offset(&mut self, offset: usize);
     fn search_matches(&self, query: &str) -> Vec<TerminalSearchMatch>;
+    fn search_source(&self) -> Option<crate::TerminalSearchSource> {
+        None
+    }
     fn clear_buffer(&mut self);
     fn buffer_text(&self) -> String {
         String::new()
@@ -179,6 +199,10 @@ pub trait TerminalSessionBackend: Send {
         String::new()
     }
     fn snapshot(&self) -> TerminalSnapshot;
+    fn snapshot_incremental(&self, previous: &TerminalSnapshot) -> TerminalSnapshot {
+        let _ = previous;
+        self.snapshot()
+    }
     fn snapshot_with_display_offset(
         &self,
         display_offset: usize,

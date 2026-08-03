@@ -7,20 +7,20 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{AcpHostToolCall, AcpHostToolDefinition, AcpHostToolResponse};
 
-pub(crate) const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+pub(crate) const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 pub(crate) const MCP_REQUEST_BODY_LIMIT: usize = 1024 * 1024;
 
 pub(crate) struct AcpHostToolsProtocol {
     definitions: Arc<Vec<AcpHostToolDefinition>>,
     definitions_by_name: Arc<HashMap<String, AcpHostToolDefinition>>,
-    call_tx: mpsc::UnboundedSender<AcpHostToolCall>,
+    call_tx: mpsc::Sender<AcpHostToolCall>,
     authorization_digest: [u8; 32],
 }
 
 impl AcpHostToolsProtocol {
     pub(crate) fn new(
         definitions: Vec<AcpHostToolDefinition>,
-        call_tx: mpsc::UnboundedSender<AcpHostToolCall>,
+        call_tx: mpsc::Sender<AcpHostToolCall>,
         authorization_header: &str,
     ) -> Self {
         let definitions_by_name = definitions
@@ -62,7 +62,7 @@ impl AcpHostToolsProtocol {
             ));
         };
         if id.is_none() {
-            // MCP notifications are acknowledged without generating a JSON-RPC response.
+            // Stateless MCP notifications do not require a response body.
             return ProtocolResponse::accepted();
         }
         let id = id.unwrap_or(Value::Null);
@@ -76,7 +76,7 @@ impl AcpHostToolsProtocol {
                         .unwrap_or(MCP_PROTOCOL_VERSION),
                     "capabilities": { "tools": { "listChanged": false } },
                     "serverInfo": {
-                        "name": "OxideTerm Host Tools",
+                        "name": "OxideTerm Application Tools",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                 }),
@@ -130,12 +130,12 @@ impl AcpHostToolsProtocol {
             arguments,
             response_tx,
         );
-        if self.call_tx.send(call).is_err() {
-            return ProtocolResponse::json(json_rpc_error(
-                id,
-                -32603,
-                "OxideTerm tool executor is unavailable.",
-            ));
+        if let Err(error) = self.call_tx.try_send(call) {
+            let message = match error {
+                mpsc::error::TrySendError::Full(_) => "OxideTerm tool executor is busy.",
+                mpsc::error::TrySendError::Closed(_) => "OxideTerm tool executor is unavailable.",
+            };
+            return ProtocolResponse::json(json_rpc_error(id, -32603, message));
         }
         let response = response_rx.await.unwrap_or_else(|_| {
             AcpHostToolResponse::error("OxideTerm tool execution was cancelled.")
@@ -184,5 +184,61 @@ impl ProtocolResponse {
             status: http::StatusCode::ACCEPTED,
             body: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AcpHostToolDefinition;
+
+    #[tokio::test]
+    async fn full_executor_queue_rejects_additional_tool_calls() {
+        let (call_tx, _call_rx) = mpsc::channel(1);
+        let protocol = Arc::new(AcpHostToolsProtocol::new(
+            vec![AcpHostToolDefinition::new(
+                "inspect_host_tools",
+                "Inspect Host Tools.",
+                json!({ "type": "object" }),
+            )],
+            call_tx,
+            "Bearer test",
+        ));
+        let first_protocol = protocol.clone();
+        let first_call = tokio::spawn(async move {
+            first_protocol
+                .handle_message(json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "inspect_host_tools",
+                        "arguments": {},
+                    },
+                }))
+                .await
+        });
+        tokio::task::yield_now().await;
+
+        let response = protocol
+            .handle_message(json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_host_tools",
+                    "arguments": {},
+                },
+            }))
+            .await;
+
+        assert_eq!(
+            response
+                .body
+                .as_ref()
+                .and_then(|body| body.pointer("/error/message").and_then(Value::as_str)),
+            Some("OxideTerm tool executor is busy.")
+        );
+        first_call.abort();
     }
 }

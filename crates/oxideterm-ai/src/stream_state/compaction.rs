@@ -1,8 +1,6 @@
 //! Pure conversation compaction planning and summary payload construction.
 
-use crate::{AiChatMessage, AiChatRole};
-
-use super::history::ai_message_estimated_tokens;
+use crate::{AiChatMessage, AiChatRole, sanitize_for_persistence};
 
 #[derive(Clone)]
 pub struct AiCompactionPlan {
@@ -15,13 +13,35 @@ pub fn ai_compaction_plan(
     context_window: usize,
     silent: bool,
 ) -> Option<AiCompactionPlan> {
+    ai_compaction_plan_with_estimator(
+        messages,
+        context_window,
+        silent,
+        super::history::ai_message_estimated_tokens,
+    )
+}
+
+pub fn ai_compaction_plan_for_provider(
+    messages: &[AiChatMessage],
+    context_window: usize,
+    silent: bool,
+    provider_type: &str,
+) -> Option<AiCompactionPlan> {
+    ai_compaction_plan_with_estimator(messages, context_window, silent, |message| {
+        super::history::ai_message_payload_estimated_tokens(message, provider_type)
+    })
+}
+
+fn ai_compaction_plan_with_estimator(
+    messages: &[AiChatMessage],
+    context_window: usize,
+    silent: bool,
+    estimate_message: impl Fn(&AiChatMessage) -> usize,
+) -> Option<AiCompactionPlan> {
     if messages.len() < 4 {
         return None;
     }
-    let total_tokens = messages
-        .iter()
-        .map(ai_message_estimated_tokens)
-        .sum::<usize>();
+    let total_tokens = messages.iter().map(&estimate_message).sum::<usize>();
     let mut budget = ((context_window as f32) * 0.4).floor() as usize;
     if !silent && total_tokens > 0 {
         budget = budget.min(((total_tokens as f32) * 0.6).floor() as usize);
@@ -29,7 +49,7 @@ pub fn ai_compaction_plan(
     let mut keep_start = messages.len();
     let mut used = 0usize;
     for (index, message) in messages.iter().enumerate().rev() {
-        let tokens = ai_message_estimated_tokens(message);
+        let tokens = estimate_message(message);
         if keep_start < messages.len() && used.saturating_add(tokens) > budget {
             break;
         }
@@ -60,7 +80,10 @@ pub fn ai_compaction_summary_messages(messages: &[AiChatMessage]) -> Vec<AiChatM
         {
             let summary = message.content.as_str();
             if !summary.is_empty() {
-                history_parts.push(format!("[Previous Summary]: {summary}"));
+                history_parts.push(format!(
+                    "[Previous Summary]: {}",
+                    sanitize_for_persistence(summary)
+                ));
             }
         } else if matches!(message.role, AiChatRole::User | AiChatRole::Assistant) {
             let role = match message.role {
@@ -68,7 +91,10 @@ pub fn ai_compaction_summary_messages(messages: &[AiChatMessage]) -> Vec<AiChatM
                 AiChatRole::Assistant => "Assistant",
                 _ => unreachable!(),
             };
-            history_parts.push(format!("{role}: {}", message.content));
+            history_parts.push(format!(
+                "{role}: {}",
+                sanitize_for_persistence(&message.content)
+            ));
         }
     }
     vec![
@@ -121,7 +147,7 @@ pub fn ai_conversation_summary_messages(messages: &[AiChatMessage]) -> Vec<AiCha
             } else {
                 "Assistant"
             };
-            format!("{role}: {}", message.content)
+            format!("{role}: {}", sanitize_for_persistence(&message.content))
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -213,6 +239,7 @@ pub fn ai_compaction_anchor_snapshot(messages: &[AiChatMessage]) -> Vec<AiChatMe
             snapshot.summary_ref = None;
             snapshot.branches = None;
             snapshot.suggestions.clear();
+            snapshot.content = sanitize_for_persistence(&snapshot.content);
             snapshot
         })
         .collect::<Vec<_>>()

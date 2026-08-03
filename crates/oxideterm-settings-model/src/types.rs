@@ -9,7 +9,22 @@
 
 const PLUGIN_MANAGER_INPUT_ANCHOR_BASE: u64 = 28_000;
 const PLUGIN_SETTING_INPUT_ANCHOR_BASE: u64 = 29_000;
+const SETTINGS_SEARCH_INPUT_ANCHOR_KEY: u64 = 34_000;
 const DEFAULT_SETTINGS_TEXTAREA_LINE_HEIGHT: f32 = 20.0;
+
+/// Describes the installed CLI companion relative to the bundled executable.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct CliCompanionStatus {
+    pub bundled: bool,
+    pub installed: bool,
+    pub install_path: Option<String>,
+    pub legacy_installed: bool,
+    pub legacy_install_path: Option<String>,
+    pub bundle_path: Option<String>,
+    pub app_version: String,
+    pub matches_bundled: Option<bool>,
+    pub needs_reinstall: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SettingsTab {
@@ -107,6 +122,7 @@ pub enum SettingsSelect {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum SettingsInput {
+    SettingsSearch,
     TerminalCustomFontFamily,
     TerminalFontSize,
     TerminalScrollback,
@@ -156,7 +172,6 @@ pub enum SettingsInput {
     AiAcpAgentCwd(usize),
     AiAcpAgentArgs(usize),
     AiAcpAgentEnv(usize),
-    AiAcpAgentAuthToken(usize),
     AiSystemPrompt,
     AiMemoryContent,
     AiToolUseMaxRounds,
@@ -459,6 +474,7 @@ impl SettingsInput {
 
     pub fn anchor_key(self) -> u64 {
         match self {
+            Self::SettingsSearch => SETTINGS_SEARCH_INPUT_ANCHOR_KEY,
             Self::TerminalCustomFontFamily => 19,
             Self::TerminalFontSize => 1,
             Self::TerminalScrollback => 33_000,
@@ -508,7 +524,6 @@ impl SettingsInput {
             Self::AiAcpAgentCwd(index) => 21_502 + index as u64 * 6,
             Self::AiAcpAgentArgs(index) => 21_503 + index as u64 * 6,
             Self::AiAcpAgentEnv(index) => 21_504 + index as u64 * 6,
-            Self::AiAcpAgentAuthToken(index) => 21_505 + index as u64 * 6,
             Self::AiSystemPrompt => 22_000,
             Self::AiMemoryContent => 22_001,
             Self::AiToolUseMaxRounds => 22_002,
@@ -572,7 +587,6 @@ impl SettingsInput {
         matches!(
             self,
             Self::AiProviderApiKey(_)
-                | Self::AiAcpAgentAuthToken(_)
                 | Self::AiMcpAuthToken
                 | Self::CloudSyncToken
                 | Self::CloudSyncGitToken
@@ -662,7 +676,6 @@ mod tests {
     #[test]
     fn secret_inputs_are_categorized_in_the_model_layer() {
         assert!(SettingsInput::AiProviderApiKey(0).is_secret());
-        assert!(SettingsInput::AiAcpAgentAuthToken(0).is_secret());
         assert!(SettingsInput::CloudSyncSecretAccessKey.is_secret());
         assert!(SettingsInput::PortableCurrentPassword.is_secret());
         assert!(SettingsInput::PortableNewPassword.is_secret());

@@ -57,17 +57,17 @@ impl TerminalPane {
         command: &str,
         source: TerminalCommandMarkDetectionSource,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<String> {
         let command = command.trim();
         if command.is_empty() || !self.settings.command_marks_enabled {
-            return;
+            return None;
         }
         let (mode, snapshot) = {
             let terminal = self.terminal.lock();
             (terminal.mode(), terminal.snapshot())
         };
         if mode.contains(TermMode::ALT_SCREEN) || mode.intersects(TermMode::MOUSE_MODE) {
-            return;
+            return None;
         }
 
         self.snapshot = self.stamp_snapshot(snapshot);
@@ -99,10 +99,13 @@ impl TerminalPane {
             started_at: now,
             finished_at: None,
         };
+        let command_id = mark.command_id.clone();
         self.command_fact_ledger.create_from_mark(&mark);
         self.command_marks.push(mark);
+        self.command_marks_render_cache_dirty = true;
         self.trim_command_marks();
         cx.notify();
+        Some(command_id)
     }
 
 }
@@ -334,6 +337,7 @@ impl TerminalPane {
             // to the shell. The cwd parser remains restricted to simple `cd`.
             self.observe_terminal_cwd_action_from_closed_command_mark(&mark, cx);
         }
+        self.command_marks_render_cache_dirty = true;
     }
 
     pub(crate) fn reset_command_marks_for_terminal_reset(&mut self) {
@@ -366,6 +370,7 @@ impl TerminalPane {
             mark.stale = true;
             self.command_fact_ledger.close_from_mark(mark);
         }
+        self.command_marks_render_cache_dirty = true;
     }
 
     pub(crate) fn clear_visual_command_marks(&mut self) {
@@ -376,6 +381,7 @@ impl TerminalPane {
 
     fn clear_visual_command_mark_ranges(&mut self) {
         self.command_marks.clear();
+        self.command_marks_render_cache_dirty = true;
         self.selected_command_mark_id = None;
         self.hovered_command_mark_id = None;
     }
@@ -434,6 +440,7 @@ impl TerminalPane {
                     .any(|mark| &mark.command_id == hovered)
             });
         self.command_marks.drain(..remove_count);
+        self.command_marks_render_cache_dirty = true;
         if removed_selected {
             self.selected_command_mark_id = None;
         }

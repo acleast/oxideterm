@@ -45,6 +45,7 @@ use crate::{
         TerminalMagicKind, Utf8ResidualGuard,
     },
     graphics_cursor_from_term,
+    privilege_prompt::TerminalPrivilegePromptStream,
     shell_integration::TerminalShellIntegration,
 };
 #[cfg(windows)]
@@ -151,6 +152,7 @@ where
             let encoding_detector = &mut state.encoding_detector;
             let output_decoder = &mut state.output_decoder;
             let output_events_enabled = state.output_events_enabled;
+            let privilege_prompt = &mut state.privilege_prompt;
             let shell_integration = &mut state.shell_integration;
             let alt_screen_active = &mut state.alt_screen_active;
             graphics.advance_ordered(
@@ -162,6 +164,9 @@ where
                         }
                         let decoded = output_decoder.decode_to_utf8_bytes(&terminal_bytes);
                         parsed_bytes += terminal_bytes.len();
+                        for event in privilege_prompt.observe(decoded.as_ref()) {
+                            let _ = event_tx.send(TerminalEvent::PrivilegePrompt(event));
+                        }
                         if output_events_enabled && !decoded.is_empty() {
                             // Tauri feeds decoded display text into TerminalRecorder after xterm
                             // receives it. Keep the native recorder on the same side of encoding
@@ -191,9 +196,7 @@ where
             );
         }
 
-        for bytes in priority_writes {
-            state.push_priority_write(bytes);
-        }
+        state.push_priority_writes(priority_writes);
 
         (parsed_bytes, graphics_changed)
     }
@@ -207,9 +210,11 @@ where
         event_tx: &CrossbeamSender<TerminalEvent>,
         graphics_tx: &CrossbeamSender<TerminalGraphicsEvent>,
     ) -> (usize, bool) {
+        let processed_output = state.process_output(bytes);
+        let processed_output = processed_output.as_ref();
         state
             .utf8_guard
-            .push(bytes)
+            .push(processed_output)
             .map(|guarded| {
                 Self::advance_guarded_bytes(
                     state,
@@ -297,7 +302,9 @@ where
     fn drain_recv_channel(&mut self, state: &mut LocalGraphicsState) -> bool {
         while let Some(msg) = self.rx.recv() {
             match msg {
-                LocalGraphicsMsg::Input(input) => state.write_list.push_back(input),
+                LocalGraphicsMsg::Input(input) => {
+                    state.write_list.push_back(Writing::new(input));
+                }
                 LocalGraphicsMsg::Resize(window_size) => {
                     let grid_changed = self.size.cols != window_size.num_cols as usize
                         || self.size.rows != window_size.num_lines as usize;
@@ -322,6 +329,7 @@ where
                 LocalGraphicsMsg::SetOutputProcessor(processor) => {
                     state.output_processor = processor;
                     state.utf8_guard = Utf8ResidualGuard::default();
+                    state.privilege_prompt = TerminalPrivilegePromptStream::default();
                 }
                 LocalGraphicsMsg::SetOutputEventsEnabled(enabled) => {
                     state.output_events_enabled = enabled;
@@ -333,7 +341,27 @@ where
                     let _ = response_tx.send(state.modem_consumer.start_manual_transfer(request));
                 }
                 LocalGraphicsMsg::FinishModemTransfer => {
-                    state.modem_consumer.finish_transfer();
+                    let trailing_output = state.modem_consumer.finish_transfer();
+                    if !trailing_output.is_empty() {
+                        // The protocol terminator and next prompt can arrive in
+                        // one PTY read, so render bytes the worker did not consume.
+                        let terminal_lease = self.terminal.lease();
+                        let mut terminal = self.terminal.lock_unfair();
+                        let (parsed_bytes, graphics_changed) = Self::advance_plain_output(
+                            state,
+                            &mut terminal,
+                            &trailing_output,
+                            self.size,
+                            &self.magic_tx,
+                            &self.event_tx,
+                            &self.graphics_tx,
+                        );
+                        drop(terminal);
+                        drop(terminal_lease);
+                        if graphics_changed || parsed_bytes > 0 {
+                            self.event_proxy.send_event(Event::Wakeup);
+                        }
+                    }
                 }
                 LocalGraphicsMsg::InterruptModemTransfer => {
                     state.modem_consumer.interrupt_transfer();
@@ -383,11 +411,10 @@ where
                 }),
             };
 
-            let processed_output = state.process_output(&buf[..unprocessed]);
             let (parsed_bytes, changed) = Self::advance_processed_output(
                 state,
                 terminal,
-                processed_output.as_ref(),
+                &buf[..unprocessed],
                 self.size,
                 &self.magic_tx,
                 &self.event_tx,
@@ -494,12 +521,19 @@ where
     }
 
     fn flush_modem_server_writes(&mut self, state: &mut LocalGraphicsState) -> bool {
-        let mut queued = false;
-        for bytes in state.modem_consumer.take_server_writes() {
-            state.push_priority_write(Cow::Owned(bytes));
-            queued = true;
+        if state.has_modem_write() {
+            return false;
         }
-        queued
+        let Some(transfer) = state.modem_consumer.active_transfer_input() else {
+            return false;
+        };
+        let Some(bytes) = transfer.take_server_write() else {
+            return false;
+        };
+        // Keep exactly one modem frame in the PTY writer so the protocol
+        // producer remains backpressured by actual local writes.
+        state.push_modem_write(bytes, transfer);
+        true
     }
 
     pub(crate) fn spawn(mut self) -> JoinHandle<()> {
@@ -650,6 +684,7 @@ where
 struct Writing {
     source: Cow<'static, [u8]>,
     written: usize,
+    modem_completion: Option<(ModemTransfer, usize)>,
 }
 
 pub(crate) struct LocalGraphicsNotifier(pub(crate) LocalGraphicsEventLoopSender);
@@ -710,7 +745,7 @@ impl LocalGraphicsEventLoopSender {
 }
 
 struct LocalGraphicsState {
-    write_list: VecDeque<Cow<'static, [u8]>>,
+    write_list: VecDeque<Writing>,
     writing: Option<Writing>,
     parser: ansi::Processor,
     graphics: GraphicsIngress,
@@ -719,6 +754,7 @@ struct LocalGraphicsState {
     output_processor: Option<TerminalOutputProcessor>,
     output_events_enabled: bool,
     output_decoder: TerminalOutputDecoder,
+    privilege_prompt: TerminalPrivilegePromptStream,
     encoding_detector: EncodingMismatchDetector,
     shell_integration: TerminalShellIntegration,
     modem_consumer: ModemConsumer,
@@ -741,6 +777,7 @@ impl LocalGraphicsState {
             output_processor: None,
             output_events_enabled: false,
             output_decoder: TerminalOutputDecoder::new(encoding),
+            privilege_prompt: TerminalPrivilegePromptStream::default(),
             encoding_detector: EncodingMismatchDetector::new(encoding),
             shell_integration: TerminalShellIntegration::default(),
             modem_consumer: ModemConsumer::with_wake(modem_wake),
@@ -751,6 +788,7 @@ impl LocalGraphicsState {
     fn set_encoding(&mut self, encoding: TerminalEncoding) {
         self.output_decoder.set_encoding(encoding);
         self.output_decoder.reset();
+        self.privilege_prompt = TerminalPrivilegePromptStream::default();
         self.encoding_detector.set_encoding(encoding);
     }
 
@@ -770,7 +808,7 @@ impl LocalGraphicsState {
     }
 
     fn goto_next(&mut self) {
-        self.writing = self.write_list.pop_front().map(Writing::new);
+        self.writing = self.write_list.pop_front();
     }
 
     fn take_current(&mut self) -> Option<Writing> {
@@ -790,8 +828,32 @@ impl LocalGraphicsState {
             return;
         }
 
-        self.write_list.push_front(bytes);
+        self.write_list.push_front(Writing::new(bytes));
         self.ensure_next();
+    }
+
+    fn push_priority_writes(&mut self, writes: Vec<Cow<'static, [u8]>>) {
+        // Insert the batch ahead of ordinary input without reversing its FIFO order.
+        for bytes in writes.into_iter().rev() {
+            if !bytes.is_empty() {
+                self.write_list.push_front(Writing::new(bytes));
+            }
+        }
+        self.ensure_next();
+    }
+
+    fn push_modem_write(&mut self, bytes: Vec<u8>, transfer: ModemTransfer) {
+        if bytes.is_empty() {
+            return;
+        }
+        self.write_list
+            .push_front(Writing::new_modem(bytes, transfer));
+        self.ensure_next();
+    }
+
+    fn has_modem_write(&self) -> bool {
+        self.writing.as_ref().is_some_and(Writing::is_modem)
+            || self.write_list.iter().any(Writing::is_modem)
     }
 
     fn alt_screen_clear_event<U: EventListener>(
@@ -812,7 +874,20 @@ impl LocalGraphicsState {
 
 impl Writing {
     fn new(source: Cow<'static, [u8]>) -> Self {
-        Self { source, written: 0 }
+        Self {
+            source,
+            written: 0,
+            modem_completion: None,
+        }
+    }
+
+    fn new_modem(source: Vec<u8>, transfer: ModemTransfer) -> Self {
+        let byte_len = source.len();
+        Self {
+            source: Cow::Owned(source),
+            written: 0,
+            modem_completion: Some((transfer, byte_len)),
+        }
     }
 
     fn advance(&mut self, amount: usize) {
@@ -825,6 +900,26 @@ impl Writing {
 
     fn finished(&self) -> bool {
         self.written >= self.source.len()
+    }
+
+    fn is_modem(&self) -> bool {
+        self.modem_completion.is_some()
+    }
+}
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        let Some((transfer, byte_len)) = self.modem_completion.take() else {
+            return;
+        };
+        if self.finished() {
+            transfer.complete_server_write(byte_len);
+        } else {
+            // A partial PTY frame cannot be retried safely; cancel the protocol
+            // and release its in-flight capacity as the transport is going away.
+            transfer.complete_server_write(byte_len);
+            transfer.stop();
+        }
     }
 }
 
@@ -854,5 +949,40 @@ impl<T> PeekableReceiver<T> {
                 result => result.ok(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxideterm_modem_transfer::ModemIo;
+
+    #[test]
+    fn completed_local_modem_write_releases_backpressure_on_drop() {
+        let mut transfer = ModemTransfer::new(b"");
+        transfer.write_all(b"frame").unwrap();
+        let bytes = transfer.take_server_write().expect("queued frame");
+        let mut writing = Writing::new_modem(bytes, transfer.clone());
+        writing.advance(writing.remaining_bytes().len());
+
+        drop(writing);
+
+        assert!(transfer.server_writes_drained());
+    }
+
+    #[test]
+    fn partial_local_modem_write_cancels_the_transfer() {
+        let mut transfer = ModemTransfer::new_with_wake_and_cancel(b"", None, b"protocol-cancel");
+        transfer.write_all(b"frame").unwrap();
+        let bytes = transfer.take_server_write().expect("queued frame");
+        let mut writing = Writing::new_modem(bytes, transfer.clone());
+        writing.advance(1);
+
+        drop(writing);
+
+        assert_eq!(
+            transfer.take_server_write().as_deref(),
+            Some(b"protocol-cancel".as_slice())
+        );
     }
 }

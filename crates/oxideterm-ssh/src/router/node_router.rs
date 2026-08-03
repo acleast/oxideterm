@@ -48,6 +48,54 @@ impl NodeRouter {
         self.runtime.export_snapshot()
     }
 
+    pub fn export_persistence_snapshot(&self) -> NodeTreePersistenceSnapshot {
+        self.runtime.export_persistence_snapshot()
+    }
+
+    pub fn root_node_ids(&self) -> Vec<NodeId> {
+        self.runtime.root_node_ids()
+    }
+
+    pub fn node_metadata(&self, node_id: &NodeId) -> Option<NodeMetadataSnapshot> {
+        self.runtime.metadata_snapshot(node_id)
+    }
+
+    /// Returns the secret-bearing runtime snapshot only to explicit connection actions.
+    pub fn node_runtime_snapshot(&self, node_id: &NodeId) -> Option<NodeRuntimeSnapshot> {
+        self.runtime.snapshot(node_id)
+    }
+
+    pub fn node_metadata_snapshots(&self) -> Vec<NodeMetadataSnapshot> {
+        self.runtime.metadata_snapshots()
+    }
+
+    pub fn path_to_node(&self, node_id: &NodeId) -> Result<Vec<NodeId>, RouteError> {
+        self.runtime.path_to_node(node_id)
+    }
+
+    pub fn contains_node(&self, node_id: &NodeId) -> bool {
+        self.runtime.contains_node(node_id)
+    }
+
+    pub fn update_node_origin(
+        &self,
+        node_id: &NodeId,
+        origin: NodeOrigin,
+    ) -> Result<(), RouteError> {
+        self.runtime.update_origin(node_id, origin)
+    }
+
+    pub fn subtree_postorder(&self, node_id: &NodeId) -> Vec<NodeId> {
+        self.runtime.subtree_postorder(node_id)
+    }
+
+    pub fn minimal_subtree_roots(
+        &self,
+        candidate_node_ids: impl IntoIterator<Item = NodeId>,
+    ) -> Vec<NodeId> {
+        self.runtime.minimal_subtree_roots(candidate_node_ids)
+    }
+
     pub fn apply_tree_snapshot(&self, snapshot: NodeTreeSnapshot) -> Result<(), RouteError> {
         self.runtime.apply_snapshot(snapshot)
     }
@@ -94,7 +142,15 @@ impl NodeRouter {
             .registry
             .list()
             .into_iter()
-            .map(|info| (info.connection_id, info.state))
+            .map(|info| {
+                let connection_id = info.connection_id.clone();
+                let state = self
+                    .registry
+                    .get(&connection_id)
+                    .map(|handle| connection_info_for_runtime(&handle).state)
+                    .unwrap_or(info.state);
+                (connection_id, state)
+            })
             .collect::<HashMap<_, _>>();
         self.runtime.reconcile_with_connections(&connections);
     }
@@ -192,7 +248,7 @@ impl NodeRouter {
             .registry
             .get(&connection_id)
             .ok_or_else(|| RouteError::NotConnected(node_id.0.clone()))?;
-        let connection = handle.info();
+        let connection = connection_info_for_runtime(&handle);
         let event = self
             .runtime
             .bind_connection(node_id, connection_id.clone(), &connection)?;
@@ -224,6 +280,20 @@ impl NodeRouter {
         let event = self.runtime.disconnect_node(node_id, reason)?;
         self.emitter.dispatch(&event);
         Ok(event)
+    }
+
+    pub fn prepare_node_connection_attempt(&self, node_id: &NodeId) -> Result<(), RouteError> {
+        let previous_connection_id = self.runtime.connection_id_for_node(node_id);
+        // Connection-chain preparation is an internal ownership transfer, not
+        // a user-visible disconnect. Publishing it could overtake the new
+        // Connecting event and incorrectly fail the in-flight attempt.
+        let _ = self
+            .runtime
+            .disconnect_node(node_id, "connection attempt preparation")?;
+        if let Some(connection_id) = previous_connection_id {
+            self.emitter.unregister(&connection_id);
+        }
+        Ok(())
     }
 
     pub fn remove_runtime_subtree(&self, node_id: &NodeId) -> Vec<NodeId> {
@@ -260,13 +330,14 @@ impl NodeRouter {
     }
 
     pub fn terminal_url(&self, node_id: &NodeId) -> Result<TerminalEndpoint, RouteError> {
-        let runtime = self
-            .runtime
-            .snapshot(node_id)
-            .ok_or_else(|| RouteError::NodeNotFound(node_id.0.clone()))?;
-        runtime.state.ws_endpoint.ok_or_else(|| {
-            RouteError::NotConnected(format!("No active terminal session for node {}", node_id.0))
-        })
+        self.runtime
+            .primary_terminal_endpoint(node_id)?
+            .ok_or_else(|| {
+                RouteError::NotConnected(format!(
+                    "No active terminal session for node {}",
+                    node_id.0
+                ))
+            })
     }
 
     pub fn node_id_for_connection(&self, connection_id: &str) -> Option<NodeId> {
@@ -298,6 +369,7 @@ impl NodeRouter {
             session,
             was_new,
             cwd,
+            generation,
         } = resolved
             .handle
             .acquire_sftp_with_meta()
@@ -312,8 +384,42 @@ impl NodeRouter {
         let event = self.runtime.set_sftp_ready(node_id, true, cwd)?;
         if was_new {
             self.emitter.dispatch(&event);
+            // The shared channel is a separate owner from short-lived listing
+            // channels, so capability consumers receive its own lifecycle event.
+            let owner_event = self.runtime.shared_sftp_session_changed(
+                node_id,
+                resolved.connection_id,
+                Some(generation),
+                true,
+            )?;
+            self.emitter.dispatch(&owner_event);
         }
         Ok(session)
+    }
+
+    /// Resolves the exact shared SFTP owner validated by an upper-layer
+    /// capability. A changed connection or generation fails without rebuilding.
+    pub async fn acquire_existing_sftp_generation(
+        &self,
+        node_id: &NodeId,
+        expected_connection_id: &str,
+        expected_generation: u64,
+    ) -> Result<Arc<Mutex<SftpSession>>, RouteError> {
+        let resolved = self
+            .resolve_connection_wait(node_id, Duration::from_secs(15))
+            .await?;
+        if resolved.connection_id != expected_connection_id {
+            return Err(RouteError::CapabilityUnavailable(
+                "Shared SFTP owner changed".to_string(),
+            ));
+        }
+        resolved
+            .handle
+            .acquire_existing_sftp_generation(expected_generation)
+            .await
+            .ok_or_else(|| {
+                RouteError::CapabilityUnavailable("Shared SFTP owner changed".to_string())
+            })
     }
 
     pub async fn acquire_transfer_sftp(
@@ -372,9 +478,23 @@ impl NodeRouter {
                 .mark_sftp_session(&resolved.connection_id, false, None);
             let event = self.runtime.set_sftp_ready(node_id, false, None)?;
             self.emitter.dispatch(&event);
+            // Revocation is published before a replacement channel can become
+            // visible, preventing the old generation from authorizing later calls.
+            let owner_event = self.runtime.shared_sftp_session_changed(
+                node_id,
+                resolved.connection_id.clone(),
+                None,
+                false,
+            )?;
+            self.emitter.dispatch(&owner_event);
         }
 
-        let AcquiredSftpMeta { session, cwd, .. } = resolved
+        let AcquiredSftpMeta {
+            session,
+            cwd,
+            generation,
+            ..
+        } = resolved
             .handle
             .acquire_sftp_with_meta()
             .await
@@ -384,6 +504,13 @@ impl NodeRouter {
             .mark_sftp_session(&resolved.connection_id, true, cwd.clone());
         let event = self.runtime.set_sftp_ready(node_id, true, cwd)?;
         self.emitter.dispatch(&event);
+        let owner_event = self.runtime.shared_sftp_session_changed(
+            node_id,
+            resolved.connection_id,
+            Some(generation),
+            true,
+        )?;
+        self.emitter.dispatch(&owner_event);
         Ok(session)
     }
 
@@ -394,7 +521,7 @@ impl NodeRouter {
             .ok_or_else(|| RouteError::NodeNotFound(node_id.0.clone()))?;
         if let Some(connection_id) = runtime.connection_id.clone() {
             if let Some(handle) = self.registry.get(&connection_id) {
-                let info = handle.info();
+                let info = connection_info_for_runtime(&handle);
                 runtime.state.readiness = readiness_for_connection(&info);
                 runtime.state.error = match &info.state {
                     ConnectionState::Error(error) => Some(error.clone()),
@@ -411,6 +538,10 @@ impl NodeRouter {
                 runtime.state.sftp_ready = false;
                 runtime.state.sftp_cwd = None;
             }
+        } else if matches!(runtime.state.readiness, NodeReadiness::Ready) {
+            // A stale runtime projection cannot remain Ready after losing its registry binding.
+            runtime.state.readiness = NodeReadiness::Disconnected;
+            runtime.state.error = None;
         }
         Ok(NodeStateSnapshot {
             state: runtime.state,
@@ -429,9 +560,14 @@ impl NodeRouter {
         reason: impl Into<String>,
     ) -> Result<NodeStateEvent, RouteError> {
         let reason = reason.into();
+        let connection = self
+            .registry
+            .get(&connection.connection_id)
+            .map(|handle| connection_info_for_runtime(&handle))
+            .unwrap_or_else(|| connection.clone());
         let event = self
             .runtime
-            .update_connection_state(node_id, connection, reason.clone())?;
+            .update_connection_state(node_id, &connection, reason.clone())?;
         Ok(self
             .emitter
             .emit_state_from_connection(&connection.connection_id, &connection.state, reason)

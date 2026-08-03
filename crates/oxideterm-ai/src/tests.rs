@@ -42,6 +42,8 @@ fn test_stream_config(provider_type: &str) -> AiChatStreamConfig {
         reasoning_effort: Some("auto".to_string()),
         safety_mode: AiPolicySafetyMode::Default,
         profile_id: None,
+        memory_context: None,
+        memory_entry_ids: Vec::new(),
         tool_policy: AiToolUsePolicy::default(),
         tools: Vec::new(),
         tool_choice: AiToolChoice::Auto,
@@ -92,7 +94,7 @@ fn provider_templates_keep_stable_protocol_order() {
 }
 
 #[test]
-fn orchestrator_tool_definitions_match_tauri_core_names_and_order() {
+fn orchestrator_tool_definitions_preserve_core_names_and_order() {
     let tools = orchestrator_tool_definitions();
     let names = tools
         .iter()
@@ -108,6 +110,8 @@ fn orchestrator_tool_definitions_match_tauri_core_names_and_order() {
             "run_command",
             "observe_terminal",
             "send_terminal_input",
+            "wait_terminal_output",
+            "get_terminal_command_status",
             "read_resource",
             "write_resource",
             "transfer_resource",
@@ -115,6 +119,31 @@ fn orchestrator_tool_definitions_match_tauri_core_names_and_order() {
             "get_state",
             "remember_preference",
             "recall_preferences",
+            "load_skill",
+            "read_skill_resource",
+            "create_background_task",
+            "list_background_tasks",
+            "get_background_task",
+            "cancel_background_task",
+            "inspect_host_tools",
+            "control_host_tool",
+            "list_forwards",
+            "manage_forward",
+            "list_plugins",
+            "manage_plugin",
+            "list_transport_profiles",
+            "open_transport_profile",
+            "get_transport_session_state",
+            "manage_serial_session",
+            "manage_telnet_session",
+            "list_remote_desktop_sessions",
+            "manage_remote_desktop_session",
+            "get_cloud_sync_state",
+            "manage_cloud_sync",
+            "list_credentials",
+            "manage_credential",
+            "list_memory_entries",
+            "manage_memory_entry",
         ]
     );
     assert_eq!(
@@ -138,7 +167,7 @@ fn orchestrator_tool_definitions_match_tauri_core_names_and_order() {
 }
 
 #[test]
-fn orchestrator_send_terminal_input_blocks_control_schema() {
+fn orchestrator_send_terminal_input_exposes_bounded_control_keys() {
     let tools = orchestrator_tool_definitions();
     let terminal_input = tools
         .iter()
@@ -153,12 +182,277 @@ fn orchestrator_send_terminal_input_blocks_control_schema() {
     assert!(
         terminal_input
             .description
-            .contains("use run_command instead")
+            .contains("control/navigation key")
     );
-    assert!(terminal_input.description.contains("Control sequences"));
+    assert!(terminal_input.description.contains("run_command instead"));
     assert!(properties.contains_key("text"));
     assert!(properties.contains_key("append_enter"));
-    assert!(!properties.contains_key("control"));
+    assert_eq!(
+        properties
+            .get("key")
+            .and_then(|value| value.get("enum"))
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        Some(16)
+    );
+}
+
+#[test]
+fn orchestrator_skill_tools_are_bounded_read_actions() {
+    let loaded = canonicalize_orchestrator_tool_arguments(
+        "load_skill",
+        serde_json::json!({ "id": "release-review" }),
+    )
+    .expect("valid skill load");
+    assert_eq!(loaded["id"], "release-review");
+    assert!(
+        canonicalize_orchestrator_tool_arguments(
+            "read_skill_resource",
+            serde_json::json!({
+                "id": "release-review",
+                "path": "references/checklist.md",
+                "unexpected": true
+            }),
+        )
+        .is_err()
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool("load_skill", None),
+        AiActionRisk::Read
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool("read_skill_resource", None),
+        AiActionRisk::Read
+    );
+}
+
+#[test]
+fn v2_terminal_and_connection_tools_reject_legacy_target_authority() {
+    let tools = orchestrator_tool_definitions();
+    for name in [
+        "connect_target",
+        "run_command",
+        "observe_terminal",
+        "send_terminal_input",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("v2 tool definition");
+        let properties = tool
+            .parameters
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("v2 tool properties");
+
+        assert_eq!(
+            tool.parameters.get("additionalProperties"),
+            Some(&serde_json::json!(false)),
+            "{name} must reject unknown legacy authority fields"
+        );
+        assert!(
+            !properties.contains_key("target_id"),
+            "{name} must not accept a raw runtime target id"
+        );
+    }
+    let connect_target = tools
+        .iter()
+        .find(|tool| tool.name == "connect_target")
+        .expect("connect target definition");
+    assert_eq!(
+        connect_target
+            .parameters
+            .pointer("/properties/resource_ref/required"),
+        Some(&serde_json::json!(["kind", "id"]))
+    );
+
+    for name in [
+        "read_resource",
+        "write_resource",
+        "transfer_resource",
+        "open_app_surface",
+        "get_state",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("v2 tool definition");
+        let properties = tool
+            .parameters
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("v2 tool properties");
+
+        assert_eq!(
+            tool.parameters.get("additionalProperties"),
+            Some(&serde_json::json!(false)),
+            "{name} must reject unknown legacy authority fields"
+        );
+        assert!(
+            !properties.contains_key("target_id"),
+            "{name} must not accept a raw runtime target id"
+        );
+    }
+}
+
+#[test]
+fn orchestrator_v2_authority_inventory_covers_every_tool() {
+    let mut inventory = serde_json::json!({
+        "list_targets": { "authority": "discovery", "fields": [] },
+        "select_target": { "authority": "discovery", "fields": [] },
+        "connect_target": { "authority": "stable_resource", "fields": ["resource_ref"] },
+        "run_command": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "observe_terminal": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "send_terminal_input": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "wait_terminal_output": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "get_terminal_command_status": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "read_resource": { "authority": "discriminated", "fields": ["resource_ref", "handle_id"] },
+        "write_resource": { "authority": "discriminated", "fields": ["resource_ref", "handle_id"] },
+        "transfer_resource": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "open_app_surface": { "authority": "discriminated", "fields": ["resource_ref", "handle_id"] },
+        "get_state": { "authority": "discriminated", "fields": ["resource_ref", "handle_id"] },
+        "remember_preference": { "authority": "memory_store", "fields": [] },
+        "recall_preferences": { "authority": "memory_store", "fields": [] },
+        "create_background_task": { "authority": "stable_resource_only", "fields": [] },
+        "list_background_tasks": { "authority": "conversation_owner", "fields": [] },
+        "get_background_task": { "authority": "conversation_owner", "fields": [] },
+        "cancel_background_task": { "authority": "conversation_owner", "fields": [] },
+        "inspect_host_tools": { "authority": "discriminated", "fields": ["resource_ref", "handle_id"] },
+        "control_host_tool": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "list_forwards": { "authority": "discriminated", "fields": ["resource_ref", "handle_id"] },
+        "manage_forward": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "list_plugins": { "authority": "plugin_registry", "fields": [] },
+        "manage_plugin": { "authority": "plugin_registry", "fields": [] },
+        "list_transport_profiles": { "authority": "profile_store", "fields": [] },
+        "open_transport_profile": { "authority": "profile_store", "fields": [] },
+        "get_transport_session_state": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "manage_serial_session": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "manage_telnet_session": { "authority": "runtime_handle", "fields": ["handle_id"] },
+        "list_remote_desktop_sessions": { "authority": "remote_desktop_owner", "fields": [] },
+        "manage_remote_desktop_session": { "authority": "remote_desktop_owner", "fields": [] },
+        "get_cloud_sync_state": { "authority": "cloud_sync_owner", "fields": [] },
+        "manage_cloud_sync": { "authority": "cloud_sync_owner", "fields": [] },
+        "list_credentials": { "authority": "credential_metadata_store", "fields": [] },
+        "manage_credential": { "authority": "credential_store", "fields": [] },
+        "list_memory_entries": { "authority": "memory_store", "fields": [] },
+        "manage_memory_entry": { "authority": "memory_store", "fields": [] }
+    });
+    inventory
+        .as_object_mut()
+        .expect("the contract inventory is an object")
+        .insert(
+            "load_skill".to_string(),
+            serde_json::json!({ "authority": "skill_registry", "fields": [] }),
+        );
+    inventory
+        .as_object_mut()
+        .expect("the contract inventory is an object")
+        .insert(
+            "read_skill_resource".to_string(),
+            serde_json::json!({ "authority": "loaded_skill", "fields": [] }),
+        );
+    let tools = orchestrator_tool_definitions();
+    let inventory = inventory
+        .as_object()
+        .expect("the contract inventory is an object");
+
+    assert_eq!(tools.len(), inventory.len());
+    for tool in &tools {
+        let contract = inventory
+            .get(&tool.name)
+            .unwrap_or_else(|| panic!("{} is missing from the v2 inventory", tool.name));
+        assert_eq!(
+            tool.parameters.get("additionalProperties"),
+            Some(&serde_json::json!(false)),
+            "{} must reject unknown authority fields",
+            tool.name
+        );
+        let properties = tool
+            .parameters
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("tool properties");
+        for field in contract
+            .get("fields")
+            .and_then(serde_json::Value::as_array)
+            .expect("authority field inventory")
+        {
+            let field = field.as_str().expect("authority field name");
+            assert!(
+                properties.contains_key(field),
+                "{} must expose its declared {field} authority field",
+                tool.name
+            );
+        }
+        assert!(
+            !properties.contains_key("target_id"),
+            "{} must never restore v1 raw target authority",
+            tool.name
+        );
+    }
+}
+
+#[test]
+fn canonical_v2_arguments_reject_unknown_and_legacy_authority_fields() {
+    for arguments in [
+        serde_json::json!({
+            "handle_id": "rt_current",
+            "command": "pwd",
+            "target_id": "terminal-session:42",
+        }),
+        serde_json::json!({
+            "handle_id": "rt_current",
+            "command": "pwd",
+            "capabilities": ["terminal.run_command"],
+        }),
+    ] {
+        assert_eq!(
+            canonicalize_orchestrator_tool_arguments("run_command", arguments),
+            Err(OrchestratorArgumentError::InvalidArguments)
+        );
+    }
+}
+
+#[test]
+fn canonical_v2_arguments_enforce_discriminated_resource_authority() {
+    let settings_with_live_handle = serde_json::json!({
+        "resource": "settings",
+        "handle_id": "rt_current",
+    });
+    let file_with_stable_reference = serde_json::json!({
+        "resource": "file",
+        "resource_ref": {
+            "kind": "settings_scope",
+            "id": "app",
+        },
+        "path": "/tmp/example.txt",
+    });
+
+    assert!(
+        canonicalize_orchestrator_tool_arguments("read_resource", settings_with_live_handle)
+            .is_err()
+    );
+    assert!(
+        canonicalize_orchestrator_tool_arguments("read_resource", file_with_stable_reference)
+            .is_err()
+    );
+}
+
+#[test]
+fn canonical_v2_file_write_preserves_the_approved_argument_object() {
+    let arguments = serde_json::json!({
+        "resource": "file",
+        "handle_id": "rt_current",
+        "path": "/tmp/example.txt",
+        "content": "replacement text",
+        "expected_hash": "sha256:example",
+        "dry_run": true,
+    });
+
+    let canonical = canonicalize_orchestrator_tool_arguments("write_resource", arguments.clone())
+        .expect("valid v2 file write");
+
+    assert_eq!(canonical, arguments);
 }
 
 #[test]
@@ -632,7 +926,7 @@ fn ai_policy_requires_destructive_approval_but_bypass_allows_it() {
         Some(&args),
         &policy,
         AiPolicySafetyMode::Default,
-        Some("profile-a".to_string()),
+        Some("profile-a"),
     );
     assert_eq!(
         default_decision.decision,
@@ -650,6 +944,168 @@ fn ai_policy_requires_destructive_approval_but_bypass_allows_it() {
     );
     assert_eq!(bypass_decision.decision, AiPolicyDecisionKind::Allow);
     assert_eq!(bypass_decision.reason_code, "bypass_destructive_allowed");
+}
+
+#[test]
+fn ai_policy_read_only_mode_allows_reads_and_denies_every_mutation_class() {
+    let mut auto_approve_tools = HashMap::new();
+    for key in ["write_resource:file", "run_command", "send_terminal_input"] {
+        auto_approve_tools.insert(key.to_string(), true);
+    }
+    let policy = AiToolUsePolicy {
+        enabled: true,
+        auto_approve_tools,
+        disabled_tools: Vec::new(),
+        max_rounds: Some(10),
+        max_calls_per_round: Some(8),
+    };
+
+    let read_decision = resolve_ai_policy_decision(
+        "observe_terminal",
+        None,
+        &policy,
+        AiPolicySafetyMode::ReadOnly,
+        None,
+    );
+    assert_eq!(read_decision.decision, AiPolicyDecisionKind::Allow);
+
+    let mutation_cases = [
+        (
+            "write_resource",
+            serde_json::json!({ "resource": "file" }),
+            AiActionRisk::Write,
+        ),
+        (
+            "run_command",
+            serde_json::json!({ "command": "pwd" }),
+            AiActionRisk::Execute,
+        ),
+        (
+            "send_terminal_input",
+            serde_json::json!({ "input": "q" }),
+            AiActionRisk::Interactive,
+        ),
+        (
+            "run_command",
+            serde_json::json!({ "command": "sudo reboot" }),
+            AiActionRisk::Destructive,
+        ),
+    ];
+    for (tool_name, args, expected_risk) in mutation_cases {
+        let decision = resolve_ai_policy_decision(
+            tool_name,
+            Some(&args),
+            &policy,
+            AiPolicySafetyMode::ReadOnly,
+            None,
+        );
+        assert_eq!(decision.risk, expected_risk);
+        assert_eq!(decision.decision, AiPolicyDecisionKind::Deny);
+        assert_eq!(decision.reason_code, "read_only_mode_denied");
+    }
+
+    assert_eq!(
+        serde_json::to_value(AiPolicySafetyMode::ReadOnly).unwrap(),
+        serde_json::json!("read_only")
+    );
+}
+
+#[test]
+fn application_tool_policy_classifies_mutations_by_action() {
+    assert_eq!(
+        orchestrator_risk_for_tool(
+            "control_host_tool",
+            Some(&serde_json::json!({ "action": "kill_session" })),
+        ),
+        AiActionRisk::Destructive
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool(
+            "control_host_tool",
+            Some(&serde_json::json!({ "action": "restart" })),
+        ),
+        AiActionRisk::Execute
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool(
+            "manage_forward",
+            Some(&serde_json::json!({ "action": "delete" })),
+        ),
+        AiActionRisk::Destructive
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool(
+            "manage_plugin",
+            Some(&serde_json::json!({ "action": "uninstall" })),
+        ),
+        AiActionRisk::Destructive
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool("create_background_task", None),
+        AiActionRisk::Write
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool("inspect_host_tools", None),
+        AiActionRisk::Read
+    );
+}
+
+#[test]
+fn application_tool_family_approval_covers_safe_actions_only() {
+    let mut auto_approve_tools = HashMap::new();
+    auto_approve_tools.insert("control_host_tool".to_string(), true);
+    auto_approve_tools.insert("manage_forward".to_string(), true);
+    auto_approve_tools.insert("manage_plugin".to_string(), true);
+    let policy = AiToolUsePolicy {
+        enabled: true,
+        auto_approve_tools,
+        ..AiToolUsePolicy::default()
+    };
+
+    for (tool_name, action) in [
+        ("control_host_tool", "restart"),
+        ("manage_forward", "create"),
+        ("manage_plugin", "enable"),
+    ] {
+        let decision = resolve_ai_policy_decision(
+            tool_name,
+            Some(&serde_json::json!({ "action": action })),
+            &policy,
+            AiPolicySafetyMode::Default,
+            None,
+        );
+        assert_eq!(decision.decision, AiPolicyDecisionKind::Allow);
+        assert_eq!(decision.reason_code, "auto_approved");
+    }
+
+    for (tool_name, action) in [
+        ("control_host_tool", "kill_session"),
+        ("manage_forward", "delete"),
+        ("manage_plugin", "uninstall"),
+    ] {
+        let decision = resolve_ai_policy_decision(
+            tool_name,
+            Some(&serde_json::json!({ "action": action })),
+            &policy,
+            AiPolicySafetyMode::Default,
+            None,
+        );
+        assert_eq!(decision.decision, AiPolicyDecisionKind::RequireApproval);
+        assert_eq!(decision.reason_code, "destructive_requires_approval");
+    }
+
+    let mut specific_override = policy.clone();
+    specific_override
+        .auto_approve_tools
+        .insert("control_host_tool:restart".to_string(), false);
+    let decision = resolve_ai_policy_decision(
+        "control_host_tool",
+        Some(&serde_json::json!({ "action": "restart" })),
+        &specific_override,
+        AiPolicySafetyMode::Default,
+        None,
+    );
+    assert_eq!(decision.decision, AiPolicyDecisionKind::RequireApproval);
 }
 
 #[test]
@@ -840,6 +1296,34 @@ fn sanitize_for_ai_preserves_tauri_type_annotation_exclusions() {
 }
 
 #[test]
+fn sanitize_json_for_ai_uses_keys_to_redact_short_or_unstructured_secrets() {
+    let input = serde_json::json!({
+        "apiKey": "short",
+        "nested": {
+            "Authorization": "opaque credential",
+            "output": "export TOKEN=long-secret-value",
+        },
+        "key": "visible-key-name",
+        "usage": {
+            "inputTokens": 42,
+            "maxToken": 8192,
+        },
+        "safe": ["visible", 3],
+    });
+
+    let sanitized = sanitize_json_for_ai(&input);
+
+    assert_eq!(sanitized["apiKey"], "[REDACTED]");
+    assert_eq!(sanitized["nested"]["Authorization"], "[REDACTED]");
+    assert_eq!(sanitized["nested"]["output"], "export TOKEN=[REDACTED]");
+    assert_eq!(sanitized["key"], "visible-key-name");
+    assert_eq!(sanitized["usage"]["inputTokens"], 42);
+    assert_eq!(sanitized["usage"]["maxToken"], 8192);
+    assert_eq!(sanitized["safe"], serde_json::json!(["visible", 3]));
+    assert!(!sanitized.to_string().contains("opaque credential"));
+}
+
+#[test]
 fn sanitize_api_messages_redacts_provider_content_without_touching_tool_calls() {
     let original = vec![
         chat_message(
@@ -1011,40 +1495,54 @@ fn embedding_provider_resolution_matches_tauri_auto_and_configured_paths() {
 
 #[test]
 fn chat_embedding_key_scope_matches_tauri_prompt_guard() {
-    assert_eq!(
+    assert!(matches!(
         resolve_chat_embedding_api_key("local", Some("chat"), None, false, AiEmbeddingMode::Auto,),
         AiChatEmbeddingApiKeyDecision::NoKey
+    ));
+    let provider_key = SharedAiProviderKey::new(zeroize::Zeroizing::new("sk-active".to_string()));
+    let active_key = resolve_chat_embedding_api_key(
+        "chat",
+        Some("chat"),
+        Some(&provider_key),
+        true,
+        AiEmbeddingMode::Auto,
     );
-    assert_eq!(
-        resolve_chat_embedding_api_key(
-            "chat",
-            Some("chat"),
-            Some(zeroize::Zeroizing::new("sk-active".to_string())),
-            true,
-            AiEmbeddingMode::Auto,
-        ),
-        AiChatEmbeddingApiKeyDecision::UseKey(zeroize::Zeroizing::new("sk-active".to_string()))
-    );
-    assert_eq!(
+    assert!(matches!(
+        active_key,
+        AiChatEmbeddingApiKeyDecision::UseKey(key) if key.as_str() == "sk-active"
+    ));
+    assert!(matches!(
         resolve_chat_embedding_api_key(
             "embedding",
             Some("chat"),
-            Some(zeroize::Zeroizing::new("sk-active".to_string())),
+            Some(&provider_key),
             true,
             AiEmbeddingMode::Auto,
         ),
         AiChatEmbeddingApiKeyDecision::Skip
-    );
-    assert_eq!(
+    ));
+    assert!(matches!(
         resolve_chat_embedding_api_key(
             "embedding",
             Some("chat"),
-            Some(zeroize::Zeroizing::new("sk-active".to_string())),
+            Some(&provider_key),
             true,
             AiEmbeddingMode::Configured,
         ),
-        AiChatEmbeddingApiKeyDecision::LoadProviderKey("embedding".to_string())
-    );
+        AiChatEmbeddingApiKeyDecision::LoadProviderKey(provider_id)
+            if provider_id == "embedding"
+    ));
+}
+
+#[test]
+fn shared_provider_key_debug_is_redacted() {
+    let key =
+        SharedAiProviderKey::new(zeroize::Zeroizing::new("provider-secret-value".to_string()));
+
+    let debug = format!("{key:?}");
+
+    assert_eq!(debug, "SharedAiProviderKey(<redacted>)");
+    assert!(!debug.contains("provider-secret-value"));
 }
 
 #[test]
@@ -1361,7 +1859,7 @@ fn chat_persistence_round_trips_tauri_redb_tables() {
         },
     );
 
-    store.save_state(&state).unwrap();
+    store.save_state(state.clone()).unwrap();
     assert_eq!(store.load_state().unwrap(), state);
     drop(store);
 
@@ -1509,6 +2007,7 @@ fn chat_persistence_loads_tauri_message_field_order_with_context_snapshot() {
     assert_eq!(message.content, "hello from tauri");
     assert_eq!(message.context.as_deref(), Some("terminal context"));
     assert_eq!(message.model.as_deref(), Some("tauri-model"));
+    assert_eq!(conversation.turn_count, 1);
 }
 
 #[test]
@@ -1548,7 +2047,7 @@ fn chat_persistence_save_state_rejects_stale_projection_snapshots() {
     );
 
     store
-        .save_state_with_projection_updated_at(&state, 2_000)
+        .save_state_with_projection_updated_at(state.clone(), 2_000)
         .unwrap();
 
     let mut stale_state = state.clone();
@@ -1563,7 +2062,7 @@ fn chat_persistence_save_state_rejects_stale_projection_snapshots() {
         }));
     });
     store
-        .save_state_with_projection_updated_at(&stale_state, 1_500)
+        .save_state_with_projection_updated_at(stale_state.clone(), 1_500)
         .unwrap();
 
     let loaded = store.load_state().unwrap();
@@ -1585,7 +2084,7 @@ fn chat_persistence_save_state_rejects_stale_projection_snapshots() {
         message.content = "newer projection".into();
     });
     store
-        .save_state_with_projection_updated_at(&stale_state, 2_500)
+        .save_state_with_projection_updated_at(stale_state.clone(), 2_500)
         .unwrap();
     let loaded = store.load_state().unwrap();
     assert_eq!(
@@ -1653,7 +2152,7 @@ fn chat_persistence_hydrates_interrupted_stream_as_closed_turn() {
         },
     );
 
-    store.save_state(&state).unwrap();
+    store.save_state(state.clone()).unwrap();
 
     let loaded = store.load_state().unwrap();
     let message = &loaded.conversations[0].messages[0];
@@ -1756,11 +2255,11 @@ fn chat_persistence_replays_completed_stream_turn_and_transcript_order() {
         },
     );
 
-    store.save_state(&state).unwrap();
+    store.save_state(state.clone()).unwrap();
     store
         .append_transcript_entries(
             &conversation_id,
-            &[
+            vec![
                 PersistedTranscriptEntry {
                     id: "transcript-user-user-1".into(),
                     conversation_id: conversation_id.clone(),
@@ -1907,13 +2406,13 @@ fn chat_persistence_appends_transcript_and_diagnostic_events() {
     };
 
     store
-        .append_transcript_entries("conversation-1", std::slice::from_ref(&transcript))
+        .append_transcript_entries("conversation-1", vec![transcript])
         .unwrap();
     store
-        .append_diagnostic_events("conversation-1", std::slice::from_ref(&diagnostic))
+        .append_diagnostic_events("conversation-1", vec![diagnostic.clone()])
         .unwrap();
     store
-        .append_diagnostic_events("conversation-1", std::slice::from_ref(&diagnostic))
+        .append_diagnostic_events("conversation-1", vec![diagnostic.clone()])
         .unwrap();
 
     let tail = store.diagnostic_tail("conversation-1", 10).unwrap();
@@ -1953,6 +2452,199 @@ fn chat_persistence_appends_transcript_and_diagnostic_events() {
 }
 
 #[test]
+fn chat_persistence_redacts_transcript_and_diagnostic_payloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat_history.redb");
+    let store = AiChatPersistenceStore::new(&path);
+    store
+        .append_transcript_entries(
+            "conversation-secret",
+            vec![PersistedTranscriptEntry {
+                id: "tr-secret".into(),
+                conversation_id: "conversation-secret".into(),
+                turn_id: Some("assistant-secret".into()),
+                parent_id: None,
+                timestamp: 44,
+                kind: "tool_result".into(),
+                payload: serde_json::json!({
+                    "apiKey": "short-secret",
+                    "output": "export TOKEN=transcript-secret-value",
+                }),
+            }],
+        )
+        .unwrap();
+    store
+        .append_diagnostic_events(
+            "conversation-secret",
+            vec![PersistedDiagnosticEvent {
+                id: "diag-secret".into(),
+                conversation_id: "conversation-secret".into(),
+                turn_id: Some("assistant-secret".into()),
+                round_id: None,
+                timestamp: 45,
+                event_type: "tool_result".into(),
+                data: serde_json::json!({
+                    "Authorization": "Bearer diagnostic-secret-value",
+                }),
+            }],
+        )
+        .unwrap();
+
+    let diagnostic = store
+        .diagnostic_tail("conversation-secret", 1)
+        .unwrap()
+        .pop()
+        .expect("diagnostic");
+    assert_eq!(diagnostic.data["Authorization"], "[REDACTED]");
+    assert!(
+        !diagnostic
+            .data
+            .to_string()
+            .contains("diagnostic-secret-value")
+    );
+
+    drop(store);
+    let db = redb::Database::create(&path).unwrap();
+    let read = db.begin_read().unwrap();
+    // Inspect the durable row rather than only the caller-owned input.
+    let transcript_table = read
+        .open_table(redb::TableDefinition::<&str, &[u8]>::new(
+            "ai_chat_transcript",
+        ))
+        .unwrap();
+    let stored = transcript_table.get("tr-secret").unwrap().unwrap();
+    let transcript: PersistedTranscriptEntry = rmp_serde::from_slice(stored.value()).unwrap();
+    assert_eq!(transcript.payload["apiKey"], "[REDACTED]");
+    assert!(!transcript.payload.to_string().contains("short-secret"));
+    assert!(
+        !transcript
+            .payload
+            .to_string()
+            .contains("transcript-secret-value")
+    );
+}
+
+#[test]
+fn chat_persistence_redacts_conversation_projection_before_storage() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat_history.redb");
+    let store = AiChatPersistenceStore::new(&path);
+    let mut state = AiChatState::default();
+    let conversation_id = state.create_conversation(
+        "conversation-secret".into(),
+        Some("API_KEY=title-secret-value".into()),
+        42,
+        None,
+    );
+    let mut message = chat_message(
+        "assistant-secret",
+        AiChatRole::Assistant,
+        "export TOKEN=content-secret-value",
+    );
+    message.context = Some("Authorization: Bearer context-secret-value".into());
+    message.thinking_content = Some("password=thinking-secret-value".into());
+    message.tool_calls = vec![serde_json::json!({
+        "id": "tool-secret",
+        "arguments": "{\"apiKey\":\"short\"}",
+    })];
+    message.turn = Some(serde_json::json!({
+        "parts": [{
+            "type": "guardrail",
+            "rawText": "PRIVATE_KEY=turn-secret-value",
+        }],
+    }));
+    state.add_message(&conversation_id, message);
+    state.conversations[0].session_metadata = Some(serde_json::json!({
+        "authToken": "metadata-secret-value",
+    }));
+
+    store.save_state(state).unwrap();
+
+    let loaded = store.load_state().unwrap();
+    let retained = format!("{loaded:?}");
+    for secret in [
+        "title-secret-value",
+        "content-secret-value",
+        "context-secret-value",
+        "thinking-secret-value",
+        "\"short\"",
+        "turn-secret-value",
+        "metadata-secret-value",
+    ] {
+        assert!(!retained.contains(secret));
+    }
+    assert!(retained.contains("[REDACTED]"));
+}
+
+#[test]
+fn legacy_runtime_history_fixture_is_readable_and_non_actionable() {
+    const LEGACY_HANDLE: &str = "rt_0123456789abcdef0123456789abcdef";
+    const FIXTURE_SECRET: &str = "fixture-secret-value";
+    let state: AiChatState =
+        serde_json::from_str(include_str!("testdata/legacy_conversation_2_0_13.json"))
+            .expect("the checked-in legacy fixture is valid");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chat_history.redb");
+    let store = AiChatPersistenceStore::new(&path);
+
+    store.save_state(state).unwrap();
+    let loaded = store.load_state().unwrap();
+    let conversation = &loaded.conversations[0];
+    assert_eq!(conversation.title, "Legacy runtime history");
+    assert!(
+        conversation.messages[1]
+            .content
+            .contains("completed successfully"),
+        "legacy visible history remains readable"
+    );
+    let tool_call = conversation.messages[1].tool_calls[0]
+        .as_object()
+        .expect("persisted tool call");
+    assert_eq!(tool_call.get("historical"), Some(&serde_json::json!(true)));
+    assert_eq!(tool_call.get("actionable"), Some(&serde_json::json!(false)));
+
+    let projection = serde_json::to_string(&loaded).unwrap();
+    for forbidden in [
+        LEGACY_HANDLE,
+        FIXTURE_SECRET,
+        "\"target_id\"",
+        "\"targetId\"",
+        "\"sessionId\"",
+        "\"node_id\"",
+        "\"nodeId\"",
+        "\"tab_id\"",
+        "\"tabId\"",
+        "\"pane_id\"",
+        "\"paneId\"",
+        "\"runtimeEpoch\"",
+    ] {
+        assert!(
+            !projection.contains(forbidden),
+            "persisted projection retained forbidden runtime authority: {forbidden}"
+        );
+    }
+
+    store.save_state(loaded.clone()).unwrap();
+    assert_eq!(
+        store.load_state().unwrap(),
+        loaded,
+        "projection-time migration must be idempotent"
+    );
+    drop(store);
+    let stored_bytes = std::fs::read(path).unwrap();
+    assert!(
+        !stored_bytes
+            .windows(LEGACY_HANDLE.len())
+            .any(|window| window == LEGACY_HANDLE.as_bytes())
+    );
+    assert!(
+        !stored_bytes
+            .windows(FIXTURE_SECRET.len())
+            .any(|window| window == FIXTURE_SECRET.as_bytes())
+    );
+}
+
+#[test]
 fn chat_persistence_hydrates_round_summaries_from_transcript() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("chat_history.redb");
@@ -1978,11 +2670,11 @@ fn chat_persistence_hydrates_round_summaries_from_transcript() {
         chat_message("user-1", AiChatRole::User, "hello"),
     );
     state.add_message(&conversation_id, assistant);
-    store.save_state(&state).unwrap();
+    store.save_state(state.clone()).unwrap();
     store
         .append_transcript_entries(
             &conversation_id,
-            &[PersistedTranscriptEntry {
+            vec![PersistedTranscriptEntry {
                 id: "summary-1".into(),
                 conversation_id: conversation_id.clone(),
                 turn_id: Some("assistant-1".into()),
@@ -2049,7 +2741,7 @@ fn chat_persistence_preserves_message_branches() {
     });
     state.add_message(&conversation_id, edited);
 
-    store.save_state(&state).unwrap();
+    store.save_state(state).unwrap();
     let reloaded = store.load_state().unwrap();
     let message = &reloaded.conversations[0].messages[0];
     let branches = message.branches.as_ref().unwrap();
@@ -2078,7 +2770,7 @@ fn chat_persistence_preserves_follow_up_suggestions() {
     }];
     state.add_message(&conversation_id, reply);
 
-    store.save_state(&state).unwrap();
+    store.save_state(state).unwrap();
     let reloaded = store.load_state().unwrap();
     let message = &reloaded.conversations[0].messages[0];
     assert_eq!(message.suggestions.len(), 1);
@@ -2102,7 +2794,7 @@ fn chat_persistence_loads_metadata_first_and_conversation_on_demand() {
         &newer,
         chat_message("newer-message", AiChatRole::User, "new"),
     );
-    store.save_state(&state).unwrap();
+    store.save_state(state).unwrap();
 
     let reloaded = store.load_state().unwrap();
     assert_eq!(reloaded.active_conversation_id.as_deref(), Some("newer"));
@@ -2134,11 +2826,11 @@ fn chat_persistence_keeps_more_than_legacy_conversation_limit() {
             None,
         );
     }
-    store.save_state(&state).unwrap();
+    store.save_state(state).unwrap();
 
     let reloaded = store.load_state().unwrap();
     assert_eq!(reloaded.conversations.len(), 125);
-    store.save_state(&reloaded).unwrap();
+    store.save_state(reloaded).unwrap();
     assert!(store.load_conversation("conversation-0").unwrap().is_some());
 }
 
@@ -2163,7 +2855,7 @@ fn chat_persistence_keeps_more_than_legacy_message_limit() {
             ),
         );
     }
-    store.save_state(&state).unwrap();
+    store.save_state(state).unwrap();
 
     let reloaded = store.load_conversation(&conversation_id).unwrap().unwrap();
     assert_eq!(reloaded.messages.len(), 250);
@@ -2529,13 +3221,22 @@ fn anthropic_and_gemini_stream_parsers_extract_content() {
     let gemini = parse_gemini_data_line(
         r#"data: {"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}"#,
     );
-    assert_eq!(gemini.events, vec![AiStreamEvent::Content("hello".into())]);
+    assert_eq!(
+        gemini.events,
+        vec![
+            AiStreamEvent::ProviderResponsePart {
+                provider_type: "gemini".to_string(),
+                part: serde_json::json!({"text": "hello"}),
+            },
+            AiStreamEvent::Content("hello".into()),
+        ]
+    );
 
     let gemini_tool = parse_gemini_data_line(
         r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_state","args":{"scope":"active"}}}]}}]}"#,
     );
-    assert_eq!(gemini_tool.events.len(), 1);
-    match &gemini_tool.events[0] {
+    assert_eq!(gemini_tool.events.len(), 2);
+    match &gemini_tool.events[1] {
         AiStreamEvent::ToolCallComplete {
             name, arguments, ..
         } => {
@@ -2548,7 +3249,7 @@ fn anthropic_and_gemini_stream_parsers_extract_content() {
     let gemini_array_tool = parse_gemini_data_line(
         r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_state","args":["scope","active"]}}]}}]}"#,
     );
-    match &gemini_array_tool.events[0] {
+    match &gemini_array_tool.events[1] {
         AiStreamEvent::ToolCallComplete { arguments, .. } => {
             assert_eq!(arguments, "[\"scope\",\"active\"]");
         }
@@ -2558,10 +3259,53 @@ fn anthropic_and_gemini_stream_parsers_extract_content() {
     let gemini_empty_string_tool = parse_gemini_data_line(
         r#"data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_state","args":""}}]}}]}"#,
     );
-    match &gemini_empty_string_tool.events[0] {
+    match &gemini_empty_string_tool.events[1] {
         AiStreamEvent::ToolCallComplete { arguments, .. } => {
             assert_eq!(arguments, "{}");
         }
         other => panic!("expected Gemini tool call, got {other:?}"),
     }
+}
+
+#[test]
+fn gemini_signed_parts_round_trip_without_rebuilding() {
+    let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"checking","thoughtSignature":"text-signature"},{"functionCall":{"name":"get_state","args":{"scope":"active"}},"thoughtSignature":"call-signature"}]}}]}"#;
+    let parsed = parse_gemini_data_line(line);
+    let mut assistant = chat_message("assistant", AiChatRole::Assistant, "checking");
+    let mut provider_parts = Vec::new();
+
+    for event in parsed.events {
+        match event {
+            AiStreamEvent::ProviderResponsePart {
+                provider_type,
+                part,
+            } if provider_type == "gemini" => provider_parts.push(part),
+            AiStreamEvent::ToolCallComplete {
+                id,
+                name,
+                arguments,
+            } => upsert_ai_tool_call(&mut assistant, &id, &name, &arguments, "completed"),
+            _ => {}
+        }
+    }
+    set_ai_provider_parts(&mut assistant, "gemini", provider_parts);
+
+    let (_, contents) = gemini_chat_contents(&[assistant]);
+
+    assert_eq!(
+        contents[1]["parts"],
+        serde_json::json!([
+            {
+                "text": "checking",
+                "thoughtSignature": "text-signature",
+            },
+            {
+                "functionCall": {
+                    "name": "get_state",
+                    "args": { "scope": "active" },
+                },
+                "thoughtSignature": "call-signature",
+            },
+        ])
+    );
 }

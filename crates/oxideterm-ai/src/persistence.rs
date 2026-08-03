@@ -82,7 +82,17 @@ impl AiChatPersistenceStore {
 
     pub fn load_state(&self) -> Result<AiChatState> {
         self.initialize()?;
-        let metas = self.list_conversations()?;
+        let mut metas = self.list_conversations()?;
+        for meta in &mut metas {
+            if meta.turn_count.is_none()
+                && meta.message_count > 0
+                && let Some(conversation) = self.load_conversation(&meta.id)?
+            {
+                // Version 3 metadata predates the user-submission count. Decode
+                // the stored roles once instead of guessing from row parity.
+                meta.turn_count = Some(conversation.turn_count);
+            }
+        }
         let active_conversation_id = metas.first().map(|meta| meta.id.clone());
         let mut conversations = metas
             .into_iter()
@@ -143,6 +153,7 @@ impl AiChatPersistenceStore {
         let mut conversation = conversation_from_meta(meta);
         conversation.messages = messages;
         conversation.message_count = conversation.messages.len();
+        conversation.turn_count = crate::ai_conversation_turn_count(&conversation.messages);
         conversation.messages_loaded = true;
         Ok(Some(conversation))
     }
@@ -164,15 +175,18 @@ impl AiChatPersistenceStore {
         }
     }
 
-    pub fn save_state(&self, state: &AiChatState) -> Result<()> {
+    pub fn save_state(&self, state: AiChatState) -> Result<()> {
         self.save_state_with_projection_updated_at(state, Self::next_projection_persist_at())
     }
 
     pub fn save_state_with_projection_updated_at(
         &self,
-        state: &AiChatState,
+        mut state: AiChatState,
         projection_updated_at: i64,
     ) -> Result<()> {
+        // Consume the caller's snapshot so the durable redaction pass does not
+        // require another full conversation clone.
+        crate::sanitize_chat_state_for_persistence(&mut state);
         self.initialize()?;
         let write_txn = self.db.begin_write()?;
 
@@ -214,6 +228,9 @@ impl AiChatPersistenceStore {
                         rmp_serde::from_slice::<ConversationMeta>(existing.value())
                 {
                     meta.message_count = existing_meta.message_count;
+                    // Preserve an established count, while allowing the exact
+                    // legacy-role backfill from load_state to become durable.
+                    meta.turn_count = existing_meta.turn_count.or(meta.turn_count);
                     meta.updated_at = meta.updated_at.max(existing_meta.updated_at);
                 }
                 let meta_bytes = rmp_serde::to_vec(&meta)?;
@@ -242,10 +259,15 @@ impl AiChatPersistenceStore {
     pub fn append_transcript_entries(
         &self,
         conversation_id: &str,
-        entries: &[PersistedTranscriptEntry],
+        mut entries: Vec<PersistedTranscriptEntry>,
     ) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
+        }
+        for entry in &mut entries {
+            // Transcript payloads can include tool arguments and output, so
+            // durable storage owns the final key-aware redaction boundary.
+            entry.payload = crate::sanitize_tool_protocol_json_for_persistence(&entry.payload);
         }
         self.initialize()?;
         let write_txn = self.db.begin_write()?;
@@ -254,7 +276,7 @@ impl AiChatPersistenceStore {
             let mut transcript_index_table = write_txn.open_table(CONV_TRANSCRIPT_TABLE)?;
             let mut ids = read_index_ids(&transcript_index_table, conversation_id)?;
             let mut seen = ids.iter().cloned().collect::<HashSet<_>>();
-            for entry in entries {
+            for entry in &entries {
                 let bytes = rmp_serde::to_vec(entry)?;
                 transcript_table.insert(entry.id.as_str(), bytes.as_slice())?;
                 if seen.insert(entry.id.clone()) {
@@ -271,10 +293,15 @@ impl AiChatPersistenceStore {
     pub fn append_diagnostic_events(
         &self,
         conversation_id: &str,
-        events: &[PersistedDiagnosticEvent],
+        mut events: Vec<PersistedDiagnosticEvent>,
     ) -> Result<()> {
         if events.is_empty() {
             return Ok(());
+        }
+        for event in &mut events {
+            // Diagnostics must remain structural even when a caller supplies
+            // raw provider, command, or protocol data.
+            event.data = crate::sanitize_json_for_ai(&event.data);
         }
         self.initialize()?;
         let write_txn = self.db.begin_write()?;
@@ -283,7 +310,7 @@ impl AiChatPersistenceStore {
             let mut diagnostic_index_table = write_txn.open_table(CONV_DIAGNOSTIC_TABLE)?;
             let mut ids = read_index_ids(&diagnostic_index_table, conversation_id)?;
             let mut seen = ids.iter().cloned().collect::<HashSet<_>>();
-            for event in events {
+            for event in &events {
                 let bytes = rmp_serde::to_vec(event)?;
                 diagnostic_table.insert(event.id.as_str(), bytes.as_slice())?;
                 if seen.insert(event.id.clone()) {
@@ -577,6 +604,7 @@ fn conversation_from_meta(meta: ConversationMeta) -> AiConversation {
         origin: meta.origin,
         profile_id,
         message_count: meta.message_count,
+        turn_count: meta.turn_count.unwrap_or_default(),
         session_id: meta.session_id,
         session_metadata: meta.session_metadata,
         messages_loaded: false,
@@ -609,6 +637,11 @@ fn meta_from_conversation(conversation: &AiConversation) -> ConversationMeta {
         } else {
             conversation.message_count
         },
+        turn_count: Some(if conversation.messages_loaded {
+            crate::ai_conversation_turn_count(&conversation.messages)
+        } else {
+            conversation.turn_count
+        }),
         session_id: conversation.session_id.clone(),
         origin: if conversation.origin.is_empty() {
             default_origin()
@@ -1250,6 +1283,10 @@ pub struct PersistedToolResult {
     pub error: Option<String>,
     pub truncated: Option<bool>,
     pub duration_ms: Option<i64>,
+    #[serde(default = "default_historical")]
+    pub historical: bool,
+    #[serde(default)]
+    pub actionable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1271,6 +1308,14 @@ pub struct PersistedToolCall {
     pub arguments: String,
     pub status: PersistedToolCallStatus,
     pub result: Option<PersistedToolResult>,
+    #[serde(default = "default_historical")]
+    pub historical: bool,
+    #[serde(default)]
+    pub actionable: bool,
+}
+
+fn default_historical() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1372,6 +1417,9 @@ pub struct ConversationMeta {
     pub origin: String,
     #[serde(default)]
     pub session_metadata: Option<Value>,
+    // Keep additive fields at the end because MessagePack stores structs positionally.
+    #[serde(default)]
+    pub turn_count: Option<usize>,
 }
 
 #[allow(dead_code)]

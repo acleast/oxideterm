@@ -36,12 +36,14 @@ use tokio::{
 pub use crate::backpressure::{TerminalDrainBudget, TerminalDrainReport, TerminalMagicKind};
 
 use crate::{
-    LocalEventListener, LocalPtyConfig, LocalPtySession, TermMode, TerminalCommandMark,
-    TerminalCwdIntegrationLaunchState, TerminalEvent, TerminalGraphicsState, TerminalLifecycle,
-    TerminalModemTransferRequest, TerminalProcessInfo, TerminalProcessProbe, TerminalSearchMatch,
-    TerminalSize, TerminalSnapshot, append_grid_line_text, backpressure::MagicScanWindow,
-    focus_report_sequence, graphics_cursor_from_term, interactive_terminal_config,
-    search_logical_line_matches, shell_integration::TerminalShellIntegration, snapshot_from_term,
+    LocalEventListener, LocalEventReceiver, LocalPtyConfig, LocalPtySession, TermMode,
+    TerminalActivityReceiver, TerminalCommandMark, TerminalCwdIntegrationLaunchState,
+    TerminalEvent, TerminalGraphicsState, TerminalLifecycle, TerminalModemTransferRequest,
+    TerminalProcessInfo, TerminalProcessProbe, TerminalSearchMatch, TerminalSize, TerminalSnapshot,
+    append_grid_line_text, backpressure::MagicScanWindow, focus_report_sequence,
+    graphics_cursor_from_term, incremental_snapshot_from_term, interactive_terminal_config,
+    local_event_channel, privilege_prompt::TerminalPrivilegePromptStream, search_matches_from_term,
+    shell_integration::TerminalShellIntegration, snapshot_from_term,
     snapshot_from_term_with_display_offset,
 };
 
@@ -165,8 +167,7 @@ mod tests {
             cell_width: 8,
             cell_height: 17,
         };
-        let (event_tx, event_rx) = unbounded();
-        let listener = LocalEventListener { tx: event_tx };
+        let (listener, event_rx) = local_event_channel();
         let mut term = Term::new(interactive_terminal_config(16), &size, listener);
         let mut parser = Processor::<StdSyncHandler>::new();
 
@@ -176,6 +177,24 @@ mod tests {
             panic!("expected OSC 52 clipboard query");
         };
         assert_eq!(formatter("clipboard"), "\x1b]52;c;Y2xpcGJvYXJk\x07");
+    }
+
+    #[test]
+    fn terminal_wakeup_events_are_coalesced_until_consumed() {
+        let (listener, event_rx) = local_event_channel();
+
+        listener.send_event(AlacEvent::Wakeup);
+        listener.send_event(AlacEvent::Wakeup);
+        listener.send_event(AlacEvent::Wakeup);
+
+        assert!(matches!(event_rx.try_recv(), Ok(AlacEvent::Wakeup)));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        ));
+
+        listener.send_event(AlacEvent::Wakeup);
+        assert!(matches!(event_rx.try_recv(), Ok(AlacEvent::Wakeup)));
     }
 
     #[test]

@@ -1,9 +1,123 @@
+fn ai_chat_trim_notice_signature(sequence: u64, count: usize) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&"trim", &mut hasher);
+    std::hash::Hash::hash(&sequence, &mut hasher);
+    std::hash::Hash::hash(&count, &mut hasher);
+    std::hash::Hasher::finish(&hasher)
+}
+
+fn ai_chat_bottom_spacer_signature() -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&"spacer", &mut hasher);
+    std::hash::Hasher::finish(&hasher)
+}
+
+fn ai_chat_message_base_signature(message: &AiChatMessage) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let role = match message.role {
+        AiChatRole::User => 0u8,
+        AiChatRole::Assistant => 1,
+        AiChatRole::System => 2,
+        AiChatRole::Tool => 3,
+    };
+    std::hash::Hash::hash(&"message", &mut hasher);
+    std::hash::Hash::hash(&message.id, &mut hasher);
+    std::hash::Hash::hash(&role, &mut hasher);
+    std::hash::Hash::hash(&message.content, &mut hasher);
+    std::hash::Hash::hash(&message.thinking_content, &mut hasher);
+    std::hash::Hash::hash(&message.is_streaming, &mut hasher);
+    std::hash::Hash::hash(&message.timestamp_ms, &mut hasher);
+    std::hash::Hash::hash(&message.model, &mut hasher);
+    std::hash::Hash::hash(&message.context, &mut hasher);
+    std::hash::Hash::hash(&message.tool_call_id, &mut hasher);
+    std::hash::Hash::hash(&message.tool_calls.len(), &mut hasher);
+    std::hash::Hash::hash(&message.suggestions.len(), &mut hasher);
+    if let Some(branches) = message.branches.as_ref() {
+        std::hash::Hash::hash(&branches.total, &mut hasher);
+        std::hash::Hash::hash(&branches.active_index, &mut hasher);
+    }
+    if let Some(turn) = message.turn.as_ref() {
+        // Hash JSON in place. Serializing tool output here would allocate a
+        // secret-capable temporary string on every invalidated render row.
+        ai_chat_hash_json_value(turn, &mut hasher);
+    }
+    if let Some(metadata) = message.metadata.as_ref() {
+        std::hash::Hash::hash(&metadata.kind, &mut hasher);
+        std::hash::Hash::hash(&metadata.original_count, &mut hasher);
+    }
+    if let Some(transcript_ref) = message.transcript_ref.as_ref() {
+        ai_chat_hash_json_value(transcript_ref, &mut hasher);
+    }
+    if let Some(summary_ref) = message.summary_ref.as_ref() {
+        ai_chat_hash_json_value(summary_ref, &mut hasher);
+    }
+    for tool_call in &message.tool_calls {
+        ai_chat_hash_json_value(tool_call, &mut hasher);
+    }
+    std::hash::Hasher::finish(&hasher)
+}
+
+fn ai_chat_message_list_signature(
+    base_signature: u64,
+    thinking_expanded: Option<&bool>,
+) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&base_signature, &mut hasher);
+    std::hash::Hash::hash(&thinking_expanded, &mut hasher);
+    std::hash::Hasher::finish(&hasher)
+}
+
+fn ai_chat_hash_json_value(
+    value: &serde_json::Value,
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+) {
+    match value {
+        serde_json::Value::Null => std::hash::Hash::hash(&0u8, hasher),
+        serde_json::Value::Bool(value) => {
+            std::hash::Hash::hash(&1u8, hasher);
+            std::hash::Hash::hash(value, hasher);
+        }
+        serde_json::Value::Number(value) => {
+            std::hash::Hash::hash(&2u8, hasher);
+            if let Some(value) = value.as_i64() {
+                std::hash::Hash::hash(&0u8, hasher);
+                std::hash::Hash::hash(&value, hasher);
+            } else if let Some(value) = value.as_u64() {
+                std::hash::Hash::hash(&1u8, hasher);
+                std::hash::Hash::hash(&value, hasher);
+            } else if let Some(value) = value.as_f64() {
+                std::hash::Hash::hash(&2u8, hasher);
+                std::hash::Hash::hash(&value.to_bits(), hasher);
+            }
+        }
+        serde_json::Value::String(value) => {
+            std::hash::Hash::hash(&3u8, hasher);
+            std::hash::Hash::hash(value, hasher);
+        }
+        serde_json::Value::Array(values) => {
+            std::hash::Hash::hash(&4u8, hasher);
+            std::hash::Hash::hash(&values.len(), hasher);
+            for value in values {
+                ai_chat_hash_json_value(value, hasher);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            std::hash::Hash::hash(&5u8, hasher);
+            std::hash::Hash::hash(&values.len(), hasher);
+            for (key, value) in values {
+                std::hash::Hash::hash(key, hasher);
+                ai_chat_hash_json_value(value, hasher);
+            }
+        }
+    }
+}
+
 impl WorkspaceApp {
     pub(in crate::workspace) fn render_ai_sidebar_content(
         &mut self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        self.ensure_ai_chat_initialized();
+        self.ensure_ai_chat_initialized(cx);
         let enabled = self.settings_store.settings().ai.enabled;
         let panel = if !enabled {
             ai_chat_panel(&self.tokens)
@@ -18,6 +132,9 @@ impl WorkspaceApp {
                 .child(self.render_ai_sidebar_chat_header(cx))
                 .when_some(self.render_ai_compaction_notice(cx), |panel, notice| {
                     panel.child(notice)
+                })
+                .when_some(self.render_ai_background_tasks(cx), |panel, tasks| {
+                    panel.child(tasks)
                 })
                 .child(
                     div()
@@ -39,7 +156,7 @@ impl WorkspaceApp {
                 .child(self.render_ai_context_warning_banners(cx))
                 .child(self.render_ai_sidebar_model_bar(cx))
                 .child(
-                    self.render_ai_sidebar_input(self.ai.chat.initialization_error.is_none(), cx),
+                    self.render_ai_sidebar_input(self.ai_entity.read(cx).chat_initialization_error().is_none(), cx),
                 )
                 .into_any_element()
         };
@@ -74,44 +191,67 @@ impl WorkspaceApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(error) = self.ai.chat.initialization_error.clone() {
+        if let Some(error) = self.ai_entity.read(cx).chat_initialization_error().copied() {
             return self.render_ai_sidebar_initialization_error(error, cx);
         }
-        let Some((conversation_id, items, signatures)) = self
-            .ai
-            .chat
-            .conversation_state
-            .active_conversation()
-            .and_then(|conversation| {
+        let Some((conversation_id, items, signatures)) = ({
+            let ai = self.ai_entity.read(cx);
+            let conversation = ai.conversation_state().active_conversation();
+            conversation.and_then(|conversation| {
                 if conversation.messages.is_empty() {
                     return None;
                 }
-                let mut items = Vec::new();
-                if let Some(count) = self.ai.chat.context_trim_notice_count {
-                    items.push(AiChatListItem::TrimNotice {
-                        sequence: self.ai.chat.context_trim_notice_sequence,
-                        count,
-                    });
+                let chat_ui = ai.chat_ui();
+                let mut items = Vec::with_capacity(conversation.messages.len().saturating_add(2));
+                let mut signatures =
+                    Vec::with_capacity(conversation.messages.len().saturating_add(2));
+                if let Some(count) = chat_ui.context_trim_notice_count {
+                    let sequence = chat_ui.context_trim_notice_sequence;
+                    items.push(AiChatListItem::TrimNotice { count });
+                    signatures.push(ai_chat_trim_notice_signature(sequence, count));
                 }
-                for message in &conversation.messages {
-                    items.push(AiChatListItem::Message {
-                        id: message.id.clone(),
+                let last_assistant_index = conversation
+                    .messages
+                    .iter()
+                    .rposition(|message| message.role == AiChatRole::Assistant);
+                let mut signature_cache = chat_ui.message_signature_cache.borrow_mut();
+                signature_cache.select_conversation(&conversation.id);
+                for (index, message) in conversation.messages.iter().enumerate() {
+                    let base_signature = signature_cache.signature_for(&message.id, || {
+                        ai_chat_message_base_signature(message)
                     });
+                    let signature = ai_chat_message_list_signature(
+                        base_signature,
+                        chat_ui.thinking_expansion_state.get(&message.id),
+                    );
+                    items.push(AiChatListItem::Message {
+                        index,
+                        last_assistant: last_assistant_index == Some(index),
+                    });
+                    signatures.push(signature);
+                }
+                if signature_cache.needs_prune(conversation.messages.len()) {
+                    let retained_message_ids = conversation
+                        .messages
+                        .iter()
+                        .map(|message| message.id.as_str())
+                        .collect::<HashSet<_>>();
+                    signature_cache.prune(&retained_message_ids);
                 }
                 items.push(AiChatListItem::BottomSpacer);
-                let signatures = self.ai_chat_list_signatures(conversation, &items);
+                signatures.push(ai_chat_bottom_spacer_signature());
                 Some((conversation.id.clone(), items, signatures))
             })
-        else {
+        }) else {
             return self.render_ai_sidebar_empty_chat(cx);
         };
 
         let virtual_spec = ai_chat_virtual_list_spec();
-        self.sync_ai_chat_list_state(&conversation_id, &signatures, virtual_spec);
+        self.sync_ai_chat_list_state(&conversation_id, &signatures, virtual_spec, cx);
 
         let entity = cx.entity();
-        let state = self.ai.chat.message_list_state.clone();
-        let viewport = self.ai_chat_list_viewport_snapshot();
+        let state = self.ai_entity.read(cx).chat_ui().message_list_state.clone();
+        let viewport = self.ai_chat_list_viewport_snapshot(cx);
         tauri_virtual_list(state, virtual_spec, move |index, _window, cx| {
             let Some(item) = items.get(index).cloned() else {
                 return div().into_any_element();
@@ -134,19 +274,23 @@ impl WorkspaceApp {
     ) -> AnyElement {
         match item {
             AiChatListItem::TrimNotice { count, .. } => self.render_ai_trim_notice(count, cx),
-            AiChatListItem::Message { id } => {
-                let Some(conversation) = self.ai.chat.conversation_state.active_conversation()
-                else {
-                    return div().into_any_element();
+            AiChatListItem::Message {
+                index,
+                last_assistant,
+            } => {
+                let (message, last_assistant) = {
+                    let ai = self.ai_entity.read(cx);
+                    let Some(conversation) = ai.conversation_state().active_conversation() else {
+                        return div().into_any_element();
+                    };
+                    let Some(message) = conversation.messages.get(index) else {
+                        return div().into_any_element();
+                    };
+                    // Release the Entity read guard before GPUI mutably borrows
+                    // its context; only the visible message is copied.
+                    (message.clone(), last_assistant)
                 };
-                let Some(message) = conversation
-                    .messages
-                    .iter()
-                    .find(|message| message.id == id)
-                else {
-                    return div().into_any_element();
-                };
-                self.render_ai_message(conversation, message, viewport, cx)
+                self.render_ai_message(&message, last_assistant, viewport, cx)
             }
             AiChatListItem::BottomSpacer => div().h(px(16.0)).into_any_element(),
         }
@@ -154,13 +298,14 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn ai_chat_list_viewport_snapshot(
         &self,
+        cx: &App,
     ) -> Option<AiChatListViewportSnapshot> {
-        let bounds = self.ai.chat.message_list_state.viewport_bounds();
+        let bounds = self.ai_entity.read(cx).chat_ui().message_list_state.viewport_bounds();
         let height = f32::from(bounds.size.height);
         if height <= 0.0 {
             return None;
         }
-        let scroll_top = self.ai.chat.message_list_state.logical_scroll_top();
+        let scroll_top = self.ai_entity.read(cx).chat_ui().message_list_state.logical_scroll_top();
         Some(AiChatListViewportSnapshot {
             item_ix: scroll_top.item_ix,
             offset_in_item: f32::from(scroll_top.offset_in_item),
@@ -186,126 +331,46 @@ impl WorkspaceApp {
         })
     }
 
-    pub(in crate::workspace) fn ai_chat_list_signatures(
-        &self,
-        conversation: &AiConversation,
-        items: &[AiChatListItem],
-    ) -> Vec<u64> {
-        items
-            .iter()
-            .map(|item| self.ai_chat_list_item_signature(conversation, item))
-            .collect()
-    }
-
-    pub(in crate::workspace) fn ai_chat_list_item_signature(
-        &self,
-        conversation: &AiConversation,
-        item: &AiChatListItem,
-    ) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        match item {
-            AiChatListItem::TrimNotice { sequence, count } => {
-                std::hash::Hash::hash(&"trim", &mut hasher);
-                std::hash::Hash::hash(sequence, &mut hasher);
-                std::hash::Hash::hash(count, &mut hasher);
-            }
-            AiChatListItem::Message { id } => {
-                std::hash::Hash::hash(&"message", &mut hasher);
-                std::hash::Hash::hash(id, &mut hasher);
-                if let Some(message) = conversation
-                    .messages
-                    .iter()
-                    .find(|message| &message.id == id)
-                {
-                    let role = match message.role {
-                        AiChatRole::User => 0u8,
-                        AiChatRole::Assistant => 1,
-                        AiChatRole::System => 2,
-                        AiChatRole::Tool => 3,
-                    };
-                    std::hash::Hash::hash(&role, &mut hasher);
-                    std::hash::Hash::hash(&message.content, &mut hasher);
-                    std::hash::Hash::hash(&message.thinking_content, &mut hasher);
-                    std::hash::Hash::hash(&message.is_streaming, &mut hasher);
-                    std::hash::Hash::hash(&message.timestamp_ms, &mut hasher);
-                    std::hash::Hash::hash(&message.model, &mut hasher);
-                    std::hash::Hash::hash(&message.context, &mut hasher);
-                    std::hash::Hash::hash(&message.tool_call_id, &mut hasher);
-                    std::hash::Hash::hash(&message.tool_calls.len(), &mut hasher);
-                    std::hash::Hash::hash(&message.suggestions.len(), &mut hasher);
-                    if let Some(branches) = message.branches.as_ref() {
-                        std::hash::Hash::hash(&branches.total, &mut hasher);
-                        std::hash::Hash::hash(&branches.active_index, &mut hasher);
-                    }
-                    std::hash::Hash::hash(
-                        &self.ai.chat.thinking_expansion_state.get(&message.id),
-                        &mut hasher,
-                    );
-                    if let Some(turn) = message.turn.as_ref() {
-                        std::hash::Hash::hash(&turn.to_string(), &mut hasher);
-                    }
-                    if let Some(metadata) = message.metadata.as_ref() {
-                        std::hash::Hash::hash(&metadata.kind, &mut hasher);
-                        std::hash::Hash::hash(&metadata.original_count, &mut hasher);
-                    }
-                    for tool_call in &message.tool_calls {
-                        std::hash::Hash::hash(&tool_call.to_string(), &mut hasher);
-                    }
-                }
-            }
-            AiChatListItem::BottomSpacer => {
-                std::hash::Hash::hash(&"spacer", &mut hasher);
-            }
-        }
-        std::hash::Hasher::finish(&hasher)
-    }
-
     pub(in crate::workspace) fn sync_ai_chat_list_state(
         &mut self,
         conversation_id: &str,
         signatures: &[u64],
         spec: TauriVirtualListSpec,
+        cx: &mut Context<Self>,
     ) {
-        let mut cache = self.ai.chat.message_list_cache.borrow_mut();
-        let list_was_reset = sync_tauri_virtual_list_state_by_signatures(
-            &mut self.ai.chat.message_list_state,
-            &mut cache,
-            conversation_id,
-            signatures,
-            ListAlignment::Top,
-            spec,
-        );
-        if list_was_reset {
+        self.ai_entity.update(cx, |ai, _cx| {
             // Opening a conversation starts at its newest message. GPUI's tail
             // mode then pauses automatically while the user reads older content.
-            self.ai
-                .chat
-                .message_list_state
-                .set_follow_mode(FollowMode::Tail);
-        }
+            ai.sync_chat_message_list(conversation_id, signatures, spec);
+        });
     }
 
     pub(in crate::workspace) fn render_ai_compaction_notice(
         &self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let active_id = self
-            .ai
-            .chat
-            .conversation_state
-            .active_conversation_id
-            .as_deref()?;
-        let notice = self.ai.chat.compaction_notice.as_ref()?;
-        if notice.conversation_id != active_id {
-            return None;
-        }
-        let running = notice.phase == AiCompactionNoticePhase::Running;
+        let (active_id, running, compacted_count) = {
+            let ai = self.ai_entity.read(cx);
+            let active_id = ai
+                .conversation_state()
+                .active_conversation_id
+                .as_ref()?;
+            let notice = ai.compaction_notice()?;
+            if notice.conversation_id != *active_id {
+                return None;
+            }
+            (
+                active_id.clone(),
+                notice.phase == AiCompactionNoticePhase::Running,
+                notice.compacted_count,
+            )
+        };
         let label = if running {
             self.i18n.t("ai.context.compaction_running")
         } else {
             self.i18n.t("ai.context.compaction_done").replace(
                 "{{count}}",
-                &notice.compacted_count.unwrap_or_default().to_string(),
+                &compacted_count.unwrap_or_default().to_string(),
             )
         };
         Some(
@@ -341,7 +406,7 @@ impl WorkspaceApp {
                         .child(self.render_display_text_with_role(
                             SelectableTextRole::PlainDocument,
                             "ai-compaction-notice",
-                            active_id,
+                            &active_id,
                             label,
                             self.tokens.ui.text_muted,
                             cx,
@@ -604,8 +669,10 @@ impl WorkspaceApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {
-                    this.ai.chat.draft = prompt.clone();
-                    this.ai.chat.input_focused = true;
+                    this.ai_entity.update(cx, |ai, _cx| {
+                        ai.set_chat_draft(prompt.clone());
+                        ai.focus_chat_input();
+                    });
                     this.ime_marked_text = None;
 window.focus(&this.focus_handle, cx);
                     cx.stop_propagation();
@@ -620,7 +687,7 @@ window.focus(&this.focus_handle, cx);
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut banners = div().flex_none().flex().flex_col();
-        if let Some(percentage) = self.ai.chat.model_switch_warning_percentage {
+        if let Some(percentage) = self.ai_entity.read(cx).chat_ui().model_switch_warning_percentage {
             banners = banners.child(
                 self.render_ai_context_warning_banner(
                     self.i18n
@@ -632,7 +699,7 @@ window.focus(&this.focus_handle, cx);
                 ),
             );
         }
-        if self.ai_context_danger_warning_active() {
+        if self.ai_context_danger_warning_active(cx) {
             banners = banners.child(self.render_ai_context_warning_banner(
                 self.i18n.t("ai.context.approaching_limit"),
                 false,
@@ -689,7 +756,7 @@ window.focus(&this.focus_handle, cx);
                     .child(self.render_ai_context_warning_button(
                         self.i18n.t("ai.context.compact_button"),
                         LucideIcon::Archive,
-                        self.ai.chat.loading,
+                        self.ai_entity.read(cx).chat_is_loading(),
                         AiContextWarningAction::Compact(model_switch),
                         cx,
                     ))
@@ -697,7 +764,7 @@ window.focus(&this.focus_handle, cx);
                         actions.child(self.render_ai_context_warning_button(
                             self.i18n.t("ai.context.summarize"),
                             LucideIcon::Archive,
-                            self.ai.chat.loading,
+                            self.ai_entity.read(cx).chat_is_loading(),
                             AiContextWarningAction::Summarize,
                             cx,
                         ))
@@ -763,18 +830,24 @@ window.focus(&this.focus_handle, cx);
                 match action {
                     AiContextWarningAction::Compact(model_switch) => {
                         if model_switch {
-                            this.ai.chat.model_switch_warning_percentage = None;
+                            this.ai_entity.update(cx, |ai, _cx| {
+                                ai.set_model_switch_warning(None);
+                            });
                         }
                         this.start_ai_compact_conversation(cx);
                     }
                     AiContextWarningAction::NewChat(model_switch) => {
                         if model_switch {
-                            this.ai.chat.model_switch_warning_percentage = None;
+                            this.ai_entity.update(cx, |ai, _cx| {
+                                ai.set_model_switch_warning(None);
+                            });
                         }
                         this.create_ai_sidebar_conversation(None, cx);
                     }
                     AiContextWarningAction::Dismiss => {
-                        this.ai.chat.model_switch_warning_percentage = None;
+                        this.ai_entity.update(cx, |ai, _cx| {
+                            ai.set_model_switch_warning(None);
+                        });
                     }
                     AiContextWarningAction::Summarize => {
                         this.open_ai_summarize_confirm(cx);
@@ -787,20 +860,20 @@ window.focus(&this.focus_handle, cx);
         .into_any_element()
     }
 
-    pub(in crate::workspace) fn ai_context_danger_warning_active(&self) -> bool {
-        let Some(conversation) = self.ai.chat.conversation_state.active_conversation() else {
+    pub(in crate::workspace) fn ai_context_danger_warning_active(&self, cx: &App) -> bool {
+        let Some(conversation) = self.ai_entity.read(cx).conversation_state().active_conversation() else {
             return false;
         };
         if conversation.messages.len() < 4 {
             return false;
         }
-        let (total_tokens, max_tokens) = self.ai_context_message_usage_counts();
+        let (total_tokens, max_tokens) = self.ai_context_message_usage_counts(cx);
         ai_context_percentage(total_tokens, max_tokens) > AI_CONTEXT_DANGER_PERCENT
     }
 
-    pub(in crate::workspace) fn ai_context_message_usage_counts(&self) -> (usize, usize) {
-        let breakdown = self.ai_context_token_breakdown();
-        (breakdown.messages, breakdown.max_tokens)
+    pub(in crate::workspace) fn ai_context_message_usage_counts(&self, cx: &App) -> (usize, usize) {
+        let breakdown = self.ai_context_token_breakdown(cx);
+        (breakdown.total, breakdown.max_tokens)
     }
 
     pub(in crate::workspace) fn render_ai_summarize_confirm_dialog(
@@ -810,7 +883,7 @@ window.focus(&this.focus_handle, cx);
         oxideterm_gpui_ui::confirm::confirm_dialog_with_focus_motion(
             &self.tokens,
             "ai-summarize-confirm-motion",
-            self.ai.chat.summarize_confirm_presence.phase(),
+            self.ai_entity.read(cx).chat_ui().summarize_confirm_presence.phase(),
             ConfirmDialogView {
                 variant: ConfirmDialogVariant::Default,
                 title: div()
@@ -865,10 +938,16 @@ window.focus(&this.focus_handle, cx);
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let Some(snapshot) = self.ai_entity.read(cx).chat_confirm_snapshot() else {
+            return div().into_any_element();
+        };
+        if !matches!(snapshot.kind, ai_state::AiChatConfirmKind::ClearAll) {
+            return div().into_any_element();
+        }
         oxideterm_gpui_ui::confirm::confirm_dialog_with_focus_motion(
             &self.tokens,
             "ai-clear-all-confirm-motion",
-            self.ai_clear_all_confirm_presence.phase(),
+            snapshot.phase,
             ConfirmDialogView {
                 variant: ConfirmDialogVariant::Danger,
                 title: div()
@@ -903,16 +982,14 @@ window.focus(&this.focus_handle, cx);
                     ))
                     .into_any_element(),
             },
-            self.standard_confirm_focus(),
+            snapshot.focused_action,
             cx.listener(|this, _event, _window, cx| {
-                this.begin_ai_clear_all_confirm_exit(cx);
+                this.begin_ai_clear_all_confirm_exit(false, cx);
                 cx.stop_propagation();
                 cx.notify();
             }),
             cx.listener(|this, _event, _window, cx| {
-                if this.begin_ai_clear_all_confirm_exit(cx) {
-                    this.clear_ai_conversations();
-                }
+                this.begin_ai_clear_all_confirm_exit(true, cx);
                 cx.stop_propagation();
                 cx.notify();
             }),
@@ -923,10 +1000,19 @@ window.focus(&this.focus_handle, cx);
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let Some(snapshot) = self.ai_entity.read(cx).chat_confirm_snapshot() else {
+            return div().into_any_element();
+        };
+        if !matches!(
+            snapshot.kind,
+            ai_state::AiChatConfirmKind::DeleteMessage { .. }
+        ) {
+            return div().into_any_element();
+        }
         oxideterm_gpui_ui::confirm::confirm_dialog_with_focus_motion(
             &self.tokens,
             "ai-delete-message-confirm-motion",
-            self.ai_delete_message_confirm_presence.phase(),
+            snapshot.phase,
             ConfirmDialogView {
                 variant: ConfirmDialogVariant::Danger,
                 title: div()
@@ -961,19 +1047,14 @@ window.focus(&this.focus_handle, cx);
                     ))
                     .into_any_element(),
             },
-            self.standard_confirm_focus(),
+            snapshot.focused_action,
             cx.listener(|this, _event, _window, cx| {
-                this.begin_ai_delete_message_confirm_exit(cx);
+                this.begin_ai_delete_message_confirm_exit(false, cx);
                 cx.stop_propagation();
                 cx.notify();
             }),
             cx.listener(|this, _event, _window, cx| {
-                let message_id = this.ai.chat.delete_message_confirm.clone();
-                if this.begin_ai_delete_message_confirm_exit(cx)
-                    && let Some(message_id) = message_id
-                {
-                    this.delete_ai_message(&message_id, cx);
-                }
+                this.begin_ai_delete_message_confirm_exit(true, cx);
                 cx.stop_propagation();
             }),
         )

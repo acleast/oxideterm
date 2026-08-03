@@ -1,5 +1,17 @@
+pub(super) enum SshSessionConnection {
+    New(SshConfig),
+    Existing { connection_id: String },
+    Dedicated {
+        config: SshConfig,
+        parent_connection_id: Option<String>,
+    },
+}
+
 pub struct SshSessionConfig {
-    config: SshConfig,
+    connection: Option<SshSessionConnection>,
+    host: String,
+    port: u16,
+    username: String,
     registry: Option<SshConnectionRegistry>,
     consumer: Option<ConnectionConsumer>,
     prompt_handler: Option<Arc<dyn SshPromptHandler>>,
@@ -14,8 +26,50 @@ const POST_CONNECT_COMMAND_MAX_BYTES: usize = 8192;
 
 impl SshSessionConfig {
     pub fn new(host: impl Into<String>, port: u16, username: impl Into<String>) -> Self {
+        Self::from(SshConfig::password(host, port, username, ""))
+    }
+
+    pub fn for_existing_connection(
+        connection_id: impl Into<String>,
+        host: impl Into<String>,
+        port: u16,
+        username: impl Into<String>,
+    ) -> Self {
         Self {
-            config: SshConfig::password(host, port, username, ""),
+            connection: Some(SshSessionConnection::Existing {
+                connection_id: connection_id.into(),
+            }),
+            host: host.into(),
+            port,
+            username: username.into(),
+            registry: None,
+            consumer: None,
+            prompt_handler: None,
+            managed_key_resolver: None,
+            trzsz_policy: None,
+            runtime_handle: None,
+            defer_pty_until_resize: false,
+            post_connect_command: None,
+        }
+    }
+
+    pub fn for_dedicated_connection(
+        config: SshConfig,
+        parent_connection_id: Option<String>,
+    ) -> Self {
+        // Keep the source node's transport untouched while this terminal owns
+        // a separately authenticated registry entry.
+        let host = config.host.clone();
+        let port = config.port;
+        let username = config.username.clone();
+        Self {
+            connection: Some(SshSessionConnection::Dedicated {
+                config,
+                parent_connection_id,
+            }),
+            host,
+            port,
+            username,
             registry: None,
             consumer: None,
             prompt_handler: None,
@@ -28,15 +82,15 @@ impl SshSessionConfig {
     }
 
     pub fn host(&self) -> &str {
-        &self.config.host
+        &self.host
     }
 
     pub fn port(&self) -> u16 {
-        self.config.port
+        self.port
     }
 
     pub fn username(&self) -> &str {
-        &self.config.username
+        &self.username
     }
 
     pub fn with_registry(
@@ -100,10 +154,13 @@ impl SshSessionConfig {
 }
 
 impl From<oxideterm_ssh::SshConfig> for SshSessionConfig {
-    fn from(config: oxideterm_ssh::SshConfig) -> Self {
+    fn from(mut config: oxideterm_ssh::SshConfig) -> Self {
+        let post_connect_command = config.post_connect_command.take();
         Self {
-            post_connect_command: config.post_connect_command.clone(),
-            config,
+            host: config.host.clone(),
+            port: config.port,
+            username: config.username.clone(),
+            connection: Some(SshSessionConnection::New(config)),
             registry: None,
             consumer: None,
             prompt_handler: None,
@@ -111,6 +168,7 @@ impl From<oxideterm_ssh::SshConfig> for SshSessionConfig {
             trzsz_policy: None,
             runtime_handle: None,
             defer_pty_until_resize: false,
+            post_connect_command,
         }
     }
 }
@@ -190,12 +248,54 @@ mod ssh_config_tests {
                 .is_some()
         );
     }
+
+    #[test]
+    fn existing_connection_config_retains_only_safe_terminal_metadata() {
+        let config =
+            SshSessionConfig::for_existing_connection("connection-1", "host", 22, "alice");
+
+        assert!(matches!(
+            config.connection.as_ref(),
+            Some(super::SshSessionConnection::Existing { .. })
+        ));
+        assert_eq!(config.host(), "host");
+        assert_eq!(config.port(), 22);
+        assert_eq!(config.username(), "alice");
+        assert!(!format!("{config:?}").contains("connection-1"));
+    }
+
+    #[test]
+    fn dedicated_connection_retains_parent_route_without_using_existing_mode() {
+        let config = SshSessionConfig::for_dedicated_connection(
+            SshConfig::password("target", 22, "alice", "secret"),
+            Some("parent-connection".to_string()),
+        );
+
+        assert!(matches!(
+            config.connection.as_ref(),
+            Some(super::SshSessionConnection::Dedicated {
+                parent_connection_id: Some(parent_connection_id),
+                ..
+            }) if parent_connection_id == "parent-connection"
+        ));
+        assert_eq!(config.host(), "target");
+        assert!(!format!("{config:?}").contains("secret"));
+    }
 }
 
 impl std::fmt::Debug for SshSessionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let connection_kind = match self.connection.as_ref() {
+            Some(SshSessionConnection::New(_)) => "new",
+            Some(SshSessionConnection::Existing { .. }) => "existing",
+            Some(SshSessionConnection::Dedicated { .. }) => "dedicated",
+            None => "moved",
+        };
         f.debug_struct("SshSessionConfig")
-            .field("config", &self.config)
+            .field("connection", &connection_kind)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
             .field("registry", &self.registry)
             .field("consumer", &self.consumer)
             .field("prompt_handler", &self.prompt_handler.is_some())

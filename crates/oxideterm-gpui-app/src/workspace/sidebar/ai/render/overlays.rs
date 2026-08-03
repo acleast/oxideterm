@@ -11,6 +11,15 @@ pub(in crate::workspace) const AI_MODEL_SELECTOR_DROPDOWN_WIDTH: f32 = 256.0; //
 pub(in crate::workspace) const AI_REASONING_MENU_WIDTH: f32 = 220.0; // Compact VS Code-style effort menu.
 pub(in crate::workspace) const AI_CONTEXT_POPOVER_WIDTH: f32 = 280.0; // Tauri-sized compact context popover.
 
+struct AiConversationListRow {
+    id: Arc<str>,
+    title: String,
+    cli_origin: bool,
+    turn_count: usize,
+    updated_at_ms: i64,
+    active: bool,
+}
+
 impl WorkspaceApp {
     pub(in crate::workspace) fn update_ai_sidebar_overlay_for_window_bounds(
         &mut self,
@@ -18,7 +27,10 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) {
         let next_size = current_window_size(window);
-        let Some(previous_size) = self.ai.chat.overlay_window_size.replace(next_size) else {
+        let previous_size = self.ai_entity.update(cx, |ai, _cx| {
+            ai.replace_overlay_window_size(next_size)
+        });
+        let Some(previous_size) = previous_size else {
             return;
         };
         let dx = next_size.0 - previous_size.0;
@@ -26,7 +38,7 @@ impl WorkspaceApp {
         if dx.abs() < f32::EPSILON && dy.abs() < f32::EPSILON {
             return;
         }
-        if !self.has_ai_sidebar_floating_overlay() {
+        if !self.has_ai_sidebar_floating_overlay(cx) {
             return;
         }
 
@@ -47,7 +59,8 @@ impl WorkspaceApp {
                 SelectAnchorId::AiModelSelector
                 | SelectAnchorId::AiReasoningMenu
                 | SelectAnchorId::AiSafetyMenu
-                | SelectAnchorId::AiContextPopover => {
+                | SelectAnchorId::AiContextPopover
+                | SelectAnchorId::AiAutocomplete => {
                     anchor.bounds.origin.x = anchor.bounds.origin.x + px(dx);
                     anchor.bounds.origin.y = anchor.bounds.origin.y + px(dy);
                 }
@@ -61,7 +74,7 @@ impl WorkspaceApp {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.ai_sidebar_visible() || !self.has_ai_sidebar_floating_overlay() {
+        if !self.ai_sidebar_visible() || !self.has_ai_sidebar_floating_overlay(cx) {
             return None;
         }
 
@@ -73,7 +86,12 @@ impl WorkspaceApp {
         let panel_right = f32::from(panel_anchor.bounds.right());
         let panel_width = f32::from(panel_anchor.bounds.size.width);
 
-        let (corner, anchor_x, anchor_y, popup) = if self.ai.chat.conversation_list_open {
+        let (corner, anchor_x, anchor_y, popup, dismiss_from_outside) = if self
+            .ai_entity
+            .read(cx)
+            .chat_ui()
+            .conversation_list_open
+        {
             let top = self
                 .select_anchors
                 .get(&SelectAnchorId::AiConversationList)
@@ -87,8 +105,9 @@ impl WorkspaceApp {
                 panel_left + AI_TOP_FLOATING_INSET_X,
                 top,
                 self.render_ai_conversation_dropdown(dropdown_width, cx),
+                true,
             )
-        } else if self.ai.chat.menu_open {
+        } else if self.ai_entity.read(cx).chat_ui().menu_open {
             let anchor = self
                 .select_anchors
                 .get(&SelectAnchorId::AiChatMenu)
@@ -105,9 +124,12 @@ impl WorkspaceApp {
                 left,
                 top,
                 self.render_ai_chat_menu(cx),
+                true,
             )
-        } else if self.ai.models.selector_open
-            && self.ai.models.selector_scope == Some(AiModelSelectorScope::Sidebar)
+        } else if self
+            .ai_entity
+            .read(cx)
+            .model_selector_is_open(AiModelSelectorScope::Sidebar)
         {
             let anchor = self.select_anchors.get(&SelectAnchorId::AiModelSelector)?;
             (
@@ -119,9 +141,10 @@ impl WorkspaceApp {
                     panel_right,
                 ),
                 f32::from(anchor.bounds.top()) - AI_FLOATING_GAP,
-                self.render_ai_model_selector_dropdown(&self.ai_model_selector_providers(), cx),
+                self.render_ai_model_selector_dropdown(&self.ai_model_selector_providers(cx), cx),
+                true,
             )
-        } else if self.ai.chat.reasoning_menu_open {
+        } else if self.ai_entity.read(cx).chat_ui().reasoning_menu_open {
             let anchor = self.select_anchors.get(&SelectAnchorId::AiReasoningMenu)?;
             (
                 Corner::BottomLeft,
@@ -133,8 +156,9 @@ impl WorkspaceApp {
                 ),
                 f32::from(anchor.bounds.top()) - AI_FLOATING_GAP,
                 self.render_ai_reasoning_menu(cx)?,
+                true,
             )
-        } else if self.ai.chat.safety_menu_open {
+        } else if self.ai_entity.read(cx).chat_ui().safety_menu_open {
             let anchor = self.select_anchors.get(&SelectAnchorId::AiSafetyMenu)?;
             (
                 Corner::BottomLeft,
@@ -146,8 +170,9 @@ impl WorkspaceApp {
                 ),
                 f32::from(anchor.bounds.top()) - AI_FLOATING_GAP,
                 self.render_ai_safety_menu(cx),
+                true,
             )
-        } else if self.ai.chat.context_popover_open {
+        } else if self.ai_entity.read(cx).chat_ui().context_popover_open {
             let anchor = self.select_anchors.get(&SelectAnchorId::AiContextPopover)?;
             // Context usage is an informational inspector rather than a menu.
             // Reduced motion keeps only opacity, while Off mounts immediately.
@@ -168,10 +193,47 @@ impl WorkspaceApp {
                 ),
                 f32::from(anchor.bounds.top()) - AI_FLOATING_GAP,
                 popover,
+                true,
+            )
+        } else if let autocomplete_items = self.ai_chat_autocomplete_items(cx)
+            && !autocomplete_items.is_empty()
+        {
+            let anchor = self
+                .select_anchors
+                .get(&SelectAnchorId::AiAutocomplete)?;
+            let popup_width = f32::from(anchor.bounds.size.width)
+                .min((panel_width - AI_TOP_FLOATING_INSET_X * 2.0).max(1.0))
+                .max(1.0);
+            (
+                Corner::BottomLeft,
+                ai_sidebar_popup_left(
+                    f32::from(anchor.bounds.left()),
+                    popup_width,
+                    panel_left,
+                    panel_right,
+                ),
+                f32::from(anchor.bounds.top()) - AI_FLOATING_GAP,
+                div()
+                    .w(px(popup_width))
+                    .child(self.render_ai_autocomplete_popup(&autocomplete_items, cx))
+                    .into_any_element(),
+                false,
             )
         } else {
             return None;
         };
+
+        let popup = deferred(
+            anchored()
+                .anchor(corner)
+                .position(gpui::point(px(anchor_x), px(anchor_y)))
+                .position_mode(AnchoredPositionMode::Window)
+                .child(overlay_content_boundary(div().child(popup))),
+        )
+        .with_priority(oxideterm_gpui_ui::modal::TAURI_POPOVER_LAYER_PRIORITY);
+        if !dismiss_from_outside {
+            return Some(popup.into_any_element());
+        }
 
         Some(
             popover_backdrop()
@@ -189,28 +251,22 @@ impl WorkspaceApp {
                         cx.stop_propagation();
                     }),
                 )
-                .child(
-                    deferred(
-                        anchored()
-                            .anchor(corner)
-                            .position(gpui::point(px(anchor_x), px(anchor_y)))
-                            .position_mode(AnchoredPositionMode::Window)
-                            .child(overlay_content_boundary(div().child(popup))),
-                    )
-                    .with_priority(oxideterm_gpui_ui::modal::TAURI_POPOVER_LAYER_PRIORITY),
-                )
+                .child(popup)
                 .into_any_element(),
         )
     }
 
-    pub(in crate::workspace) fn has_ai_sidebar_floating_overlay(&self) -> bool {
-        self.ai.chat.conversation_list_open
-            || self.ai.chat.menu_open
-            || (self.ai.models.selector_open
-                && self.ai.models.selector_scope == Some(AiModelSelectorScope::Sidebar))
-            || self.ai.chat.reasoning_menu_open
-            || self.ai.chat.safety_menu_open
-            || self.ai.chat.context_popover_open
+    pub(in crate::workspace) fn has_ai_sidebar_floating_overlay(&self, cx: &App) -> bool {
+        self.ai_entity.read(cx).chat_ui().conversation_list_open
+            || self.ai_entity.read(cx).chat_ui().menu_open
+            || self
+                .ai_entity
+                .read(cx)
+                .model_selector_is_open(AiModelSelectorScope::Sidebar)
+            || self.ai_entity.read(cx).chat_ui().reasoning_menu_open
+            || self.ai_entity.read(cx).chat_ui().safety_menu_open
+            || self.ai_entity.read(cx).chat_ui().context_popover_open
+            || !self.ai_chat_autocomplete_items(cx).is_empty()
     }
 
     pub(in crate::workspace) fn render_ai_conversation_dropdown(
@@ -218,10 +274,10 @@ impl WorkspaceApp {
         dropdown_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let dropdown_height = if self.ai.chat.conversation_state.conversations.is_empty() {
+        let dropdown_height = if self.ai_entity.read(cx).conversation_state().conversations.is_empty() {
             AI_CONVERSATION_EMPTY_HEIGHT
         } else {
-            (self.ai.chat.conversation_state.conversations.len() as f32
+            (self.ai_entity.read(cx).conversation_state().conversations.len() as f32
                 * AI_CONVERSATION_ROW_HEIGHT)
                 .min(AI_CONVERSATION_MAX_HEIGHT)
         };
@@ -238,7 +294,24 @@ impl WorkspaceApp {
             // stays with the overlay and cannot scroll the message/sidebar body.
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation());
 
-        if self.ai.chat.conversation_state.conversations.is_empty() {
+        let conversation_rows = {
+            let ai = self.ai_entity.read(cx);
+            let state = ai.conversation_state();
+            state
+                .conversations
+                .iter()
+                .map(|conversation| AiConversationListRow {
+                    id: Arc::from(conversation.id.as_str()),
+                    title: conversation.title.clone(),
+                    cli_origin: conversation.origin == "cli",
+                    turn_count: conversation.turn_count,
+                    updated_at_ms: conversation.updated_at_ms,
+                    active: state.active_conversation_id.as_deref()
+                        == Some(conversation.id.as_str()),
+                })
+                .collect::<Vec<_>>()
+        };
+        if conversation_rows.is_empty() {
             list = list.child(
                 div()
                     .p(px(16.0))
@@ -255,15 +328,8 @@ impl WorkspaceApp {
                     )),
             );
         } else {
-            let conversation_count = self.ai.chat.conversation_state.conversations.len();
-            for (index, conversation) in self
-                .ai
-                .chat
-                .conversation_state
-                .conversations
-                .iter()
-                .enumerate()
-            {
+            let conversation_count = conversation_rows.len();
+            for (index, conversation) in conversation_rows.into_iter().enumerate() {
                 list = list.child(self.render_ai_conversation_item(
                     conversation,
                     index == 0,
@@ -292,32 +358,167 @@ impl WorkspaceApp {
             .into_any_element()
     }
 
-    pub(in crate::workspace) fn render_ai_conversation_item(
+    fn render_ai_conversation_item(
         &self,
-        conversation: &AiConversation,
+        conversation: AiConversationListRow,
         is_first: bool,
         is_last: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let id = conversation.id.clone();
-        let delete_id = conversation.id.clone();
-        let is_active = self
-            .ai
-            .chat
-            .conversation_state
-            .active_conversation_id
-            .as_deref()
-            == Some(conversation.id.as_str());
-        let count = if conversation.messages_loaded {
-            conversation.messages.len()
-        } else {
-            conversation.message_count
+        let rename_target = WorkspaceImeTarget::AiConversationRename;
+        let (is_renaming, rename_draft, rename_focused) = {
+            let ai = self.ai_entity.read(cx);
+            let chat = ai.chat_ui();
+            let is_renaming =
+                chat.renaming_conversation_id.as_deref() == Some(conversation.id.as_ref());
+            (
+                is_renaming,
+                is_renaming
+                    .then(|| chat.renaming_conversation_draft.clone())
+                    .unwrap_or_default(),
+                is_renaming && chat.renaming_conversation_focused,
+            )
         };
+        let title = conversation.title;
+        let rename_id = conversation.id.clone();
+        let rename_title = title.clone();
+        let delete_id = conversation.id.clone();
+        let id = conversation.id;
+        let is_active = conversation.active;
         let meta = format!(
             "{} · {}",
-            self.ai_messages_count_label(count),
-            time_label(conversation.updated_at_ms)
+            self.ai_conversation_turns_label(conversation.turn_count),
+            time_label(
+                conversation.updated_at_ms,
+                &self.i18n.t("ai.chat.today"),
+                &self.i18n.t("ai.chat.yesterday"),
+            )
         );
+        let title_control = if is_renaming {
+            let input = text_input(
+                &self.tokens,
+                TextInputView {
+                    value: &rename_draft,
+                    placeholder: String::new(),
+                    focused: rename_focused,
+                    caret_visible: self.input_caret.visible(),
+                    secret: false,
+                    selected_all: false,
+                    selected_range: self.ime_selected_range_for_target(rename_target, cx),
+                    marked_text: self.marked_text_for_target(rename_target, cx),
+                },
+            )
+            .h(px(20.0))
+            .px(px(4.0))
+            .rounded(px(self.tokens.radii.sm))
+            .border_color(rgba((self.tokens.ui.accent << 8) | 0x66))
+            .bg(rgba((self.tokens.ui.bg << 8) | 0x80))
+            .text_size(px(12.0))
+            .font_weight(gpui::FontWeight::BOLD)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.ai_entity.update(cx, |ai, _cx| {
+                        ai.focus_conversation_rename();
+                        ai.set_model_selector_search_focused(false);
+                    });
+                    this.ime_marked_text = None;
+                    window.focus(&this.focus_handle, cx);
+                    this.begin_ime_selection_from_mouse_down(
+                        rename_target,
+                        event,
+                        window,
+                        cx,
+                    );
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_move(cx.listener(
+                |this, event: &gpui::MouseMoveEvent, window, cx| {
+                    this.update_ime_selection_drag_from_mouse_move(event, window, cx);
+                },
+            ));
+            text_input_anchor_probe(
+                rename_target.anchor_id(),
+                input,
+                Self::deferred_ai_text_input_anchor_update(cx.entity()),
+            )
+            .into_any_element()
+        } else {
+            div()
+                // The title owns the row's remaining width so truncation
+                // preserves text instead of collapsing to an ellipsis.
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(if is_active {
+                    rgb(self.tokens.ui.text)
+                } else {
+                    rgb(self.tokens.ui.text_muted)
+                })
+                .child(title)
+                .into_any_element()
+        };
+        let rename_tooltip = if is_renaming {
+            self.i18n.t("ai.chat.save_conversation_title")
+        } else {
+            self.i18n.t("ai.chat.rename_conversation")
+        };
+        let rename_tooltip_label = rename_tooltip.clone();
+        let rename_tooltip_tokens = self.tokens;
+        let rename_button = div()
+            .id(format!("ai-conversation-rename-{id}"))
+            .flex_none()
+            .size(px(24.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(self.tokens.radii.md))
+            .text_color(rgb(self.tokens.ui.text_muted))
+            .hover(|style| {
+                style
+                    .bg(rgba((self.tokens.ui.accent << 8) | 0x1a))
+                    .text_color(rgb(self.tokens.ui.accent))
+            })
+            .child(Self::render_lucide_icon(
+                if is_renaming {
+                    LucideIcon::Check
+                } else {
+                    LucideIcon::Pencil
+                },
+                13.0,
+                if is_renaming {
+                    rgb(self.tokens.ui.accent)
+                } else {
+                    rgb(self.tokens.ui.text_muted)
+                },
+            ))
+            .tooltip(move |_window, cx| {
+                oxideterm_gpui_ui::tooltip::tooltip_view(
+                    rename_tooltip_tokens,
+                    rename_tooltip_label.clone(),
+                    None,
+                    cx,
+                )
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, window, cx| {
+                    if is_renaming {
+                        this.save_ai_conversation_rename(cx);
+                    } else {
+                        this.begin_ai_conversation_rename(
+                            rename_id.to_string(),
+                            rename_title.clone(),
+                            window,
+                            cx,
+                        );
+                    }
+                    cx.stop_propagation();
+                }),
+            );
         div()
             .w_full()
             .flex_none()
@@ -365,7 +566,7 @@ impl WorkspaceApp {
                             .items_center()
                             .gap(px(6.0))
                             .min_w_0()
-                            .when(conversation.origin == "cli", |row| {
+                            .when(conversation.cli_origin, |row| {
                                 row.child(
                                     div()
                                         .size(px(16.0))
@@ -381,26 +582,10 @@ impl WorkspaceApp {
                                             LucideIcon::Terminal,
                                             10.0,
                                             rgb(self.tokens.ui.text_muted),
-                                        )),
+                                    )),
                                 )
                             })
-                            .child(
-                                div()
-                                    // The title owns the row's remaining width so
-                                    // truncation preserves text instead of collapsing
-                                    // directly to an ellipsis.
-                                    .min_w_0()
-                                    .flex_1()
-                                    .truncate()
-                                    .text_size(px(12.0))
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(if is_active {
-                                        rgb(self.tokens.ui.text)
-                                    } else {
-                                        rgb(self.tokens.ui.text_muted)
-                                    })
-                                    .child(conversation.title.clone()),
-                            ),
+                            .child(title_control),
                     )
                     .child(
                         div()
@@ -412,35 +597,43 @@ impl WorkspaceApp {
             .child(
                 div()
                     .flex_none()
-                    .size(px(24.0))
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .rounded(px(self.tokens.radii.md))
-                    .text_color(rgb(self.tokens.ui.text_muted))
-                    .hover(|style| {
-                        style
-                            .bg(rgba((self.tokens.ui.error << 8) | 0x1a))
-                            .text_color(rgb(self.tokens.ui.error))
-                    })
-                    .child(Self::render_lucide_icon(
-                        LucideIcon::Trash2,
-                        13.0,
-                        rgb(self.tokens.ui.text_muted),
-                    ))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.delete_ai_conversation(&delete_id);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
+                    .gap(px(2.0))
+                    .child(rename_button)
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(self.tokens.radii.md))
+                            .text_color(rgb(self.tokens.ui.text_muted))
+                            .hover(|style| {
+                                style
+                                    .bg(rgba((self.tokens.ui.error << 8) | 0x1a))
+                                    .text_color(rgb(self.tokens.ui.error))
+                            })
+                            .child(Self::render_lucide_icon(
+                                LucideIcon::Trash2,
+                                13.0,
+                                rgb(self.tokens.ui.text_muted),
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _event, _window, cx| {
+                                    this.delete_ai_conversation(delete_id.as_ref(), cx);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            ),
                     ),
             )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, _window, cx| {
-                    this.select_ai_conversation(id.clone());
+                    this.select_ai_conversation(id.to_string(), cx);
                     cx.stop_propagation();
                     cx.notify();
                 }),
@@ -534,9 +727,9 @@ impl WorkspaceApp {
             move |this, _event, window, cx| match action {
                 AiHeaderAction::Settings => this.open_ai_settings(window, cx),
                 AiHeaderAction::NewChat => {
-                    this.ai.chat.clear_all_confirm_open = true;
-                    this.ai_clear_all_confirm_presence.reopen();
-                    this.reset_standard_confirm_focus();
+                    this.ai_entity.update(cx, |ai, cx| {
+                        ai.open_chat_confirm(ai_state::AiChatConfirmKind::ClearAll, cx);
+                    });
                 }
             },
             cx,

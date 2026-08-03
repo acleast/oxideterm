@@ -2,7 +2,8 @@ pub struct SshPtySession {
     config: SshSessionConfig,
     term: Arc<FairMutex<Term<LocalEventListener>>>,
     parser: Processor,
-    event_rx: Receiver<AlacEvent>,
+    event_rx: LocalEventReceiver,
+    activity: crate::activity::TerminalActivitySender,
     pending_events: Vec<TerminalEvent>,
     resize: TerminalResize,
     lifecycle: TerminalLifecycle,
@@ -22,6 +23,7 @@ pub struct SshPtySession {
     output_decoder: TerminalOutputDecoder,
     output_processor: Option<TerminalOutputProcessor>,
     output_events_enabled: bool,
+    privilege_prompt: TerminalPrivilegePromptStream,
     input_encoder: TerminalInputEncoder,
     encoding_detector: EncodingMismatchDetector,
     trzsz_consumer: Option<TrzszConsumer>,
@@ -31,7 +33,7 @@ pub struct SshPtySession {
 
 impl SshPtySession {
     pub fn new(
-        config: SshSessionConfig,
+        mut config: SshSessionConfig,
         cols: usize,
         rows: usize,
         graphics_options: GraphicsOptions,
@@ -45,15 +47,11 @@ impl SshPtySession {
             cell_width: resize.cell_width,
             cell_height: resize.cell_height,
         };
-        let (event_tx, event_rx) = unbounded();
-        let listener = LocalEventListener { tx: event_tx };
+        let (listener, event_rx) = local_event_channel();
+        let activity = listener.activity_sender();
 
         let term_config = interactive_terminal_config(scrollback_lines);
-        let term = Arc::new(FairMutex::new(Term::new(
-            term_config,
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config, &size, listener)));
 
         // GPUI owns a backend runtime for SSH-adjacent work; standalone
         // terminal sessions keep this fallback runtime alive for compatibility.
@@ -64,41 +62,98 @@ impl SshPtySession {
         };
         let runtime_handle = config
             .runtime_handle
-            .clone()
+            .take()
             .or_else(|| runtime.as_ref().map(|runtime| runtime.handle().clone()));
         let (connect_tx, connect_rx) = unbounded();
         if let Some(runtime_handle) = runtime_handle {
-            let mut ssh_config = config.config.clone();
-            if config.defer_pty_until_resize() {
-                ssh_config.cols = 0;
-                ssh_config.rows = 0;
+            let connection = config.connection.take();
+            let registry = config.registry.take();
+            let consumer = config.consumer.take();
+            let prompt_handler = config.prompt_handler.take();
+            let managed_key_resolver = config.managed_key_resolver.take();
+            let (cols, rows) = if config.defer_pty_until_resize() {
+                (0, 0)
             } else {
-                ssh_config.cols = resize.cols as u32;
-                ssh_config.rows = resize.rows as u32;
-            }
-            let registry = config.registry.clone();
-            let consumer = config.consumer.clone();
-            let prompt_handler = config.prompt_handler.clone();
-            let managed_key_resolver = config.managed_key_resolver.clone();
+                (resize.cols as u32, resize.rows as u32)
+            };
+            let connect_activity = activity.clone();
             runtime_handle.spawn(async move {
-                let mut client = SshTransportClient::new(ssh_config);
-                if let Some(prompt_handler) = prompt_handler {
-                    client = client.with_prompt_handler(prompt_handler);
-                }
-                if let Some(resolver) = managed_key_resolver {
-                    client = client.with_managed_key_resolver(resolver);
-                }
-                let result = match (registry, consumer) {
-                    (Some(registry), Some(consumer)) => {
-                        client.connect_shell_with_registry(registry, consumer).await
+                let result = match connection {
+                    Some(SshSessionConnection::New(mut ssh_config)) => {
+                        ssh_config.cols = cols;
+                        ssh_config.rows = rows;
+                        let mut client = SshTransportClient::new(ssh_config);
+                        if let Some(prompt_handler) = prompt_handler {
+                            client = client.with_prompt_handler(prompt_handler);
+                        }
+                        if let Some(resolver) = managed_key_resolver {
+                            client = client.with_managed_key_resolver(resolver);
+                        }
+                        match (registry, consumer) {
+                            (Some(registry), Some(consumer)) => {
+                                client.connect_shell_with_registry(registry, consumer).await
+                            }
+                            _ => client.connect_shell().await,
+                        }
                     }
-                    _ => client.connect_shell().await,
+                    Some(SshSessionConnection::Existing { connection_id }) => {
+                        match (registry, consumer) {
+                            (Some(registry), Some(consumer)) => {
+                                SshTransportClient::connect_shell_on_existing_connection(
+                                    registry,
+                                    connection_id,
+                                    consumer,
+                                    cols,
+                                    rows,
+                                )
+                                .await
+                            }
+                            _ => Err(oxideterm_ssh::SshTransportError::ConnectionFailed(
+                                "existing SSH terminal requires a connection registry".to_string(),
+                            )),
+                        }
+                    }
+                    Some(SshSessionConnection::Dedicated {
+                        mut config,
+                        parent_connection_id,
+                    }) => {
+                        config.cols = cols;
+                        config.rows = rows;
+                        let mut client = SshTransportClient::new(config);
+                        if let Some(prompt_handler) = prompt_handler {
+                            client = client.with_prompt_handler(prompt_handler);
+                        }
+                        if let Some(resolver) = managed_key_resolver {
+                            client = client.with_managed_key_resolver(resolver);
+                        }
+                        match (registry, consumer) {
+                            (Some(registry), Some(consumer)) => {
+                                // Dedicated terminals still use the registry so
+                                // their physical connection has one clear owner.
+                                client
+                                    .connect_shell_with_dedicated_registry(
+                                        registry,
+                                        consumer,
+                                        parent_connection_id,
+                                    )
+                                    .await
+                            }
+                            _ => Err(oxideterm_ssh::SshTransportError::ConnectionFailed(
+                                "dedicated SSH terminal requires a connection registry".to_string(),
+                            )),
+                        }
+                    }
+                    None => Err(oxideterm_ssh::SshTransportError::ConnectionFailed(
+                        "SSH terminal connection ownership was already transferred".to_string(),
+                    )),
                 }
                 .map_err(|error| error.to_string());
                 let _ = connect_tx.send(result);
+                connect_activity.notify();
             });
         } else {
             let _ = connect_tx.send(Err("failed to initialize SSH runtime".to_string()));
+            activity.notify();
         }
 
         let trzsz_consumer = config.trzsz_policy().map(TrzszConsumer::new);
@@ -107,6 +162,7 @@ impl SshPtySession {
             term,
             parser: Processor::new(),
             event_rx,
+            activity,
             pending_events: Vec::new(),
             resize,
             lifecycle: TerminalLifecycle::Running,
@@ -126,6 +182,7 @@ impl SshPtySession {
             output_decoder: TerminalOutputDecoder::new(encoding),
             output_processor: None,
             output_events_enabled: false,
+            privilege_prompt: TerminalPrivilegePromptStream::default(),
             input_encoder: TerminalInputEncoder::new(encoding),
             encoding_detector: EncodingMismatchDetector::new(encoding),
             trzsz_consumer,
@@ -144,7 +201,11 @@ impl SshPtySession {
         };
 
         match result {
-            Ok(handle) => {
+            Ok(mut handle) => {
+                let activity = self.activity.clone();
+                handle
+                    .output_rx
+                    .set_activity_callback(Arc::new(move || activity.notify()));
                 let auth_banner_prelude = handle.take_auth_banner_prelude();
                 self.handle = Some(handle);
                 if !self.waiting_for_deferred_pty_resize() {
@@ -201,8 +262,6 @@ impl SshPtySession {
     }
 
     fn feed_transport_output(&mut self, bytes: &[u8]) {
-        let processed_output = self.process_terminal_output(bytes);
-        let bytes = processed_output.as_ref();
         if self.trzsz_consumer.is_some() {
             self.feed_trzsz_transport_output(bytes);
             return;
@@ -228,6 +287,10 @@ impl SshPtySession {
     }
 
     fn feed_plain_transport_output_to_terminal(&mut self, bytes: &[u8]) {
+        // In-band protocols own raw transport bytes. Plugin output transforms
+        // are applied only after modem/trzsz consumers release display data.
+        let processed_output = self.process_terminal_output(bytes);
+        let bytes = processed_output.as_ref();
         for kind in self.magic_scan.scan(bytes) {
             self.pending_events.push(TerminalEvent::MagicDetected(kind));
         }
@@ -248,6 +311,10 @@ impl SshPtySession {
                         self.pending_events.push(TerminalEvent::EncodingHint(hint));
                     }
                     let decoded = self.output_decoder.decode_to_utf8_bytes(&terminal_bytes);
+                    for event in self.privilege_prompt.observe(decoded.as_ref()) {
+                        self.pending_events
+                            .push(TerminalEvent::PrivilegePrompt(event));
+                    }
                     if self.output_events_enabled && !decoded.is_empty() {
                         // Match the Tauri hook boundary: recording observes UTF-8
                         // display output after terminal decoding, not SSH bytes.
@@ -336,10 +403,24 @@ impl SshPtySession {
     }
 
     fn flush_modem_server_writes(&mut self) -> bool {
+        let Some(transfer) = self.modem_consumer.active_transfer_input() else {
+            return false;
+        };
         let mut changed = false;
-        for bytes in self.modem_consumer.take_server_writes() {
-            let _ = self.send_command(SshTransportCommand::Data(bytes));
-            changed = true;
+        while let Some(bytes) = transfer.take_server_write() {
+            let byte_len = bytes.len();
+            if self
+                .send_command(SshTransportCommand::Data(bytes.clone()))
+                .is_ok()
+            {
+                transfer.complete_server_write(byte_len);
+                changed = true;
+            } else {
+                // A full bounded SSH command channel is transient; retain the
+                // frame and retry on the next terminal drain instead of dropping it.
+                transfer.restore_server_write(bytes);
+                break;
+            }
         }
         changed
     }
@@ -385,10 +466,15 @@ impl SshPtySession {
         let started = Instant::now();
         let mut report = TerminalDrainReport::default();
         loop {
-            if report.drained_bytes >= budget.max_bytes
+            if budget.time_exhausted(started)
+                || report.drained_bytes >= budget.max_bytes
                 || report.events_drained >= budget.max_events
             {
-                report.budget_exhausted = !self.output_queue.is_empty();
+                report.budget_exhausted = !self.output_queue.is_empty()
+                    || self
+                        .handle
+                        .as_ref()
+                        .is_some_and(|handle| !handle.output_rx.is_empty());
                 break;
             }
 
@@ -553,7 +639,7 @@ impl TerminalSessionBackend for SshPtySession {
             report.mark_changed();
         }
 
-        while report.events_drained < budget.max_events {
+        while report.events_drained < budget.max_events && !budget.time_exhausted(started) {
             let Ok(event) = self.event_rx.try_recv() else {
                 break;
             };
@@ -563,11 +649,17 @@ impl TerminalSessionBackend for SshPtySession {
             }
         }
 
-        if report.events_drained >= budget.max_events && !self.event_rx.is_empty() {
+        if (report.events_drained >= budget.max_events || budget.time_exhausted(started))
+            && !self.event_rx.is_empty()
+        {
             report.budget_exhausted = true;
         }
         report.drain_duration = started.elapsed();
         report
+    }
+
+    fn activity_receiver(&self) -> TerminalActivityReceiver {
+        self.event_rx.activity_receiver()
     }
 
     fn take_events(&mut self) -> Vec<TerminalEvent> {
@@ -607,6 +699,7 @@ impl TerminalSessionBackend for SshPtySession {
         self.encoding = encoding;
         self.output_decoder.set_encoding(encoding);
         self.output_decoder.reset();
+        self.privilege_prompt = TerminalPrivilegePromptStream::default();
         self.input_encoder.set_encoding(encoding);
         self.encoding_detector.set_encoding(encoding);
     }
@@ -614,6 +707,7 @@ impl TerminalSessionBackend for SshPtySession {
     fn set_output_processor(&mut self, processor: Option<TerminalOutputProcessor>) {
         self.output_processor = processor;
         self.output_decoder.reset();
+        self.privilege_prompt = TerminalPrivilegePromptStream::default();
         self.encoding_detector.set_encoding(self.encoding);
     }
 
@@ -670,7 +764,8 @@ impl TerminalSessionBackend for SshPtySession {
     }
 
     fn finish_modem_transfer(&mut self) {
-        self.modem_consumer.finish_transfer();
+        let trailing_output = self.modem_consumer.finish_transfer();
+        self.feed_plain_transport_output_to_terminal(&trailing_output);
     }
 
     fn mode(&self) -> TermMode {
@@ -751,48 +846,15 @@ impl TerminalSessionBackend for SshPtySession {
     }
 
     fn search_matches(&self, query: &str) -> Vec<TerminalSearchMatch> {
-        let query = query.trim();
-        if query.is_empty() {
-            return Vec::new();
-        }
-
         let term = self.term.lock();
-        let grid = term.grid();
-        let top_line = -(term.total_lines().saturating_sub(term.screen_lines()) as i32);
-        let bottom_line = term.screen_lines() as i32;
-        let mut matches = Vec::new();
-        let mut logical_text = String::new();
-        let mut logical_map = Vec::new();
+        search_matches_from_term(&term, self.resize.cols, query)
+    }
 
-        for line in top_line..bottom_line {
-            let row = &grid[alacritty_terminal::index::Line(line)];
-            append_grid_line_text(
-                row[..].iter(),
-                line,
-                self.resize.cols,
-                &mut logical_text,
-                &mut logical_map,
-            );
-
-            let wrapped = row.last().is_some_and(|cell| {
-                cell.flags
-                    .contains(alacritty_terminal::term::cell::Flags::WRAPLINE)
-            });
-            if wrapped && line + 1 < bottom_line {
-                continue;
-            }
-
-            matches.extend(search_logical_line_matches(
-                &logical_text,
-                &logical_map,
-                query,
-                self.resize.cols,
-            ));
-            logical_text.clear();
-            logical_map.clear();
-        }
-
-        matches
+    fn search_source(&self) -> Option<crate::TerminalSearchSource> {
+        Some(crate::TerminalSearchSource::new(
+            self.term.clone(),
+            self.resize.cols,
+        ))
     }
 
     fn clear_buffer(&mut self) {
@@ -822,6 +884,21 @@ impl TerminalSessionBackend for SshPtySession {
                 cell_height: self.resize.cell_height,
             },
             &self.graphics,
+        )
+    }
+
+    fn snapshot_incremental(&self, previous: &TerminalSnapshot) -> TerminalSnapshot {
+        let mut term = self.term.lock();
+        incremental_snapshot_from_term(
+            &mut term,
+            TerminalSize {
+                cols: self.resize.cols,
+                rows: self.resize.rows,
+                cell_width: self.resize.cell_width,
+                cell_height: self.resize.cell_height,
+            },
+            &self.graphics,
+            previous,
         )
     }
 

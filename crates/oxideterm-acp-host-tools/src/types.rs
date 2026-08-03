@@ -25,7 +25,7 @@ impl AcpHostToolDefinition {
     }
 }
 
-/// Carries an MCP tool call to the application executor without importing UI types.
+/// Carries an MCP call to the application executor without importing UI types.
 pub struct AcpHostToolCall {
     pub id: String,
     pub name: String,
@@ -48,7 +48,7 @@ impl AcpHostToolCall {
         }
     }
 
-    /// Completes the pending MCP request. A closed receiver means the ACP turn ended.
+    /// Completes the pending MCP request. A closed receiver means its ACP owner ended.
     pub fn respond(self, response: AcpHostToolResponse) -> Result<(), AcpHostToolResponse> {
         self.response_tx.send(response)
     }
@@ -56,12 +56,12 @@ impl AcpHostToolCall {
 
 impl fmt::Debug for AcpHostToolCall {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Tool arguments can contain commands or interactive input and must not reach logs.
+        // Arguments can contain commands or interactive input and must not reach logs.
         formatter
             .debug_struct("AcpHostToolCall")
             .field("id", &self.id)
             .field("name", &self.name)
-            .field("arguments", &"[redacted]")
+            .field("arguments", &"<redacted>")
             .finish_non_exhaustive()
     }
 }
@@ -90,18 +90,18 @@ impl AcpHostToolResponse {
 
 impl fmt::Debug for AcpHostToolResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Model-facing tool output can contain redacted terminal material; keep it out of logs.
+        // Model-facing output can still contain redacted terminal structure.
         formatter
             .debug_struct("AcpHostToolResponse")
-            .field("content", &"[redacted]")
+            .field("content", &"<redacted>")
             .field("is_error", &self.is_error)
             .finish()
     }
 }
 
-/// Receives application-owned tool calls for the lifetime of one ACP runtime.
+/// Receives application-owned calls for the lifetime of one ACP conversation.
 pub struct AcpHostToolCallReceiver {
-    pub(crate) inner: mpsc::UnboundedReceiver<AcpHostToolCall>,
+    pub(crate) inner: mpsc::Receiver<AcpHostToolCall>,
 }
 
 impl AcpHostToolCallReceiver {
@@ -114,6 +114,6 @@ impl AcpHostToolCallReceiver {
 pub enum AcpHostToolsError {
     #[error("failed to bind the ACP host-tools server")]
     Bind(#[source] std::io::Error),
-    #[error("failed to resolve the ACP host-tools server address")]
-    LocalAddress(#[source] std::io::Error),
+    #[error("failed to configure the ACP host-tools listener")]
+    ConfigureListener(#[source] std::io::Error),
 }

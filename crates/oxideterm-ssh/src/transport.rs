@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     future::Future,
     path::PathBuf,
     pin::Pin,
@@ -14,7 +14,10 @@ use std::{
 };
 
 use oxideterm_sftp::{SftpChannelOpener, SftpError, SftpExecChannelOpener};
-use oxideterm_x11_forwarding::{X11RemoteDisplayAllocator, X11RemoteXauthUpdate, X11SshRequest};
+use oxideterm_x11_forwarding::{
+    X11AuthSpoofRegistry, X11ForwardPolicy, X11LocalEndpoint, X11RegisteredSetupDecision,
+    X11RemoteDisplayAllocator, X11RemoteXauthUpdate, X11SetupBuffer, X11SpoofedAuth, X11SshRequest,
+};
 use parking_lot::RwLock;
 use russh::{
     AgentAuthError, Channel, ChannelMsg, MethodKind, Pty, Signer as RusshSigner, client,
@@ -121,7 +124,8 @@ fn upstream_proxy_protocol_label(protocol: UpstreamProxyProtocol) -> &'static st
 }
 const SSH_COMMAND_CHANNEL_CAPACITY: usize = 1024;
 const SSH_OUTPUT_CHANNEL_CAPACITY: usize = 1024;
-const SSH_OUTPUT_BATCH_MAX_BYTES: usize = 64 * 1024;
+// Keep parser handoff chunks small enough for the UI-side elapsed-time budget to yield promptly.
+const SSH_OUTPUT_BATCH_MAX_BYTES: usize = 16 * 1024;
 const SSH_OUTPUT_BACKLOG_BYTES: usize = 1024 * 1024;
 const SSH_OUTPUT_FLUSH_MS: u64 = 4;
 const SSH_OUTPUT_INTERACTIVE_FLUSH_MS: u64 = 1;
@@ -421,6 +425,8 @@ pub struct SshOutputChunk {
     _byte_permit: tokio::sync::OwnedSemaphorePermit,
 }
 
+type SshOutputActivityCallbackSlot = Arc<RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>;
+
 impl SshOutputChunk {
     pub fn len(&self) -> usize {
         self.bytes.len()
@@ -441,11 +447,21 @@ impl std::ops::Deref for SshOutputChunk {
 
 pub struct SshOutputReceiver {
     receiver: mpsc::Receiver<SshOutputChunk>,
+    activity_callback: SshOutputActivityCallbackSlot,
 }
 
 impl SshOutputReceiver {
     pub fn try_recv(&mut self) -> Result<SshOutputChunk, mpsc::error::TryRecvError> {
         self.receiver.try_recv()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
+
+    /// Registers the terminal-consumer wakeup without transferring transport ownership.
+    pub fn set_activity_callback(&mut self, callback: Arc<dyn Fn() + Send + Sync>) {
+        *self.activity_callback.write() = Some(callback);
     }
 }
 
@@ -453,6 +469,7 @@ impl SshOutputReceiver {
 struct SshOutputSender {
     sender: mpsc::Sender<SshOutputChunk>,
     byte_permits: Arc<tokio::sync::Semaphore>,
+    activity_callback: SshOutputActivityCallbackSlot,
 }
 
 impl SshOutputSender {
@@ -475,20 +492,55 @@ impl SshOutputSender {
                 _byte_permit: permit,
             })
             .await
-            .map_err(|error| error.0.bytes)
+            .map_err(|error| error.0.bytes)?;
+        let callback = self.activity_callback.read().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+        Ok(())
     }
 }
 
 fn ssh_output_channel() -> (SshOutputSender, SshOutputReceiver) {
     let (sender, receiver) = mpsc::channel(SSH_OUTPUT_CHANNEL_CAPACITY);
     let byte_permits = Arc::new(tokio::sync::Semaphore::new(SSH_OUTPUT_BACKLOG_BYTES));
+    let activity_callback = Arc::new(RwLock::new(None));
     (
         SshOutputSender {
             sender,
             byte_permits,
+            activity_callback: activity_callback.clone(),
         },
-        SshOutputReceiver { receiver },
+        SshOutputReceiver {
+            receiver,
+            activity_callback,
+        },
     )
+}
+
+#[cfg(test)]
+mod output_activity_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::ssh_output_channel;
+
+    #[tokio::test]
+    async fn successful_output_publication_notifies_the_consumer() {
+        let (sender, mut receiver) = ssh_output_channel();
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let callback_notifications = notifications.clone();
+        receiver.set_activity_callback(Arc::new(move || {
+            callback_notifications.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        sender.send(vec![1, 2, 3]).await.unwrap();
+
+        assert_eq!(notifications.load(Ordering::Relaxed), 1);
+        assert_eq!(&*receiver.try_recv().unwrap(), &[1, 2, 3]);
+    }
 }
 
 struct RegistryConsumerGuard {
@@ -624,6 +676,7 @@ pub struct SshTransportClient {
 include!("transport/connection.rs");
 include!("transport/signers.rs");
 include!("transport/output.rs");
+include!("transport/x11.rs");
 include!("transport/client.rs");
 include!("transport/handler.rs");
 include!("transport/auth.rs");
@@ -632,7 +685,7 @@ include!("transport/proxy_command.rs");
 
 #[cfg(test)]
 mod transport_lost_tests {
-    use super::{RegistryConsumerGuard, ssh_channel_error_is_transport_lost};
+    use super::{RegistryConsumerGuard, SshTransportClient, ssh_channel_error_is_transport_lost};
     use crate::{ConnectionConsumer, SshConfig, SshConnectionRegistry};
 
     #[test]
@@ -663,6 +716,30 @@ mod transport_lost_tests {
         drop(guard);
 
         assert_eq!(handle.info().ref_count, 0);
+    }
+
+    #[tokio::test]
+    async fn existing_shell_does_not_bootstrap_a_missing_node_transport() {
+        let registry = SshConnectionRegistry::default();
+        let node_consumer = ConnectionConsumer::NodeRouter("node-1".to_string());
+        let handle = registry.acquire(
+            SshConfig::password("host", 22, "me", "secret"),
+            node_consumer.clone(),
+        );
+        let connection_id = handle.connection_id().to_string();
+
+        let result = SshTransportClient::connect_shell_on_existing_connection(
+            registry,
+            connection_id,
+            ConnectionConsumer::Terminal("term-1".to_string()),
+            80,
+            24,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(handle.info().ref_count, 1);
+        assert_eq!(handle.info().consumers, vec![node_consumer]);
     }
 }
 

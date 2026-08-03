@@ -505,7 +505,10 @@ fn write_connection_secret(
             identity_agent: connection.options.identity_agent,
             agent_forwarding_socket: connection.options.agent_forwarding_socket,
             legacy_ssh_compatibility: connection.options.legacy_ssh_compatibility,
+            dedicated_new_terminal_connection: connection.options.dedicated_new_terminal_connection,
+            x11_forwarding: connection.options.x11_forwarding,
             post_connect_command,
+            terminal: connection.options.terminal,
         })
         .map_err(|error| runtime_error(error, json))?;
     Ok(())

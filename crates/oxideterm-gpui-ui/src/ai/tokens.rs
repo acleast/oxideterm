@@ -46,9 +46,10 @@ pub(super) const AI_TOOL_ARGS_MAX_HEIGHT: f32 = 120.0; // Tauri tool args max-h-
 pub(super) const AI_TOOL_STRUCTURED_MAX_HEIGHT: f32 = 160.0; // Tauri structured data max-h-[160px].
 pub(super) const AI_TOOL_OUTPUT_MAX_HEIGHT: f32 = 200.0; // Tauri raw output max-h-[200px].
 pub(super) const AI_CONTEXT_POPOVER_WIDTH: f32 = 240.0; // Tauri w-60.
-pub(super) const AI_CONTEXT_MINI_BAR_WIDTH: f32 = 64.0; // Tauri sm:w-16.
 pub(super) const AI_CONTEXT_MINI_BAR_HEIGHT: f32 = 4.0; // Tauri h-1.
-pub(super) const AI_STATUS_INDICATOR_MAX_WIDTH: f32 = 76.0; // Keep compact footer pills inside crowded sidebars.
+pub(super) const AI_CONTEXT_RING_SIZE: f32 = 13.0; // Keep the context gauge subordinate to its token label.
+pub(super) const AI_CONTEXT_RING_STROKE_WIDTH: f32 = 1.5; // Preserve a crisp ring without resembling a loading spinner.
+pub(super) const AI_CONTEXT_RING_TRACK_ALPHA: u32 = 0x70; // Leave enough contrast for the colored progress arc to remain distinct.
 pub(super) const AI_SAFETY_INDICATOR_MAX_WIDTH: f32 = 92.0; // Localized safety labels need a little more room than tool status.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -76,6 +77,7 @@ pub enum AiMessageRole {
 pub enum AiToolStatus {
     Pending,
     PendingApproval,
+    PendingSelection,
     Approved,
     Running,
     Completed,
@@ -98,6 +100,7 @@ pub enum AiToolRisk {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AiSafetyMode {
     Default,
+    ReadOnly,
     Bypass,
 }
 
@@ -193,7 +196,7 @@ mod tests {
 pub(super) fn status_tone(status: AiToolStatus) -> AiTone {
     match status {
         AiToolStatus::Pending => AiTone::Yellow,
-        AiToolStatus::PendingApproval => AiTone::Amber,
+        AiToolStatus::PendingApproval | AiToolStatus::PendingSelection => AiTone::Amber,
         AiToolStatus::Approved | AiToolStatus::Running => AiTone::Accent,
         AiToolStatus::Completed => AiTone::Green,
         AiToolStatus::Error => AiTone::Red,
