@@ -40,9 +40,6 @@ jobs:
           - label: windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-          - label: windows-arm64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
 
     steps:
       - name: Checkout repository
@@ -470,14 +467,6 @@ jobs:
               `OxideTerm_${version}_macos_arm64_portable.tar.gz`,
             );
             await addAsset(
-              ['windows-aarch64', 'windows-aarch64-nsis', 'aarch64-pc-windows-msvc', 'aarch64-pc-windows-msvc-nsis'],
-              `OxideTerm_${version}_windows_arm64-setup.exe`,
-            );
-            await addAsset(
-              ['windows-aarch64-portable'],
-              `OxideTerm_${version}_windows_arm64_portable.zip`,
-            );
-            await addAsset(
               ['windows-x86_64', 'windows-x86_64-nsis', 'x86_64-pc-windows-msvc', 'x86_64-pc-windows-msvc-nsis'],
               `OxideTerm_${version}_windows_x64-setup.exe`,
             );
@@ -491,7 +480,6 @@ jobs:
               // installer-specific Tauri keys before their generic fallbacks.
               const tauriCompatibilitySuffixes = new Map([
                 ['darwin-aarch64-app', '.app.tar.gz'],
-                ['windows-aarch64-nsis', '.exe'],
                 ['windows-x86_64-nsis', '.exe'],
               ]);
               for (const [platformKey, expectedSuffix] of tauriCompatibilitySuffixes) {
@@ -688,8 +676,6 @@ jobs:
               `OxideTerm_${version}_macos_arm64.app.zip`,
               `OxideTerm_${version}_macos_arm64.dmg`,
               `OxideTerm_${version}_macos_arm64_portable.tar.gz`,
-              `OxideTerm_${version}_windows_arm64-setup.exe`,
-              `OxideTerm_${version}_windows_arm64_portable.zip`,
               `OxideTerm_${version}_windows_x64-setup.exe`,
               `OxideTerm_${version}_windows_x64_portable.zip`,
             ];

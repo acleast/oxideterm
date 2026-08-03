@@ -56,8 +56,6 @@ jobs:
               'darwin-aarch64',
               'macos-aarch64-app',
               'macos-aarch64-portable',
-              'windows-aarch64-nsis',
-              'windows-aarch64-portable',
               'windows-x86_64-nsis',
               'windows-x86_64-portable',
             ];
