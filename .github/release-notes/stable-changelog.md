@@ -3,6 +3,22 @@
 Stable releases are listed newest first. The release workflow uses each versioned
 section as the detailed changelog attached to the corresponding GitHub Release.
 
+## 2.0.17
+
+OxideTerm 2.0.17 brings the latest native workspace, AI settings, remote desktop, SSH, and release workflow improvements to the installer-only stable distribution.
+
+### ✨ Highlights
+
+- Added AI model settings improvements and clearer model-chip layout behavior.
+- Improved remote desktop resizing and session handling, including more reliable RDP display updates.
+- Preserved tested SSH credentials and degraded unavailable X11 paths cleanly instead of failing connection setup.
+
+### 🛠️ Fixes
+
+- Fixed scheduled commands in interactive terminal applications such as Codex by sending a protocol-aware Enter key event instead of a bare line break.
+- Limited stable release downloads to the macOS DMG and Windows x64 installer, removing ARM Windows and portable archive outputs.
+- Added release asset repair workflow support and retained build caches for targeted packaging retries.
+
 ## 2.0.16
 
 OxideTerm 2.0.16 adds searchable settings, contextual nested session groups, and secure SSH X11 forwarding while improving terminal startup, remote previews, remote-desktop compatibility, and modem transfers.
