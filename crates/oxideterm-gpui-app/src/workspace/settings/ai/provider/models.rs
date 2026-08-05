@@ -1,5 +1,13 @@
 use super::*;
 
+// Keep the chip viewport at its full row height before adding spacing below it.
+const AI_PROVIDER_MODEL_CHIP_LIST_BOTTOM_PADDING: f32 = 16.0;
+
+fn ai_provider_model_chip_list_height(row_count: usize) -> f32 {
+    row_count as f32 * AI_PROVIDER_MODEL_CHIP_ROW_ESTIMATED_HEIGHT
+        + AI_PROVIDER_MODEL_CHIP_LIST_BOTTOM_PADDING
+}
+
 impl WorkspaceApp {
     pub(in crate::workspace) fn ai_provider_models(
         &self,
@@ -101,13 +109,13 @@ impl WorkspaceApp {
             let provider_index = index;
             let row_count = chip_rows.len();
             let hidden_count_for_rows = hidden_count;
-            let list_height = row_count as f32 * AI_PROVIDER_MODEL_CHIP_ROW_ESTIMATED_HEIGHT;
+            let list_height = ai_provider_model_chip_list_height(row_count);
             body = body.child(
                 div()
                     .w_full()
                     .min_w(px(0.0))
                     .px(px(16.0))
-                    .pb(px(16.0))
+                    .pb(px(AI_PROVIDER_MODEL_CHIP_LIST_BOTTOM_PADDING))
                     .h(px(list_height))
                     .child(tauri_virtual_list(
                         state,
@@ -126,7 +134,97 @@ impl WorkspaceApp {
             );
         }
 
+        body = body.child(self.ai_provider_model_input(index, provider, cx));
+
         body.into_any_element()
+    }
+
+    fn ai_provider_model_input(
+        &self,
+        index: usize,
+        provider: &AiProviderView,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = SettingsInput::AiProviderNewModel(index);
+        let can_add = self.focused_settings_input == Some(input)
+            && !self.settings_input_draft.trim().is_empty();
+        let provider_id = provider.id.clone();
+        let mut options = ToolbarButtonOptions::compact_text(
+            ButtonVariant::Outline,
+            ButtonRadius::Md,
+            32.0,
+            10.0,
+            self.tokens.metrics.ui_text_xs,
+        );
+        options.button.disabled = !can_add;
+
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .px(px(16.0))
+            .pb(px(16.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .flex_1()
+                    .child(self.ai_provider_text_input_control(
+                        input,
+                        String::new(),
+                        self.i18n.t("settings_view.ai.model_name_placeholder"),
+                        cx,
+                    )),
+            )
+            .child(self.workspace_toolbar_action_button(
+                self.i18n.t("settings_view.ai.add_model"),
+                None,
+                options,
+                cx.listener(move |this, _event, _window, cx| {
+                    this.add_ai_provider_model(index, &provider_id, cx);
+                    cx.stop_propagation();
+                }),
+            ))
+            .into_any_element()
+    }
+
+    fn add_ai_provider_model(&mut self, index: usize, provider_id: &str, cx: &mut Context<Self>) {
+        let input = SettingsInput::AiProviderNewModel(index);
+        if self.focused_settings_input != Some(input) {
+            return;
+        }
+        let model = self.settings_input_draft.trim().to_string();
+        if model.is_empty() {
+            return;
+        }
+        let provider_id = provider_id.to_string();
+        let already_present = self
+            .settings_store
+            .settings()
+            .ai
+            .providers
+            .get(index)
+            .filter(|provider| ai_provider_id(provider).as_deref() == Some(provider_id.as_str()))
+            .and_then(|provider| provider.get("models"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|models| {
+                models
+                    .iter()
+                    .any(|existing| existing.as_str() == Some(model.as_str()))
+            });
+        if already_present {
+            return;
+        }
+        self.edit_settings(
+            move |settings| {
+                ai_add_provider_model(&mut settings.ai.providers, index, &provider_id, &model);
+            },
+            cx,
+        );
+        self.settings_input_draft.clear();
+        self.clear_ime_selection();
+        cx.notify();
     }
 
     pub(in crate::workspace) fn sync_ai_provider_model_chip_list_state(
@@ -261,5 +359,21 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn ai_provider_has_key(&self, provider_id: &str, cx: &App) -> bool {
         self.ai_provider_has_key_cached(provider_id, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_chip_list_height_keeps_bottom_padding_outside_the_viewport() {
+        let row_count = 2;
+        let container_height = ai_provider_model_chip_list_height(row_count);
+
+        assert_eq!(
+            container_height - AI_PROVIDER_MODEL_CHIP_LIST_BOTTOM_PADDING,
+            row_count as f32 * AI_PROVIDER_MODEL_CHIP_ROW_ESTIMATED_HEIGHT
+        );
     }
 }

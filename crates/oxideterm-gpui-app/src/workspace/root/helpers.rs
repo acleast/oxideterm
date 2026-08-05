@@ -10,7 +10,6 @@ pub(in crate::workspace) fn tab_background_key(kind: &TabKind) -> &'static str {
         TabKind::Graphics => "graphics",
         TabKind::Runtime => "runtime",
         TabKind::ConnectionPool => "runtime",
-        TabKind::ConnectionMonitor => "connection_monitor",
         TabKind::Topology => "topology",
         TabKind::NotificationCenter => "notification_center",
         TabKind::Sftp => "sftp",
@@ -1035,6 +1034,9 @@ impl WorkspaceApp {
             changed = true;
         }
         if self.dismiss_terminal_broadcast_menu(cx) {
+            changed = true;
+        }
+        if self.remote_desktop_resize_menu_tab_id.take().is_some() {
             changed = true;
         }
         if self.close_terminal_git_branch_picker(cx) {
