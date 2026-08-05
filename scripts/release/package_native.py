@@ -1043,17 +1043,6 @@ def windows_installer_script(
     # each native release channel isolated in its own registry/install scope.
     # Automatic updates stage payloads first; the helper performs the final
     # replacement after the running app has exited.
-    legacy_upgrade_init = ""
-    if identity.channel == "stable":
-        legacy_upgrade_init = rf"""
-  ${{If}} $IsOxideUpdate == "0"
-  ${{AndIf}} ${{FileExists}} "$LOCALAPPDATA\OxideTerm\oxideterm.exe"
-    StrCpy $INSTDIR "$LOCALAPPDATA\OxideTerm"
-    StrCpy $IsOxideUpdate "1"
-    StrCpy $IsLegacyUpgrade "1"
-    SetSilent silent
-  ${{EndIf}}"""
-
     # Windows installed-app surfaces read DisplayIcon from the uninstall entry.
     display_icon_registry_entry = (
         rf'WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\{identity.windows_uninstall_key}" '
@@ -1091,15 +1080,12 @@ VIAddVersionKey /LANG=1033 "ProductVersion" "{nsis_string(version)}"
 !insertmacro MUI_LANGUAGE "English"
 
 Var IsOxideUpdate
-Var IsLegacyUpgrade
 
 Function .onInit
-  StrCpy $IsLegacyUpgrade "0"
   ${{GetOptions}} "$CMDLINE" "/{WINDOWS_UPDATE_FLAG}=1" $IsOxideUpdate
-  IfErrors check_legacy_install oxide_update_mode
-check_legacy_install:
+  IfErrors normal_install_mode oxide_update_mode
+normal_install_mode:
   StrCpy $IsOxideUpdate "0"
-{legacy_upgrade_init}
   Return
 oxide_update_mode:
   StrCpy $IsOxideUpdate "1"
@@ -1137,12 +1123,6 @@ update_install:
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{identity.windows_uninstall_key}" "Publisher" "AnalyseDeCircuit"
   {display_icon_registry_entry}
   WriteRegStr HKCU "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{identity.windows_uninstall_key}" "UninstallString" "$\\"$INSTDIR\\Uninstall.exe$\\""
-  StrCmp $IsLegacyUpgrade "1" 0 legacy_shortcuts_done
-  CreateDirectory "$SMPROGRAMS\\{identity.app_name}"
-  CreateShortcut "$SMPROGRAMS\\{identity.app_name}\\{identity.app_name}.lnk" "$INSTDIR\\{binary.name}" "" "$INSTDIR\\resources\\icons\\icon.ico"
-  IfFileExists "$DESKTOP\\{identity.app_name}.lnk" 0 legacy_shortcuts_done
-  CreateShortcut "$DESKTOP\\{identity.app_name}.lnk" "$INSTDIR\\{binary.name}" "" "$INSTDIR\\resources\\icons\\icon.ico"
-legacy_shortcuts_done:
   Exec '"$INSTDIR\\{UPDATE_HELPER_DIR}\\{UPDATE_HELPER_BIN}.exe" --install-dir "$INSTDIR" --app-exe "$INSTDIR\\{binary.name}" --launch'
 
 install_done:
