@@ -84,6 +84,8 @@ const EDITOR_INTEGRATION_HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(250
 const EDITOR_CLIPBOARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const TERMINAL_SEARCH_DEBOUNCE: Duration = Duration::from_millis(24);
 const BACKGROUND_IMAGE_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(32);
+const SCHEDULED_INPUT_KEYSTROKE_INTERVAL: Duration = Duration::from_millis(12);
+const SCHEDULED_INPUT_SUBMIT_DELAY: Duration = Duration::from_millis(24);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalPaneEvent {
@@ -1726,24 +1728,43 @@ impl TerminalPane {
             return false;
         }
         let input = zeroize::Zeroizing::new(command.replace("\r\n", "\n").replace('\r', "\n"));
-        if !self.send_command_sender_text(&input, cx) {
+
+        // Codex treats a burst of text as a paste and keeps Enter in its
+        // multiline editor. Replay scheduled input as bounded keystrokes so
+        // interactive TUIs receive the same stream as physical typing.
+        cx.spawn(async move |pane, cx| {
+            for character in input.chars() {
+                let character = zeroize::Zeroizing::new(character.to_string());
+                let accepted = pane
+                    .update(cx, |pane, cx| pane.send_command_sender_text(&character, cx))
+                    .unwrap_or(false);
+                if !accepted {
+                    return;
+                }
+                gpui::Timer::after(SCHEDULED_INPUT_KEYSTROKE_INTERVAL).await;
+            }
+
+            gpui::Timer::after(SCHEDULED_INPUT_SUBMIT_DELAY).await;
+            let _ = pane.update(cx, |pane, cx| {
+                pane.send_scheduled_enter(cx);
+            });
+        })
+        .detach();
+        true
+    }
+
+    fn send_scheduled_enter(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.terminal_accepts_input() {
             return false;
         }
-
-        // Send Enter through the active terminal keyboard protocol. Codex uses
-        // Kitty keyboard mode, where a bare carriage return is a line break,
-        // not the key event that submits the prompt.
         let mode = self.terminal.lock().mode();
-        // Force Kitty's plain Enter key event for this synthetic submission.
-        // Codex interprets a legacy CR as inserting a newline in its editor.
-        let enter_mode = mode | TermMode::REPORT_ALL_KEYS_AS_ESC;
         let enter = gpui::Keystroke {
             key: "enter".into(),
             ..Default::default()
         };
         let sequence = crate::terminal_view::configurable_key_escape_sequence(
             &enter,
-            &enter_mode,
+            &mode,
             false,
             self.settings.backspace_sequence,
             self.settings.delete_sequence,
