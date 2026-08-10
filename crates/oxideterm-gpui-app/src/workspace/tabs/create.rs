@@ -863,6 +863,7 @@ impl WorkspaceApp {
             post_connect_command,
             title,
             true,
+            true,
             window,
             cx,
         )
@@ -878,7 +879,7 @@ impl WorkspaceApp {
         // Copy Session adds another consumer to the node-owned transport. It
         // must not reinterpret the action as a request for a dedicated node.
         self.create_ssh_terminal_tab_for_existing_node_with_policy(
-            node_id, None, title, false, window, cx,
+            node_id, None, title, false, false, window, cx,
         )
     }
 
@@ -895,6 +896,7 @@ impl WorkspaceApp {
             post_connect_command,
             title,
             false,
+            true,
             window,
             cx,
         )
@@ -906,6 +908,7 @@ impl WorkspaceApp {
         post_connect_command: Option<String>,
         title: String,
         allow_dedicated_connection: bool,
+        reveal_sidebar: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<TerminalSessionId> {
@@ -931,7 +934,7 @@ impl WorkspaceApp {
         self.bind_terminal_location(tab_id, pane_id, session_id, cx);
         self.set_main_window_active_tab(Some(tab_id), cx);
         self.active_surface = ActiveSurface::Terminal;
-        if self.sidebar_collapsed {
+        if reveal_sidebar && self.sidebar_collapsed {
             self.set_sidebar_collapsed_with_motion(false, cx);
         }
         self.needs_active_pane_focus = true;

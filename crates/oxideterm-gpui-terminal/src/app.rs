@@ -1734,13 +1734,16 @@ impl TerminalPane {
         // Kitty keyboard mode, where a bare carriage return is a line break,
         // not the key event that submits the prompt.
         let mode = self.terminal.lock().mode();
+        // Force Kitty's plain Enter key event for this synthetic submission.
+        // Codex interprets a legacy CR as inserting a newline in its editor.
+        let enter_mode = mode | TermMode::REPORT_ALL_KEYS_AS_ESC;
         let enter = gpui::Keystroke {
             key: "enter".into(),
             ..Default::default()
         };
         let sequence = crate::terminal_view::configurable_key_escape_sequence(
             &enter,
-            &mode,
+            &enter_mode,
             false,
             self.settings.backspace_sequence,
             self.settings.delete_sequence,
