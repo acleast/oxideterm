@@ -458,6 +458,10 @@ impl WorkspaceApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.dismiss_scheduled_input_popover(cx) {
+            return true;
+        }
+
         if self.dismiss_terminal_broadcast_menu(cx) {
             cx.notify();
             return true;

@@ -110,6 +110,9 @@ pub(super) enum WorkspaceImeTarget {
     CommandPalette,
     ShortcutsModalSearch,
     Search,
+    ScheduledInput,
+    ScheduledInputTime,
+    ScheduledInputDelay,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
     TerminalProjectSearch,
@@ -468,6 +471,9 @@ impl WorkspaceImeTarget {
             Self::CommandPalette => 4,
             Self::ShortcutsModalSearch => 5,
             Self::Search => 1,
+            Self::ScheduledInput => 4_500,
+            Self::ScheduledInputTime => 4_501,
+            Self::ScheduledInputDelay => 4_502,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
             Self::TerminalProjectSearch => 19,
@@ -932,6 +938,16 @@ impl WorkspaceApp {
 
         if self.command_palette.read(cx).is_open() {
             return Some(WorkspaceImeTarget::CommandPalette);
+        }
+
+        if self.scheduled_input.open && self.scheduled_input.command_focused {
+            return Some(WorkspaceImeTarget::ScheduledInput);
+        }
+        if self.scheduled_input.open && self.scheduled_input.time_focused {
+            return Some(WorkspaceImeTarget::ScheduledInputTime);
+        }
+        if self.scheduled_input.open && self.scheduled_input.delay_focused {
+            return Some(WorkspaceImeTarget::ScheduledInputDelay);
         }
 
         if self.shortcuts_modal.open {
@@ -1477,7 +1493,11 @@ impl WorkspaceApp {
         line_count: usize,
     ) -> Pixels {
         match target {
-            WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit => px(20.0),
+            WorkspaceImeTarget::ScheduledInput
+            | WorkspaceImeTarget::ScheduledInputTime
+            | WorkspaceImeTarget::ScheduledInputDelay
+            | WorkspaceImeTarget::AiChatInput
+            | WorkspaceImeTarget::AiMessageEdit => px(20.0),
             WorkspaceImeTarget::Settings(input) if input.accepts_newline() => {
                 // Tauri textareas hit-test by their visual line box. Settings
                 // multiline fields are hand-rendered in GPUI, so keep the IME
@@ -1690,6 +1710,9 @@ impl WorkspaceApp {
 
     fn ime_target_font_family(&self, target: WorkspaceImeTarget) -> SharedString {
         match target {
+            WorkspaceImeTarget::ScheduledInput => {
+                super::settings_mono_font_family(self.settings_store.settings())
+            }
             WorkspaceImeTarget::Settings(
                 SettingsInput::TerminalCommandBarFocusHandoff
                 | SettingsInput::TerminalCommandSpecsJson
@@ -1717,6 +1740,18 @@ impl WorkspaceApp {
             }
             WorkspaceImeTarget::ShortcutsModalSearch => Some(self.shortcuts_modal.query.clone()),
             WorkspaceImeTarget::Search => Some(self.search.query.clone()),
+            WorkspaceImeTarget::ScheduledInput => self
+                .scheduled_input
+                .open
+                .then(|| self.scheduled_input.command_draft.as_str().to_string()),
+            WorkspaceImeTarget::ScheduledInputTime => self
+                .scheduled_input
+                .open
+                .then(|| self.scheduled_input.time_draft.clone()),
+            WorkspaceImeTarget::ScheduledInputDelay => self
+                .scheduled_input
+                .open
+                .then(|| self.scheduled_input.delay_draft.clone()),
             WorkspaceImeTarget::TerminalCwdSearch => {
                 let terminal = self.terminal.read(cx);
                 terminal
@@ -2154,7 +2189,9 @@ impl WorkspaceApp {
         }
         if matches!(
             target,
-            WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit
+            WorkspaceImeTarget::AiChatInput
+                | WorkspaceImeTarget::AiMessageEdit
+                | WorkspaceImeTarget::ScheduledInput
         ) && !keystroke.modifiers.shift
         {
             return false;
@@ -2500,6 +2537,39 @@ impl WorkspaceApp {
             WorkspaceImeTarget::Search => {
                 replace_utf16(&mut self.search.query, replacement_range, text);
                 self.update_search_query(cx);
+            }
+            WorkspaceImeTarget::ScheduledInput => {
+                if self.scheduled_input.open {
+                    replace_utf16(
+                        &mut self.scheduled_input.command_draft,
+                        replacement_range,
+                        text,
+                    );
+                    self.show_active_input_caret(cx);
+                    cx.notify();
+                }
+            }
+            WorkspaceImeTarget::ScheduledInputTime => {
+                if self.scheduled_input.open {
+                    replace_utf16(
+                        &mut self.scheduled_input.time_draft,
+                        replacement_range,
+                        text,
+                    );
+                    self.show_active_input_caret(cx);
+                    cx.notify();
+                }
+            }
+            WorkspaceImeTarget::ScheduledInputDelay => {
+                if self.scheduled_input.open {
+                    replace_utf16(
+                        &mut self.scheduled_input.delay_draft,
+                        replacement_range,
+                        text,
+                    );
+                    self.show_active_input_caret(cx);
+                    cx.notify();
+                }
             }
             WorkspaceImeTarget::TerminalCwdSearch => {
                 if self.terminal.update(cx, |terminal, _cx| {
@@ -2997,6 +3067,7 @@ fn normalize_clipboard_text_for_ime_target(
 fn ime_target_accepts_newline(target: WorkspaceImeTarget) -> bool {
     match target {
         WorkspaceImeTarget::ReadOnlyText(_) => true,
+        WorkspaceImeTarget::ScheduledInput => true,
         WorkspaceImeTarget::Settings(input) => input.accepts_newline(),
         WorkspaceImeTarget::AiChatInput | WorkspaceImeTarget::AiMessageEdit => true,
         WorkspaceImeTarget::SessionManager(SessionManagerInput::OxideExportDescription) => true,

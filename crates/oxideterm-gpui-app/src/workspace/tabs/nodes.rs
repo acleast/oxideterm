@@ -952,6 +952,7 @@ impl WorkspaceApp {
                     let _ = pane.update(cx, |pane, _cx| pane.shutdown());
                 }
                 self.bind_terminal_location(tab_id, new_pane_id, new_session_id, cx);
+                self.rebind_scheduled_input_session(old_session_id, new_session_id);
                 self.unregister_ssh_terminal_session(old_session_id, cx);
                 remounted += 1;
             } else {

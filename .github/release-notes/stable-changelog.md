@@ -3,6 +3,19 @@
 Stable releases are listed newest first. The release workflow uses each versioned
 section as the detailed changelog attached to the corresponding GitHub Release.
 
+## 2.0.18
+
+OxideTerm 2.0.18 restores scheduled terminal input and SSH session duplication while fixing the Windows installer experience for manually launched setup files.
+
+### ✨ Highlights
+
+- Restored the terminal scheduled-input workflow with direct command, delay, specified-time, and daily scheduling fields that keep keyboard input inside the dialog.
+- Restored Copy Session in the SSH tab context menu, creating an independent terminal consumer on the same node-owned connection.
+
+### 🛠️ Fixes
+
+- Fixed manually launched Windows installers that could exit without showing the interactive installer when an earlier installation was present.
+
 ## 2.0.17
 
 OxideTerm 2.0.17 brings the latest native workspace, AI settings, remote desktop, SSH, and release workflow improvements to the installer-only stable distribution.

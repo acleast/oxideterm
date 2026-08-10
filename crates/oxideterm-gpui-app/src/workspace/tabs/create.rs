@@ -868,6 +868,20 @@ impl WorkspaceApp {
         )
     }
 
+    pub(in crate::workspace) fn duplicate_ssh_terminal_tab_for_existing_node(
+        &mut self,
+        node_id: &NodeId,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<TerminalSessionId> {
+        // Copy Session adds another consumer to the node-owned transport. It
+        // must not reinterpret the action as a request for a dedicated node.
+        self.create_ssh_terminal_tab_for_existing_node_with_policy(
+            node_id, None, title, false, window, cx,
+        )
+    }
+
     fn create_initial_ssh_terminal_tab_for_existing_node(
         &mut self,
         node_id: &NodeId,

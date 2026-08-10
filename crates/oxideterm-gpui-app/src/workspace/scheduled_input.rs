@@ -5,6 +5,7 @@ use chrono::{
     DateTime, Days, Local, LocalResult, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
 };
 use oxideterm_gpui_terminal::TerminalNoticeVariant;
+use oxideterm_gpui_ui::text_input::{TextInputView, text_input, text_input_anchor_probe};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -73,6 +74,41 @@ impl ScheduledInputState {
 }
 
 impl WorkspaceApp {
+    pub(super) fn handle_scheduled_input_key(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.scheduled_input.open
+            || (!self.scheduled_input.command_focused
+                && !self.scheduled_input.time_focused
+                && !self.scheduled_input.delay_focused)
+        {
+            return false;
+        }
+        let modifiers = event.keystroke.modifiers;
+        match event.keystroke.key.as_str() {
+            "enter" if !modifiers.platform && !modifiers.control && !modifiers.alt => {
+                if self.scheduled_input.time_focused {
+                    self.commit_scheduled_input_time_draft(cx);
+                } else if self.scheduled_input.delay_focused {
+                    self.commit_scheduled_input_delay_draft(cx);
+                } else if !modifiers.shift {
+                    self.add_scheduled_input_task(cx);
+                } else {
+                    return false;
+                }
+                true
+            }
+            "escape" if !modifiers.platform => {
+                self.dismiss_scheduled_input_popover(cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn rebind_scheduled_input_session(
         &mut self,
         old_session_id: TerminalSessionId,
@@ -89,8 +125,8 @@ impl WorkspaceApp {
         self.scheduled_input.open
     }
 
-    pub(super) fn active_terminal_scheduled_input_count(&self) -> usize {
-        let Some(session_id) = self.active_terminal_session_id() else {
+    pub(super) fn active_terminal_scheduled_input_count(&self, cx: &App) -> usize {
+        let Some(session_id) = self.active_terminal_session_id(cx) else {
             return 0;
         };
         self.scheduled_input
@@ -105,38 +141,45 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.scheduled_input.open {
-            self.scheduled_input.open = false;
-            self.scheduled_input.target_session_id = None;
-            self.scheduled_input.command_focused = false;
-            self.scheduled_input.time_focused = false;
-            self.scheduled_input.time_draft.clear();
-            self.scheduled_input.delay_focused = false;
-            self.scheduled_input.delay_draft.clear();
-            self.scheduled_input.command_draft = Zeroizing::new(String::new());
+        if self.dismiss_scheduled_input_popover(cx) {
             cx.notify();
             return;
         }
-        if self.active_tab_has_serial_terminal() {
+        if self.active_tab_has_serial_terminal(cx) {
             return;
         }
-        let Some(session_id) = self.active_terminal_session_id() else {
+        let Some(session_id) = self.active_terminal_session_id(cx) else {
             return;
         };
         self.scheduled_input.target_session_id = Some(session_id);
         self.scheduled_input.open = true;
-        self.scheduled_input.command_draft =
-            Zeroizing::new(self.terminal_command_bar_draft.clone());
+        self.scheduled_input.command_draft = self.terminal_command_sender.read(cx).active_text(cx);
         self.scheduled_input.command_focused = true;
         self.scheduled_input.time_focused = false;
         self.scheduled_input.time_draft.clear();
         self.scheduled_input.delay_focused = false;
         self.scheduled_input.delay_draft.clear();
-        self.terminal_command_bar_focused = false;
-        self.terminal_command_suggestions_open = false;
-        self.close_terminal_quick_commands_popover();
+        self.close_terminal_quick_commands_popover(cx);
         window.focus(&self.focus_handle, cx);
         cx.notify();
+    }
+
+    pub(super) fn dismiss_scheduled_input_popover(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.scheduled_input.open {
+            return false;
+        }
+        self.scheduled_input.open = false;
+        self.scheduled_input.target_session_id = None;
+        self.scheduled_input.command_focused = false;
+        self.scheduled_input.time_focused = false;
+        self.scheduled_input.time_draft.clear();
+        self.scheduled_input.delay_focused = false;
+        self.scheduled_input.delay_draft.clear();
+        self.scheduled_input.command_draft = Zeroizing::new(String::new());
+        self.ime_marked_text = None;
+        self.clear_ime_selection();
+        cx.notify();
+        true
     }
 
     fn set_scheduled_input_repeat(
@@ -221,11 +264,17 @@ impl WorkspaceApp {
         let Some(session_id) = self.scheduled_input.target_session_id else {
             return;
         };
-        if !self.terminal_locations.contains_key(&session_id) {
+        if self
+            .tab_host
+            .read(cx)
+            .terminal_location(session_id)
+            .is_none()
+        {
             self.push_command_palette_toast(
                 self.i18n.t("terminal.scheduled_input.save_failed"),
                 None,
                 TerminalNoticeVariant::Error,
+                cx,
             );
             return;
         }
@@ -242,6 +291,7 @@ impl WorkspaceApp {
                 self.i18n.t("terminal.scheduled_input.command_required"),
                 None,
                 TerminalNoticeVariant::Error,
+                cx,
             );
             return;
         }
@@ -250,6 +300,7 @@ impl WorkspaceApp {
                 self.i18n.t("terminal.scheduled_input.save_failed"),
                 None,
                 TerminalNoticeVariant::Error,
+                cx,
             );
             return;
         }
@@ -267,6 +318,7 @@ impl WorkspaceApp {
                         self.i18n.t("terminal.scheduled_input.save_failed"),
                         None,
                         TerminalNoticeVariant::Error,
+                        cx,
                     );
                     return;
                 };
@@ -279,6 +331,7 @@ impl WorkspaceApp {
                         self.i18n.t("terminal.scheduled_input.save_failed"),
                         None,
                         TerminalNoticeVariant::Error,
+                        cx,
                     );
                     return;
                 };
@@ -300,6 +353,7 @@ impl WorkspaceApp {
             self.i18n.t("terminal.scheduled_input.saved"),
             None,
             TerminalNoticeVariant::Success,
+            cx,
         );
         self.scheduled_input.command_draft = Zeroizing::new(String::new());
         cx.notify();
@@ -337,9 +391,21 @@ impl WorkspaceApp {
 
     fn process_scheduled_input_tick(&mut self, now: DateTime<Utc>, cx: &mut Context<Self>) {
         let before = self.scheduled_input.tasks.len();
+        let live_session_ids = {
+            let tab_host = self.tab_host.read(cx);
+            self.scheduled_input
+                .tasks
+                .iter()
+                .filter_map(|task| {
+                    tab_host
+                        .terminal_location(task.session_id)
+                        .map(|_| task.session_id)
+                })
+                .collect::<HashSet<_>>()
+        };
         self.scheduled_input
             .tasks
-            .retain(|task| self.terminal_locations.contains_key(&task.session_id));
+            .retain(|task| live_session_ids.contains(&task.session_id));
         let due = self
             .scheduled_input
             .tasks
@@ -350,17 +416,25 @@ impl WorkspaceApp {
         let had_due = !due.is_empty();
 
         for (task_id, session_id, command) in due {
-            let sent = self
-                .terminal_locations
-                .get(&session_id)
-                .and_then(|location| self.panes.get(&location.pane_id))
-                .cloned()
-                .is_some_and(|pane| {
-                    if !pane.read(cx).ai_accepts_input() {
-                        return false;
-                    }
-                    pane.update(cx, |pane, cx| pane.send_scheduled_command_line(&command, cx))
+            let pane = self
+                .tab_host
+                .read(cx)
+                .terminal_location(session_id)
+                .and_then(|location| {
+                    self.tab_host
+                        .read(cx)
+                        .panes()
+                        .get(&location.pane_id)
+                        .cloned()
                 });
+            let sent = pane.is_some_and(|pane| {
+                if !pane.read(cx).ai_accepts_input() {
+                    return false;
+                }
+                pane.update(cx, |pane, cx| {
+                    pane.send_scheduled_command_line(&command, cx)
+                })
+            });
             let Some(index) = self
                 .scheduled_input
                 .tasks
@@ -597,14 +671,15 @@ impl WorkspaceApp {
                                 value: self.scheduled_input.command_draft.as_str(),
                                 placeholder: command_placeholder,
                                 focused: self.scheduled_input.command_focused,
-                                caret_visible: self.new_connection_caret_visible,
+                                caret_visible: self.input_caret.visible(),
                                 secret: false,
                                 selected_all: false,
                                 selected_range: self.ime_selected_range_for_target(
                                     WorkspaceImeTarget::ScheduledInput,
+                                    cx,
                                 ),
                                 marked_text: self
-                                    .marked_text_for_target(WorkspaceImeTarget::ScheduledInput),
+                                    .marked_text_for_target(WorkspaceImeTarget::ScheduledInput, cx),
                             },
                         ),
                         {
@@ -791,14 +866,15 @@ impl WorkspaceApp {
                             value: &time_draft,
                             placeholder: "HH:MM".to_string(),
                             focused: true,
-                            caret_visible: self.new_connection_caret_visible,
+                            caret_visible: self.input_caret.visible(),
                             secret: false,
                             selected_all: false,
                             selected_range: self.ime_selected_range_for_target(
                                 WorkspaceImeTarget::ScheduledInputTime,
+                                cx,
                             ),
                             marked_text: self
-                                .marked_text_for_target(WorkspaceImeTarget::ScheduledInputTime),
+                                .marked_text_for_target(WorkspaceImeTarget::ScheduledInputTime, cx),
                         },
                     ),
                     {
@@ -929,14 +1005,17 @@ impl WorkspaceApp {
                             value: &delay_draft,
                             placeholder: "min".to_string(),
                             focused: true,
-                            caret_visible: self.new_connection_caret_visible,
+                            caret_visible: self.input_caret.visible(),
                             secret: false,
                             selected_all: false,
                             selected_range: self.ime_selected_range_for_target(
                                 WorkspaceImeTarget::ScheduledInputDelay,
+                                cx,
                             ),
-                            marked_text: self
-                                .marked_text_for_target(WorkspaceImeTarget::ScheduledInputDelay),
+                            marked_text: self.marked_text_for_target(
+                                WorkspaceImeTarget::ScheduledInputDelay,
+                                cx,
+                            ),
                         },
                     ),
                     {

@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext, Context, Entity, Task, Timer, WeakEntity};
+use gpui::{App, AppContext, Context, Entity, Task, Timer, WeakEntity};
 use oxideterm_gpui_editor::{
     EditorContextMenuLabels, EditorPresentation, EditorSettings, TextEditorView,
 };
@@ -311,6 +311,12 @@ impl TerminalCommandSenderEntity {
 
     pub(super) fn active_document_id(&self) -> TerminalCommandSenderId {
         self.active_document_id
+    }
+
+    pub(super) fn active_text(&self, cx: &App) -> Zeroizing<String> {
+        self.document(self.active_document_id)
+            .map(|document| Zeroizing::new(document.editor.read(cx).buffer().text()))
+            .unwrap_or_default()
     }
 
     pub(super) fn replace_active_text(

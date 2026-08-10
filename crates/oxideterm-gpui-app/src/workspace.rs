@@ -45,6 +45,7 @@ mod root {
     #[cfg(test)]
     pub(super) mod tests;
 }
+mod scheduled_input;
 mod selectable_text;
 mod selection_motion;
 mod session_icons;
@@ -725,6 +726,7 @@ pub(crate) struct WorkspaceApp {
     search: SearchBarState,
     terminal_command_sender: Entity<terminal_command_sender::TerminalCommandSenderEntity>,
     _terminal_command_sender_observation: Subscription,
+    scheduled_input: scheduled_input::ScheduledInputState,
     detached_local_terminals: HashMap<TerminalSessionId, DetachedLocalTerminalSession>,
     detached_local_terminal_order: Vec<TerminalSessionId>,
     serial_terminal_configs: HashMap<TerminalSessionId, SerialSessionConfig>,

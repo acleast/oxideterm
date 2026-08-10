@@ -9,6 +9,7 @@ use oxideterm_gpui_ui::modal::overlay_content_boundary;
 
 const TAB_CONTEXT_MENU_WIDTH: f32 = 228.0;
 const TAB_CONTEXT_MENU_HEIGHT: f32 = 136.0;
+const TAB_CONTEXT_MENU_COPY_SESSION_HEIGHT: f32 = 176.0;
 const TAB_CONTEXT_MENU_MARGIN: f32 = 8.0;
 const TAB_HANDOFF_PREVIEW_WIDTH_EXTRA: f32 = 96.0;
 const TAB_HANDOFF_PREVIEW_MIN_WIDTH: f32 = 220.0;
@@ -925,64 +926,118 @@ impl WorkspaceApp {
         if self.tab_by_id(menu.tab_id, cx).is_none() {
             return None;
         }
+        let copy_session = self.tab_by_id(menu.tab_id, cx).and_then(|tab| {
+            if tab.kind != TabKind::SshTerminal {
+                return None;
+            }
+            let pane_id = tab.active_pane_id?;
+            let session_id = tab.root_pane.as_ref()?.session_id_for_pane(pane_id)?;
+            let node_id = self
+                .workspace_runtime
+                .read(cx)
+                .ssh_terminal_node_id(session_id)?;
+            Some((node_id, tab.title.clone()))
+        });
         let viewport = window.viewport_size();
+        let menu_height = if copy_session.is_some() {
+            TAB_CONTEXT_MENU_COPY_SESSION_HEIGHT
+        } else {
+            TAB_CONTEXT_MENU_HEIGHT
+        };
         let placement = browser_behavior::clamp_context_menu_position(
             menu.x,
             menu.y,
             f32::from(viewport.width),
             f32::from(viewport.height),
             TAB_CONTEXT_MENU_WIDTH,
-            TAB_CONTEXT_MENU_HEIGHT,
+            menu_height,
             TAB_CONTEXT_MENU_MARGIN,
         );
         let detached = self.tab_host.read(cx).is_detached(menu.tab_id);
-        let menu_body = context_menu_event_boundary(
-            context_menu_content(&self.tokens)
-                .w(px(TAB_CONTEXT_MENU_WIDTH))
-                .child(
-                    context_menu_item(
-                        &self.tokens,
-                        if detached {
-                            self.i18n.t("tabbar.return_to_main_window")
-                        } else {
-                            self.i18n.t("tabbar.detach_to_window")
-                        },
-                        ContextMenuItemKind::Plain,
-                        false,
-                        false,
+        let menu_content = context_menu_content(&self.tokens)
+            .w(px(TAB_CONTEXT_MENU_WIDTH))
+            .when_some(copy_session, |content, (node_id, title)| {
+                content
+                    .child(
+                        context_menu_item(
+                            &self.tokens,
+                            self.i18n.t("tabbar.copy_session"),
+                            ContextMenuItemKind::Plain,
+                            false,
+                            false,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, window, cx| {
+                                this.close_tab_context_menu();
+                                // The new pane registers a distinct terminal consumer while
+                                // NodeRouter continues to own the shared SSH node lifetime.
+                                if this
+                                    .duplicate_ssh_terminal_tab_for_existing_node(
+                                        &node_id,
+                                        title.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                    .is_err()
+                                {
+                                    this.push_command_palette_toast(
+                                        this.i18n.t("tabbar.copy_session_failed"),
+                                        None,
+                                        TerminalNoticeVariant::Error,
+                                        cx,
+                                    );
+                                }
+                                cx.stop_propagation();
+                            }),
+                        ),
                     )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, window, cx| {
-                            this.close_tab_context_menu();
-                            if detached {
-                                this.return_detached_tab_to_main(menu.tab_id, window, cx);
-                            } else {
-                                this.detach_tab_to_window(menu.tab_id, None, window, cx);
-                            }
-                            cx.stop_propagation();
-                        }),
-                    ),
+                    .child(context_menu_separator(&self.tokens))
+            })
+            .child(
+                context_menu_item(
+                    &self.tokens,
+                    if detached {
+                        self.i18n.t("tabbar.return_to_main_window")
+                    } else {
+                        self.i18n.t("tabbar.detach_to_window")
+                    },
+                    ContextMenuItemKind::Plain,
+                    false,
+                    false,
                 )
-                .child(context_menu_separator(&self.tokens))
-                .child(
-                    context_menu_item(
-                        &self.tokens,
-                        self.i18n.t("tabbar.close_tab"),
-                        ContextMenuItemKind::Plain,
-                        false,
-                        false,
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event, window, cx| {
-                            this.close_tab_context_menu();
-                            this.close_tab_by_id(menu.tab_id, window, cx);
-                            cx.stop_propagation();
-                        }),
-                    ),
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, window, cx| {
+                        this.close_tab_context_menu();
+                        if detached {
+                            this.return_detached_tab_to_main(menu.tab_id, window, cx);
+                        } else {
+                            this.detach_tab_to_window(menu.tab_id, None, window, cx);
+                        }
+                        cx.stop_propagation();
+                    }),
                 ),
-        );
+            )
+            .child(context_menu_separator(&self.tokens))
+            .child(
+                context_menu_item(
+                    &self.tokens,
+                    self.i18n.t("tabbar.close_tab"),
+                    ContextMenuItemKind::Plain,
+                    false,
+                    false,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, window, cx| {
+                        this.close_tab_context_menu();
+                        this.close_tab_by_id(menu.tab_id, window, cx);
+                        cx.stop_propagation();
+                    }),
+                ),
+            );
+        let menu_body = context_menu_event_boundary(menu_content);
         let menu_body = overlay_content_boundary(menu_body);
 
         Some(

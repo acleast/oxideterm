@@ -605,6 +605,7 @@ impl WorkspaceApp {
             search: SearchBarState::default(),
             terminal_command_sender,
             _terminal_command_sender_observation: terminal_command_sender_observation,
+            scheduled_input: scheduled_input::ScheduledInputState::new(),
             detached_local_terminals: HashMap::new(),
             detached_local_terminal_order: Vec::new(),
             serial_terminal_configs: HashMap::new(),

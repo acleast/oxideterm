@@ -408,6 +408,9 @@ impl WorkspaceApp {
                 } else if this.handle_privilege_prompt_helper_key(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
+                } else if this.handle_scheduled_input_key(event, window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
                 } else if this.handle_compact_terminal_command_sender_key(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
