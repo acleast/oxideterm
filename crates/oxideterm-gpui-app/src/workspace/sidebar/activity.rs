@@ -1,4 +1,3 @@
-use super::state::should_collapse_primary_sidebar_section;
 use super::*;
 use gpui::StatefulInteractiveElement;
 use std::{
@@ -364,18 +363,12 @@ impl WorkspaceApp {
                         SidebarSection::Sessions | SidebarSection::Connections
                     ) {
                         this.active_surface = ActiveSurface::Terminal;
-                        if should_collapse_primary_sidebar_section(
-                            this.sidebar_collapsed,
-                            this.effective_sidebar_panel_section(),
-                            section,
-                        ) {
-                            // Match the Tauri activity bar: clicking the
-                            // currently visible section collapses only the UI
-                            // panel and does not alter session/node lifetime.
-                            this.toggle_sidebar(cx);
-                        } else {
-                            this.set_sidebar_section(section, cx);
-                        }
+                        // Activity-bar panel entries are navigation controls:
+                        // clicking either entry must leave its sidebar page
+                        // open. In particular, a newly connected terminal
+                        // selects Sessions, so treating the next Sessions
+                        // click as a toggle made the panel flash then close.
+                        this.set_sidebar_section(section, cx);
                     } else if section == SidebarSection::Settings {
                         this.open_settings(window, cx);
                     } else if section == SidebarSection::Terminal {
@@ -418,7 +411,7 @@ impl WorkspaceApp {
                         this.open_plugin_manager_tab(window, cx);
                     } else {
                         this.active_surface = ActiveSurface::Terminal;
-                        this.toggle_sidebar_section(section, cx);
+                        this.set_sidebar_section(section, cx);
                     }
                 }),
             )

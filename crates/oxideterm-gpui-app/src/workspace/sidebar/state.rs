@@ -44,14 +44,6 @@ fn should_collapse_context_sidebar_panel(
     sidebar_visible && active_panel == requested_panel
 }
 
-pub(super) fn should_collapse_primary_sidebar_section(
-    sidebar_collapsed: bool,
-    visible_section: SidebarSection,
-    requested_section: SidebarSection,
-) -> bool {
-    !sidebar_collapsed && visible_section == requested_section
-}
-
 pub(in crate::workspace) fn context_sidebar_panel_visible(
     sidebar_collapsed: bool,
     zen_mode: bool,
@@ -209,24 +201,6 @@ impl WorkspaceApp {
         }
         self.persist_sidebar_settings(cx);
         cx.notify();
-    }
-
-    pub(in crate::workspace) fn toggle_sidebar_section(
-        &mut self,
-        section: SidebarSection,
-        cx: &mut Context<Self>,
-    ) {
-        // Activity-bar panel buttons are symmetric toggles: selecting another
-        // panel opens it, while selecting the visible panel hides the sidebar.
-        if should_collapse_primary_sidebar_section(
-            self.sidebar_collapsed,
-            self.effective_sidebar_panel_section(),
-            section,
-        ) {
-            self.toggle_sidebar(cx);
-        } else {
-            self.set_sidebar_section(section, cx);
-        }
     }
 
     pub(in crate::workspace) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -539,25 +513,6 @@ impl WorkspaceApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn primary_sidebar_section_click_collapses_only_the_visible_open_panel() {
-        assert!(should_collapse_primary_sidebar_section(
-            false,
-            SidebarSection::Sessions,
-            SidebarSection::Sessions,
-        ));
-        assert!(!should_collapse_primary_sidebar_section(
-            true,
-            SidebarSection::Sessions,
-            SidebarSection::Sessions,
-        ));
-        assert!(!should_collapse_primary_sidebar_section(
-            false,
-            SidebarSection::Sessions,
-            SidebarSection::Sftp,
-        ));
-    }
 
     #[test]
     fn context_sidebar_panel_click_collapses_only_the_visible_active_panel() {
