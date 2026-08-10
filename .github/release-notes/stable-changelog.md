@@ -3,53 +3,31 @@
 Stable releases are listed newest first. The release workflow uses each versioned
 section as the detailed changelog attached to the corresponding GitHub Release.
 
-## 2.0.18
-
-OxideTerm 2.0.18 restores scheduled terminal input and SSH session duplication while fixing the Windows installer experience for manually launched setup files.
-
-### ✨ Highlights
-
-- Restored the terminal scheduled-input workflow with direct command, delay, specified-time, and daily scheduling fields that keep keyboard input inside the dialog.
-- Restored Copy Session in the SSH tab context menu, creating an independent terminal consumer on the same node-owned connection.
-
-### 🛠️ Fixes
-
-- Fixed manually launched Windows installers that could exit without showing the interactive installer when an earlier installation was present.
-
-## 2.0.17
-
-OxideTerm 2.0.17 brings the latest native workspace, AI settings, remote desktop, SSH, and release workflow improvements to the installer-only stable distribution.
-
-### ✨ Highlights
-
-- Added AI model settings improvements and clearer model-chip layout behavior.
-- Improved remote desktop resizing and session handling, including more reliable RDP display updates.
-- Preserved tested SSH credentials and degraded unavailable X11 paths cleanly instead of failing connection setup.
-
-### 🛠️ Fixes
-
-- Fixed scheduled commands in interactive terminal applications such as Codex by sending a protocol-aware Enter key event instead of a bare line break.
-- Limited stable release downloads to the macOS DMG and Windows x64 installer, removing ARM Windows and portable archive outputs.
-- Added release asset repair workflow support and retained build caches for targeted packaging retries.
-
 ## 2.0.16
 
-OxideTerm 2.0.16 adds searchable settings, contextual nested session groups, and secure SSH X11 forwarding while improving terminal startup, remote previews, remote-desktop compatibility, and modem transfers.
+OxideTerm 2.0.16 combines the latest native workspace, SSH, remote-desktop, AI, and terminal workflow improvements in an installer-only stable release.
 
 ### ✨ Highlights
 
 - Added localized settings search with ranked results and direct navigation to matching sections and controls.
 - Expanded Session Manager group management with contextual creation, child-group creation without typing full paths, rename and delete actions, and made the tree layout the default and first view option.
 - Added persistent trusted and untrusted X11 forwarding for SSH connections, including OpenSSH configuration import and synchronization, local display and xauth preparation, spoofed-cookie handling, forwarding timeouts, and connection-owned channel routing.
+- Restored scheduled terminal input with direct command, delay, specified-time, and daily scheduling fields that keep keyboard input inside the dialog.
+- Restored Copy Session in the SSH tab context menu, creating an independent terminal consumer on the same node-owned connection.
+- Improved AI model settings and model-chip layout, plus remote desktop resizing and session handling.
 - Allowed user-configured MCP server commands without a built-in executable allowlist while retaining structural validation and explicit settings ownership.
 
 ### 🛠️ Fixes
 
+- Fixed scheduled commands for interactive terminal applications such as Codex by replaying scheduled text as keystrokes before submitting it.
+- Fixed manually launched Windows installers that could exit without showing the interactive installer when an earlier installation was present.
+- Preserved tested SSH credentials and degraded unavailable X11 paths cleanly instead of failing connection setup.
 - Restored output-independent terminal polling so first and subsequent SSH terminal panes no longer wait for remote output or the deferred PTY timeout before applying their real viewport size.
 - Kept terminal processing bounded under heavy output with incremental snapshots, asynchronous search and image preparation, render caches, and byte-aware backpressure while preserving responsive startup scheduling.
 - Reused the full text editor for SFTP text and Markdown previews, restoring consistent keyboard, selection, scrolling, and rendering behavior.
 - Accepted RDP progressive graphics updates that legitimately omit an optional context and launched local Zsh sessions as non-login shells to avoid duplicate login initialization.
 - Strengthened X/Y/ZMODEM transfers with transactional downloads, collision-safe file persistence, stricter frame validation, peer cancellation, resume handling, and safer filename processing.
+- Limited stable release downloads to the macOS DMG and Windows x64 installer, removing ARM Windows and portable archive outputs.
 
 ## 2.0.15
 
