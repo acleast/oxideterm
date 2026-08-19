@@ -5,7 +5,7 @@ section as the detailed changelog attached to the corresponding GitHub Release.
 
 ## 2.0.21
 
-OxideTerm 2.0.21 adds controlled external MCP access, expands ACP and plugin interoperability, and improves SFTP, remote-desktop, Cloud Sync, and native window workflows.
+This community build is published by the acleast/oxideterm fork. OxideTerm 2.0.21 adds controlled external MCP access, expands ACP and plugin interoperability, and improves SFTP, remote-desktop, Cloud Sync, and native window workflows.
 
 ### ✨ Highlights
 
@@ -17,6 +17,7 @@ OxideTerm 2.0.21 adds controlled external MCP access, expands ACP and plugin int
 
 ### 🛠️ Fixes
 
+- Restored distinct Active Sessions and Session Manager sidebar navigation: active sessions remain a compact live navigator, saved connections have their own sidebar list and full-manager shortcut, and clicking the visible activity entry collapses the sidebar.
 - Restored the main window's normal bounds, maximized state, and full-screen state across launches, retained valid secondary-display placement, and recentered windows that would otherwise reopen off screen.
 - Initialized the OneDrive application folder before creating nested Cloud Sync objects, reused existing parents, and recovered cleanly when another client created the same folder concurrently.
 - Preserved every saved connection profile type during structured synchronization and kept background MCP mutations, cancellations, revocations, and dependent refreshes aligned with their committed application state.

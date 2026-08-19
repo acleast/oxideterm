@@ -25,6 +25,5 @@ If SmartScreen warns, click **More info** -> **Run anyway**.
 
 ## 🔗 Links
 
-- Documentation: https://oxideterm.app
-- GitHub Issues: https://github.com/AnalyseDeCircuit/oxideterm/issues
-- Changelog: https://github.com/AnalyseDeCircuit/oxideterm/blob/main/.github/release-notes/stable-changelog.md
+- GitHub Issues: https://github.com/acleast/oxideterm/issues
+- Changelog: https://github.com/acleast/oxideterm/blob/dev2/.github/release-notes/stable-changelog.md
