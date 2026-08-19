@@ -21,7 +21,7 @@ pub fn apply_oxide_import_with_options(
     password: &str,
     options: OxideImportOptions,
 ) -> Result<ImportResultEnvelope, OxideFileError> {
-    apply_oxide_import_with_options_inner(store, bytes, password, options, None)
+    apply_oxide_import_with_options_inner(store, bytes, Some(password), options, None, None)
 }
 
 pub fn apply_oxide_import_with_options_with_progress<F>(
@@ -34,14 +34,42 @@ pub fn apply_oxide_import_with_options_with_progress<F>(
 where
     F: FnMut(&str, usize, usize),
 {
-    apply_oxide_import_with_options_inner(store, bytes, password, options, Some(&mut on_progress))
+    apply_oxide_import_with_options_inner(
+        store,
+        bytes,
+        Some(password),
+        options,
+        None,
+        Some(&mut on_progress),
+    )
+}
+
+pub fn apply_oxide_import_with_options_with_context_and_progress<F>(
+    store: &mut ConnectionStore,
+    bytes: &[u8],
+    decryption_context: &mut OxideBatchDecryptionContext,
+    options: OxideImportOptions,
+    mut on_progress: F,
+) -> Result<ImportResultEnvelope, OxideFileError>
+where
+    F: FnMut(&str, usize, usize),
+{
+    apply_oxide_import_with_options_inner(
+        store,
+        bytes,
+        None,
+        options,
+        Some(decryption_context),
+        Some(&mut on_progress),
+    )
 }
 
 fn apply_oxide_import_with_options_inner(
     store: &mut ConnectionStore,
     bytes: &[u8],
-    password: &str,
+    password: Option<&str>,
     options: OxideImportOptions,
+    decryption_context: Option<&mut OxideBatchDecryptionContext>,
     mut on_progress: Option<&mut dyn FnMut(&str, usize, usize)>,
 ) -> Result<ImportResultEnvelope, OxideFileError> {
     const APPLY_IMPORT_TOTAL_STEPS: usize = 10;
@@ -53,15 +81,25 @@ fn apply_oxide_import_with_options_inner(
     };
     let file = OxideFile::from_bytes(bytes)?;
     report_progress("parsing_file", current_step);
-    let payload = decrypt_oxide_file_with_progress(&file, password, |stage| {
-        current_step += 1;
-        report_progress(stage, current_step);
-    })?;
+    let payload = if let Some(decryption_context) = decryption_context {
+        decrypt_oxide_file_with_context_and_progress(&file, decryption_context, |stage| {
+            current_step += 1;
+            report_progress(stage, current_step);
+        })?
+    } else {
+        let password = password.ok_or(OxideFileError::CryptoError)?;
+        decrypt_oxide_file_with_progress(&file, password, |stage| {
+            current_step += 1;
+            report_progress(stage, current_step);
+        })?
+    };
     let EncryptedPayload {
         connections,
         app_settings_json,
         quick_commands_json,
         serial_profiles_json,
+        telnet_profiles_json,
+        mosh_profiles_json,
         remote_desktop_profiles_json,
         plugin_settings,
         portable_secrets,
@@ -94,7 +132,53 @@ fn apply_oxide_import_with_options_inner(
             })?;
         }
     }
-    let remote_desktop_profiles_snapshot = remote_desktop_profiles_json
+    let telnet_profiles_snapshot = telnet_profiles_json
+        .as_deref()
+        .map(|snapshot_json| {
+            serde_json::from_str::<TelnetProfilesSyncSnapshot>(snapshot_json).map_err(|error| {
+                OxideFileError::InvalidFormat(format!(
+                    "Invalid Telnet profiles snapshot in .oxide payload: {error}"
+                ))
+            })
+        })
+        .transpose()?;
+    if options.import_telnet_profiles {
+        for profile in telnet_profiles_snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| &snapshot.records)
+        {
+            profile.validate().map_err(|error| {
+                OxideFileError::InvalidFormat(format!(
+                    "Failed to validate Telnet profiles from .oxide payload: {error}"
+                ))
+            })?;
+        }
+    }
+    let mosh_profiles_snapshot = mosh_profiles_json
+        .as_deref()
+        .map(|snapshot_json| {
+            serde_json::from_str::<MoshProfilesSyncSnapshot>(snapshot_json).map_err(|error| {
+                OxideFileError::InvalidFormat(format!(
+                    "Invalid Mosh profiles snapshot in .oxide payload: {error}"
+                ))
+            })
+        })
+        .transpose()?;
+    if options.import_mosh_profiles {
+        for profile in mosh_profiles_snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| &snapshot.records)
+        {
+            profile.validate().map_err(|error| {
+                OxideFileError::InvalidFormat(format!(
+                    "Failed to validate Mosh profiles from .oxide payload: {error}"
+                ))
+            })?;
+        }
+    }
+    let mut remote_desktop_profiles_snapshot = remote_desktop_profiles_json
         .as_deref()
         .map(|snapshot_json| {
             serde_json::from_str::<RemoteDesktopProfilesSyncSnapshot>(snapshot_json).map_err(
@@ -140,6 +224,8 @@ fn apply_oxide_import_with_options_inner(
         app_settings_json,
         quick_commands_json,
         serial_profiles_json,
+        telnet_profiles_json,
+        mosh_profiles_json,
         remote_desktop_profiles_json,
         plugin_settings,
         portable_secrets: if options.import_portable_secrets {
@@ -164,16 +250,36 @@ fn apply_oxide_import_with_options_inner(
     result.restored_managed_key_passphrases = credential_counts.restored_managed_key_passphrases;
     result.restored_privilege_credentials = credential_counts.restored_privilege_credentials;
     result.skipped_sensitive_credentials = credential_counts.skipped_sensitive_credentials;
+    let mut seen_source_connection_ids = HashSet::new();
+    for connection in &selected_connections {
+        let Some(source_connection_id) = connection.source_connection_id.as_deref() else {
+            continue;
+        };
+        // Archive-local relation keys must be unique before any import action
+        // can use them to resolve a remote desktop gateway.
+        if !seen_source_connection_ids.insert(source_connection_id) {
+            return Err(OxideFileError::InvalidFormat(format!(
+                "Duplicate source connection id in .oxide payload: {source_connection_id}"
+            )));
+        }
+    }
     let mut connections_to_save = Vec::new();
+    let mut imported_connection_ids = HashMap::<String, String>::new();
     let mut restored_managed_keys = HashMap::new();
     let mut imported_managed_keys = Vec::new();
 
     current_step += 1;
     report_progress("preparing_connections", current_step);
     for (conn, action) in selected_connections.into_iter().zip(plans) {
-        match action {
+        let source_connection_id = conn.source_connection_id.clone();
+        let imported_connection_id = match action {
             PlannedImportAction::Skip => {
                 result.skipped += 1;
+                store
+                    .connections()
+                    .iter()
+                    .find(|existing| existing.name == conn.name)
+                    .map(|existing| existing.id.clone())
             }
             PlannedImportAction::Import => {
                 let saved = encrypted_connection_to_saved(
@@ -189,8 +295,10 @@ fn apply_oxide_import_with_options_inner(
                     result.imported_forwards += saved.1.len();
                     result.forward_records.extend(saved.1);
                 }
+                let imported_id = saved.0.id.clone();
                 connections_to_save.push(saved.0);
                 result.imported += 1;
+                Some(imported_id)
             }
             PlannedImportAction::Rename(new_name) => {
                 let original = conn.name.clone();
@@ -207,10 +315,12 @@ fn apply_oxide_import_with_options_inner(
                     result.imported_forwards += saved.1.len();
                     result.forward_records.extend(saved.1);
                 }
+                let imported_id = saved.0.id.clone();
                 connections_to_save.push(saved.0);
                 result.imported += 1;
                 result.renamed += 1;
                 result.renames.push((original, new_name));
+                Some(imported_id)
             }
             PlannedImportAction::Replace(existing_id) => {
                 let saved = encrypted_connection_to_saved(
@@ -230,6 +340,7 @@ fn apply_oxide_import_with_options_inner(
                 connections_to_save.push(saved.0);
                 result.imported += 1;
                 result.replaced += 1;
+                Some(existing_id)
             }
             PlannedImportAction::Merge(existing_id) => {
                 let existing = store.get(&existing_id).cloned();
@@ -251,12 +362,31 @@ fn apply_oxide_import_with_options_inner(
                 if options.import_forwards {
                     result.imported_forwards += forward_records.len();
                     result.forward_records.extend(forward_records);
-                    result.forward_merge_owner_ids.push(existing_id);
+                    result.forward_merge_owner_ids.push(existing_id.clone());
                 }
                 connections_to_save.push(merged);
                 result.imported += 1;
                 result.merged += 1;
+                Some(existing_id)
             }
+        };
+        if let (Some(source_connection_id), Some(imported_connection_id)) =
+            (source_connection_id, imported_connection_id)
+        {
+            imported_connection_ids.insert(source_connection_id, imported_connection_id);
+        }
+    }
+
+    if let Some(snapshot) = remote_desktop_profiles_snapshot.as_mut() {
+        for profile in &mut snapshot.records {
+            let Some(source_connection_id) = profile.ssh_gateway_connection_id.as_deref() else {
+                continue;
+            };
+            // Archive-local relation ids are remapped to the imported saved
+            // connection and are cleared when their dependency was omitted.
+            profile.ssh_gateway_connection_id = imported_connection_ids
+                .get(source_connection_id)
+                .cloned();
         }
     }
 
@@ -288,6 +418,38 @@ fn apply_oxide_import_with_options_inner(
                     serial_profiles_count.saturating_sub(result.imported_serial_profiles);
             } else {
                 result.skipped_serial_profiles = serial_profiles_count;
+            }
+        }
+        if let Some(telnet_profiles_snapshot) = telnet_profiles_snapshot {
+            let profile_count = telnet_profiles_snapshot.records.len();
+            if options.import_telnet_profiles {
+                result.imported_telnet_profiles = store
+                    .apply_telnet_profiles_snapshot(telnet_profiles_snapshot)
+                    .map_err(|error| {
+                        OxideFileError::InvalidFormat(format!(
+                            "Failed to import Telnet profiles from .oxide payload: {error}"
+                        ))
+                    })?;
+                result.skipped_telnet_profiles =
+                    profile_count.saturating_sub(result.imported_telnet_profiles);
+            } else {
+                result.skipped_telnet_profiles = profile_count;
+            }
+        }
+        if let Some(mosh_profiles_snapshot) = mosh_profiles_snapshot {
+            let profile_count = mosh_profiles_snapshot.records.len();
+            if options.import_mosh_profiles {
+                result.imported_mosh_profiles = store
+                    .apply_mosh_profiles_snapshot(mosh_profiles_snapshot)
+                    .map_err(|error| {
+                        OxideFileError::InvalidFormat(format!(
+                            "Failed to import Mosh profiles from .oxide payload: {error}"
+                        ))
+                    })?;
+                result.skipped_mosh_profiles =
+                    profile_count.saturating_sub(result.imported_mosh_profiles);
+            } else {
+                result.skipped_mosh_profiles = profile_count;
             }
         }
         if let Some(remote_desktop_profiles_snapshot) = remote_desktop_profiles_snapshot {
@@ -526,6 +688,7 @@ fn encrypted_connection_to_saved(
                 })
                 .collect::<Result<_, _>>()?,
             upstream_proxy: import_upstream_proxy_policy(conn.upstream_proxy),
+            proxy_command: None,
             options,
             created_at: now,
             last_used_at: None,
@@ -917,6 +1080,9 @@ fn merge_options(
     imported: ConnectionOptions,
     imported_has_proxy_chain: bool,
 ) -> ConnectionOptions {
+    if imported.connect_timeout_seconds.is_some() {
+        existing.connect_timeout_seconds = imported.connect_timeout_seconds;
+    }
     if imported.keep_alive_interval != 0 {
         existing.keep_alive_interval = imported.keep_alive_interval;
     }

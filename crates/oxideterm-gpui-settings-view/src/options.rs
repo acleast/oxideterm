@@ -25,6 +25,10 @@ pub fn set_sidebar_auto_collapse(settings: &mut PersistedSettings, value: bool) 
     settings.appearance.sidebar_auto_collapse = value;
 }
 
+pub fn set_highlight_tab_on_new_output(settings: &mut PersistedSettings, value: bool) {
+    settings.terminal.highlight_tab_on_new_output = value;
+}
+
 pub fn set_terminal_smooth_scroll(settings: &mut PersistedSettings, value: bool) {
     settings.terminal.smooth_scroll = value;
 }
@@ -563,14 +567,6 @@ pub fn language_options() -> [Language; 11] {
     ]
 }
 
-pub fn cycle_update_channel(settings: &mut PersistedSettings) {
-    settings.general.update_channel = match settings.general.update_channel {
-        UpdateChannel::Stable => UpdateChannel::Beta,
-        UpdateChannel::Beta => UpdateChannel::GpuiPreview,
-        UpdateChannel::GpuiPreview => UpdateChannel::Stable,
-    };
-}
-
 pub fn cycle_sftp_conflict(settings: &mut PersistedSettings) {
     settings.sftp.conflict_action = match settings.sftp.conflict_action {
         ConflictAction::Ask => ConflictAction::Overwrite,
@@ -599,7 +595,6 @@ pub fn update_channel_label(channel: UpdateChannel, i18n: &I18n) -> String {
     match channel {
         UpdateChannel::Stable => i18n.t("settings_view.help.channel_stable"),
         UpdateChannel::Beta => i18n.t("settings_view.help.channel_beta"),
-        UpdateChannel::GpuiPreview => i18n.t("settings_view.help.channel_gpui_preview"),
     }
 }
 

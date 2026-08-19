@@ -1,6 +1,6 @@
 #[cfg(any(feature = "inspector", debug_assertions))]
 use crate::Inspector;
-// OxideTerm modification: exposes dynamic textures and hardens draw scheduling and arena lifetimes.
+// OxideTerm modification: exposes dynamic textures, hardens draw lifetimes, and skips empty SVG paints.
 
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
@@ -999,6 +999,8 @@ pub struct Window {
     pub(crate) platform_window: Box<dyn PlatformWindow>,
     display_id: Option<DisplayId>,
     sprite_atlas: Arc<dyn PlatformAtlas>,
+    // A rendered scene may reference atlas tiles only from this resource generation.
+    rendered_resource_generation: u64,
     text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
@@ -1400,6 +1402,7 @@ impl Window {
 
         let display_id = platform_window.display().map(|display| display.id());
         let sprite_atlas = platform_window.sprite_atlas();
+        let rendered_resource_generation = sprite_atlas.resource_generation();
         let mouse_position = platform_window.mouse_position();
         let modifiers = platform_window.modifiers();
         let capslock = platform_window.capslock();
@@ -1774,6 +1777,7 @@ impl Window {
             platform_window,
             display_id,
             sprite_atlas,
+            rendered_resource_generation,
             text_system,
             text_rendering_mode: cx.text_rendering_mode.clone(),
             rem_size: px(16.),
@@ -2116,6 +2120,11 @@ impl Window {
     /// On some platforms (namely Windows) this is different than the bounds being the size of the display
     pub fn is_maximized(&self) -> bool {
         self.platform_window.is_maximized()
+    }
+
+    /// Returns whether the native window is currently minimized.
+    pub fn is_minimized(&self) -> bool {
+        self.platform_window.is_minimized()
     }
 
     /// request a certain window decoration (Wayland)
@@ -2765,6 +2774,12 @@ impl Window {
         // Set up the per-App arena for element allocation during this draw.
         // This ensures that multiple test Apps have isolated arenas.
         let arena_scope = ElementArenaScope::enter(&cx.element_arena);
+        let frame_resource_generation = self.sprite_atlas.resource_generation();
+        if frame_resource_generation != self.rendered_resource_generation {
+            // Atlas reset invalidates every tile stored in the cached scene. Force all views to
+            // repaint even when the platform recovery message arrived after ordinary invalidation.
+            self.refreshing = true;
+        }
 
         self.invalidate_entities();
         cx.entities.clear_accessed();
@@ -2819,6 +2834,9 @@ impl Window {
         let previous_window_active = self.rendered_frame.window_active;
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
+        // The scene was built against the generation observed before drawing. If recovery races
+        // this draw, `present` rejects it and schedules a clean frame for the newer generation.
+        self.rendered_resource_generation = frame_resource_generation;
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
 
@@ -2882,6 +2900,18 @@ impl Window {
 
     #[profiling::function]
     fn present(&mut self) {
+        let current_resource_generation = self.sprite_atlas.resource_generation();
+        if current_resource_generation != self.rendered_resource_generation {
+            // Never replay tile coordinates after a device recovery. A dirty full redraw is safer
+            // than presenting a scene whose slots may now contain unrelated glyphs or images.
+            log::debug!(
+                "skipping stale renderer frame at resource generation {}; current generation is {}",
+                self.rendered_resource_generation,
+                current_resource_generation
+            );
+            self.refresh();
+            return;
+        }
         self.platform_window.draw(&self.rendered_frame.scene);
         #[cfg(feature = "input-latency-histogram")]
         self.input_latency_tracker.record_frame_presented();
@@ -4276,6 +4306,10 @@ impl Window {
 
         let element_opacity = self.element_opacity();
         let bounds = self.snap_bounds(bounds);
+        // Clipped layout transitions may produce an empty frame with nothing to rasterize.
+        if bounds.is_zero() {
+            return Ok(());
+        }
 
         let params = RenderSvgParams {
             path,
@@ -6770,6 +6804,34 @@ mod oxideterm_draw_safety_tests {
 
         assert_eq!(fragments.len(), 1);
         assert_eq!(fragments[0].content_mask.bounds, bounds);
+    }
+
+    #[gpui::test]
+    fn zero_area_svg_paint_is_a_noop(cx: &mut TestAppContext) {
+        cx.add_empty_window().draw(
+            point(px(0.0), px(0.0)),
+            size(px(100.0), px(100.0)),
+            |_, _| {
+                canvas(
+                    |_, _, _| (),
+                    |bounds, _, window, cx| {
+                        let empty_bounds =
+                            Bounds::new(bounds.origin, size(Pixels::ZERO, bounds.size.height));
+                        window
+                            .paint_svg(
+                                empty_bounds,
+                                "missing-test-asset.svg".into(),
+                                None,
+                                TransformationMatrix::unit(),
+                                rgb(0xffffff).into(),
+                                cx,
+                            )
+                            .expect("zero-area SVG paint should be ignored");
+                    },
+                )
+                .into_any_element()
+            },
+        );
     }
 
     struct EmptyNestedWindow;

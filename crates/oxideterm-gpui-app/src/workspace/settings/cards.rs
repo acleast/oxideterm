@@ -803,6 +803,8 @@ impl WorkspaceApp {
                         | SettingsInput::AppLockConfirmPassword
                 ) {
                     self.commit_focused_app_lock_input();
+                } else if self.commit_focused_cloud_sync_input(input, cx) {
+                    self.focused_settings_input = None;
                 } else {
                     self.focused_settings_input = None;
                     self.clear_settings_input_draft(input);
@@ -824,6 +826,8 @@ impl WorkspaceApp {
                         | SettingsInput::AppLockConfirmPassword
                 ) {
                     self.commit_focused_app_lock_input();
+                } else if self.commit_focused_cloud_sync_input(input, cx) {
+                    self.focused_settings_input = None;
                 } else {
                     self.focused_settings_input = None;
                     self.clear_settings_input_draft(input);
@@ -870,6 +874,9 @@ impl WorkspaceApp {
             ) {
                 self.focused_settings_input = Some(input);
                 self.commit_focused_app_lock_input();
+            } else if self.commit_focused_cloud_sync_input(input, cx) {
+                // Cloud Sync fields move out of their Entity while focused, so
+                // every blur boundary must return the owned draft before release.
             } else {
                 self.clear_settings_input_draft(input);
             }
@@ -1293,6 +1300,7 @@ impl WorkspaceApp {
             };
         }
         match input {
+            SettingsInput::PublicMcpPort => self.public_mcp.port_draft().to_owned(),
             SettingsInput::TerminalCommandSpecsJson => {
                 self.terminal_command_specs_editor_initial_value()
             }
@@ -1305,6 +1313,10 @@ impl WorkspaceApp {
             SettingsInput::NativePluginRegistryUrl => {
                 self.plugin_manager_state(cx).registry_url_draft.clone()
             }
+            SettingsInput::NativePluginMarketplaceSearch => self
+                .plugin_manager_state(cx)
+                .marketplace_search_draft
+                .clone(),
             SettingsInput::PortableCurrentPassword
             | SettingsInput::PortableNewPassword
             | SettingsInput::PortableConfirmPassword => String::new(),
@@ -1381,6 +1393,11 @@ impl WorkspaceApp {
             return;
         }
         match input {
+            SettingsInput::PublicMcpPort => {
+                self.public_mcp
+                    .set_port_draft(self.settings_input_draft.clone());
+                cx.notify();
+            }
             SettingsInput::TerminalCommandSpecsJson => {
                 cx.notify();
             }
@@ -1402,6 +1419,13 @@ impl WorkspaceApp {
                 let draft = self.settings_input_draft.trim().to_string();
                 self.update_plugin_manager_state(cx, |manager| {
                     manager.registry_url_draft = draft;
+                });
+                cx.notify();
+            }
+            SettingsInput::NativePluginMarketplaceSearch => {
+                let draft = self.settings_input_draft.trim().to_string();
+                self.update_plugin_manager_state(cx, |manager| {
+                    manager.marketplace_search_draft = draft;
                 });
                 cx.notify();
             }
@@ -1482,11 +1506,11 @@ impl WorkspaceApp {
     ) {
         self.edit_settings(
             move |settings| {
-                if let Some(rule) = settings.terminal.highlight_rules.get_mut(index) {
+                let rules = settings.terminal.effective_highlight_rules_mut();
+                if let Some(rule) = rules.get_mut(index) {
                     edit(rule);
                 }
-                settings.terminal.highlight_rules =
-                    reindex_highlight_rules(settings.terminal.highlight_rules.clone());
+                *rules = reindex_highlight_rules(rules.clone());
             },
             cx,
         );
@@ -1503,12 +1527,12 @@ impl WorkspaceApp {
     ) {
         self.edit_settings(
             move |settings| {
-                settings.terminal.highlight_rules.extend(rules);
-                settings.terminal.highlight_rules =
-                    reindex_highlight_rules(settings.terminal.highlight_rules.clone())
-                        .into_iter()
-                        .take(MAX_HIGHLIGHT_RULES)
-                        .collect();
+                let active_rules = settings.terminal.effective_highlight_rules_mut();
+                active_rules.extend(rules);
+                *active_rules = reindex_highlight_rules(active_rules.clone())
+                    .into_iter()
+                    .take(MAX_HIGHLIGHT_RULES)
+                    .collect();
             },
             cx,
         );
@@ -1521,11 +1545,11 @@ impl WorkspaceApp {
     ) {
         self.edit_settings(
             move |settings| {
-                if index < settings.terminal.highlight_rules.len() {
-                    settings.terminal.highlight_rules.remove(index);
+                let rules = settings.terminal.effective_highlight_rules_mut();
+                if index < rules.len() {
+                    rules.remove(index);
                 }
-                settings.terminal.highlight_rules =
-                    reindex_highlight_rules(settings.terminal.highlight_rules.clone());
+                *rules = reindex_highlight_rules(rules.clone());
             },
             cx,
         );
@@ -1539,7 +1563,8 @@ impl WorkspaceApp {
     ) {
         self.edit_settings(
             move |settings| {
-                let len = settings.terminal.highlight_rules.len();
+                let rules = settings.terminal.effective_highlight_rules_mut();
+                let len = rules.len();
                 let next = if direction < 0 {
                     index.checked_sub(1)
                 } else if index + 1 < len {
@@ -1548,10 +1573,9 @@ impl WorkspaceApp {
                     None
                 };
                 if let Some(next) = next {
-                    settings.terminal.highlight_rules.swap(index, next);
+                    rules.swap(index, next);
                 }
-                settings.terminal.highlight_rules =
-                    reindex_highlight_rules(settings.terminal.highlight_rules.clone());
+                *rules = reindex_highlight_rules(rules.clone());
             },
             cx,
         );
@@ -1664,6 +1688,7 @@ pub(in crate::workspace) fn select_anchor_tracks_while_closed(anchor_id: SelectA
             | SelectAnchorId::NewConnectionKeyAuthSource
             | SelectAnchorId::NewConnectionManagedKey
             | SelectAnchorId::NewConnectionJumpSavedConnection
+            | SelectAnchorId::NewConnectionRemoteDesktopSshGateway
             | SelectAnchorId::NewConnectionJumpKeyAuthSource
             | SelectAnchorId::NewConnectionJumpManagedKey
             | SelectAnchorId::NewConnectionSerialPort

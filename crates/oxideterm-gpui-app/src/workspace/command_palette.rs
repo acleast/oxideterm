@@ -78,6 +78,7 @@ enum PaletteAction {
     OpenRemoteDesktopPreview(RemoteDesktopProtocol),
     OpenRemoteDesktopConnection(RemoteDesktopConnectionProfile),
     Sidebar(SidebarSection),
+    OpenSftp,
     OpenSavedConnections,
     OpenSessionManager,
     OpenRuntime(ConnectionRuntimeSection),
@@ -475,6 +476,19 @@ impl WorkspaceApp {
                 self.open_remote_desktop_connection_tab(profile, None, window, cx);
             }
             PaletteAction::Sidebar(section) => self.set_sidebar_section(section, cx),
+            PaletteAction::OpenSftp => {
+                // SFTP follows the configured presentation preference; it is
+                // no longer represented by an independent sidebar section.
+                if let Some(node_id) = self
+                    .embedded_sftp_node_id
+                    .clone()
+                    .or_else(|| self.active_ssh_node_id.clone())
+                {
+                    self.open_sftp_tab(node_id, window, cx);
+                } else {
+                    self.set_sidebar_section(SidebarSection::Sessions, cx);
+                }
+            }
             PaletteAction::OpenSavedConnections => self.open_session_manager_tab(window, cx),
             PaletteAction::OpenSessionManager => self.open_session_manager_tab(window, cx),
             PaletteAction::OpenRuntime(section) => {
@@ -1004,6 +1018,7 @@ impl WorkspaceApp {
                 let detail = match tab.kind {
                     TabKind::LocalTerminal => self.i18n.t("layout.empty.new_local_terminal"),
                     TabKind::SshTerminal => self.i18n.t("command_palette.session_ssh_terminal"),
+                    TabKind::MoshTerminal => self.i18n.t("terminal.typeMosh"),
                     TabKind::Settings => self.i18n.t("settings_view.title"),
                     TabKind::SessionManager => self.i18n.t("sidebar.panels.saved_connections"),
                     TabKind::Runtime => self.i18n.t("sidebar.panels.runtime"),
@@ -2151,7 +2166,9 @@ fn command_palette_placeholder_key(mode: PaletteMode) -> &'static str {
 
 fn tab_kind_icon(kind: &TabKind) -> LucideIcon {
     match kind {
-        TabKind::LocalTerminal | TabKind::SshTerminal => LucideIcon::Terminal,
+        TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal => {
+            LucideIcon::Terminal
+        }
         TabKind::FileManager => LucideIcon::FolderOpen,
         TabKind::Launcher => LucideIcon::Terminal,
         TabKind::Graphics => LucideIcon::AppWindow,
@@ -2400,7 +2417,7 @@ fn command_palette_specs() -> Vec<CommandSpec> {
             label_key: "command_palette.cmd_sidebar_sftp".into(),
             icon: LucideIcon::HardDrive,
             shortcut_action: None,
-            action: PaletteAction::Sidebar(SidebarSection::Sftp),
+            action: PaletteAction::OpenSftp,
         },
         CommandSpec {
             id: "cmd:sidebar_forwards",
@@ -2408,13 +2425,6 @@ fn command_palette_specs() -> Vec<CommandSpec> {
             icon: LucideIcon::ArrowLeftRight,
             shortcut_action: None,
             action: PaletteAction::Sidebar(SidebarSection::Forwards),
-        },
-        CommandSpec {
-            id: "cmd:sidebar_connections",
-            label_key: "command_palette.cmd_sidebar_connections".into(),
-            icon: LucideIcon::Server,
-            shortcut_action: None,
-            action: PaletteAction::Sidebar(SidebarSection::Connections),
         },
         CommandSpec {
             id: "cmd:sidebar_ai",
@@ -2715,15 +2725,6 @@ mod tests {
     }
 
     #[test]
-    fn command_palette_specs_include_tauri_reload_window_command() {
-        assert!(
-            command_palette_specs()
-                .iter()
-                .any(|spec| spec.id == "cmd:reload_window")
-        );
-    }
-
-    #[test]
     fn command_palette_specs_include_native_telnet_terminal_command() {
         let spec = command_palette_specs()
             .into_iter()
@@ -2745,84 +2746,6 @@ mod tests {
             spec.action,
             PaletteAction::Keybinding("terminal.toggleFreeTypeMode")
         ));
-    }
-
-    #[test]
-    fn help_palette_specs_include_reopenable_version_migration() {
-        let spec = help_palette_specs()
-            .into_iter()
-            .find(|spec| spec.id == "cmd:show_version_migration")
-            .expect("version migration command");
-
-        assert!(matches!(spec.action, PaletteAction::ShowVersionMigration));
-    }
-
-    #[test]
-    fn sidebar_connections_command_targets_saved_connections_panel() {
-        let spec = command_palette_specs()
-            .into_iter()
-            .find(|spec| spec.id == "cmd:sidebar_connections")
-            .expect("sidebar connections command");
-
-        assert!(matches!(
-            spec.action,
-            PaletteAction::Sidebar(SidebarSection::Connections)
-        ));
-    }
-
-    #[test]
-    fn sidebar_file_and_forward_commands_keep_tauri_section_keys() {
-        let specs = command_palette_specs();
-        let sftp = specs
-            .iter()
-            .find(|spec| spec.id == "cmd:sidebar_sftp")
-            .expect("sidebar sftp command");
-        let forwards = specs
-            .iter()
-            .find(|spec| spec.id == "cmd:sidebar_forwards")
-            .expect("sidebar forwards command");
-
-        assert!(matches!(
-            sftp.action,
-            PaletteAction::Sidebar(SidebarSection::Sftp)
-        ));
-        assert!(matches!(
-            forwards.action,
-            PaletteAction::Sidebar(SidebarSection::Forwards)
-        ));
-    }
-
-    #[test]
-    fn close_other_tabs_palette_command_does_not_reuse_terminal_shortcut_action() {
-        let spec = command_palette_specs()
-            .into_iter()
-            .find(|spec| spec.id == "cmd:close_other_tabs")
-            .expect("close other tabs command");
-
-        assert_eq!(spec.shortcut_action, Some("app.closeOtherTabs"));
-        assert!(matches!(spec.action, PaletteAction::CloseOtherTabs));
-    }
-
-    #[test]
-    fn close_tab_palette_command_does_not_reuse_terminal_shortcut_action() {
-        let spec = command_palette_specs()
-            .into_iter()
-            .find(|spec| spec.id == "cmd:close_tab")
-            .expect("close tab command");
-
-        assert_eq!(spec.shortcut_action, Some("app.closeTab"));
-        assert!(matches!(spec.action, PaletteAction::CloseTab));
-    }
-
-    #[test]
-    fn close_all_tabs_palette_command_closes_directly_like_tauri() {
-        let spec = command_palette_specs()
-            .into_iter()
-            .find(|spec| spec.id == "cmd:close_all_tabs")
-            .expect("close all tabs command");
-
-        assert_eq!(spec.shortcut_action, None);
-        assert!(matches!(spec.action, PaletteAction::CloseAllTabs));
     }
 
     #[test]

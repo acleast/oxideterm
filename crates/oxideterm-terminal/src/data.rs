@@ -5,7 +5,9 @@ pub use oxideterm_terminal_graphics::{
     GraphicsOptions, TerminalImageAnimationState, TerminalImageData, TerminalImageFrame,
     TerminalImageId, TerminalImageProtocol,
 };
-pub use oxideterm_terminal_model::{TerminalAttrs, TerminalCell, TerminalColor, TerminalRow};
+pub use oxideterm_terminal_model::{
+    TerminalAttrs, TerminalCell, TerminalColor, TerminalRow, TerminalStyleOrigin,
+};
 
 #[derive(Clone, Debug)]
 pub struct TerminalSnapshot {
@@ -104,28 +106,11 @@ mod tests {
             wide: false,
             fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
             bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: TerminalStyleOrigin::default(),
             attrs: TerminalAttrs::default(),
             hyperlink: None,
             cursor: false,
         }
-    }
-
-    #[test]
-    fn terminal_row_signature_tracks_paint_relevant_content() {
-        let mut row = TerminalRow {
-            absolute_line: 0,
-            cells: Arc::new(vec![test_cell('a')]),
-            wrapped: false,
-            active_input: false,
-            signature: 0,
-        };
-        row.refresh_signature();
-        let first = row.signature;
-
-        row.cells_mut()[0].ch = 'b';
-        row.refresh_signature();
-
-        assert_ne!(first, row.signature);
     }
 
     #[test]

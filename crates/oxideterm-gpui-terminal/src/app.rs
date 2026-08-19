@@ -3,6 +3,7 @@ use std::{
     env,
     hash::{Hash, Hasher},
     ops::Range,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -71,6 +72,7 @@ use scrollbar::{ScrollbarDrag, ScrollbarGeometry};
 pub type SharedTerminalSession = Arc<Mutex<TerminalSession>>;
 pub type TerminalInputInterceptor =
     Arc<dyn Fn(&[u8]) -> TerminalInputInterceptorResult + Send + Sync>;
+pub type TerminalInputBroadcaster = Rc<dyn Fn(TerminalBroadcastInputKind, &[u8], &mut App)>;
 const PRIVILEGE_PROMPT_DEBUG_ENV: &str = "OXIDETERM_PRIVILEGE_DEBUG";
 const ACTIVE_TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const BACKGROUND_TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(64);
@@ -90,6 +92,8 @@ const SCHEDULED_INPUT_SUBMIT_DELAY: Duration = Duration::from_millis(24);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalPaneEvent {
     Exited { exit_code: Option<i32> },
+    // Output contents stay pane-owned; consumers only learn that the visible buffer changed.
+    OutputActivity,
     // CWD payloads stay pane-owned; Workspace only recomputes the active metadata key.
     CurrentDirectoryChanged,
     // Recording contents stay pane-owned; consumers only reschedule visible elapsed chrome.
@@ -102,6 +106,13 @@ pub enum TerminalPaneEvent {
     ContextActionRequested,
     // Search completion is asynchronous; Workspace reads the latest pane-owned status.
     SearchStatusChanged,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalBroadcastInputKind {
+    Protocol,
+    Text,
+    Paste,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -300,6 +311,9 @@ pub struct TerminalPane {
     serial_port_available: Option<bool>,
     focus_handle: FocusHandle,
     preference_overrides: TerminalUiPreferenceOverrides,
+    // The pane owns only its live-session highlight choice. Saved connection
+    // defaults remain connection-store data and never affect node ownership.
+    session_highlight_override: Option<TerminalHighlightRuleSetOverride>,
     preferences: TerminalUiPreferences,
     settings: TerminalUiSettings,
     theme: TerminalUiTheme,
@@ -318,6 +332,7 @@ pub struct TerminalPane {
     context_menu_presence: oxideterm_gpui_ui::motion::ExitPresence,
     context_action_requested: Option<TerminalContextAction>,
     plugin_input_interceptor: Option<TerminalInputInterceptor>,
+    input_broadcaster: Option<TerminalInputBroadcaster>,
     input_locked: bool,
     marked_text: Option<String>,
     privilege_prompt_inline_hint: Option<String>,
@@ -603,6 +618,24 @@ impl TerminalPane {
         Self::from_session(terminal, preferences, window, cx)
     }
 
+    pub fn new_mosh_with_preferences(
+        config: oxideterm_terminal::MoshTerminalConfig,
+        mut preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        // Mosh state is always UTF-8 regardless of the application default.
+        preferences.terminal_encoding = oxideterm_terminal::TerminalEncoding::Utf8;
+        let terminal = Arc::new(Mutex::new(TerminalSession::mosh_with_graphics(
+            config,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            graphics_options_from_preferences(&preferences),
+            preferences.scrollback_lines,
+        )));
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
     pub fn new_serial_with_preferences(
         config: SerialSessionConfig,
         preferences: TerminalUiPreferences,
@@ -708,6 +741,7 @@ impl TerminalPane {
             serial_port_available: None,
             focus_handle,
             preference_overrides: TerminalUiPreferenceOverrides::default(),
+            session_highlight_override: None,
             preferences: preferences.clone(),
             settings: TerminalUiSettings::from_preferences(&preferences),
             theme: preferences.theme.clone(),
@@ -724,6 +758,7 @@ impl TerminalPane {
             context_menu_presence: oxideterm_gpui_ui::motion::ExitPresence::visible(),
             context_action_requested: None,
             plugin_input_interceptor: None,
+            input_broadcaster: None,
             input_locked: false,
             marked_text: None,
             privilege_prompt_inline_hint: None,
@@ -1129,6 +1164,9 @@ impl TerminalPane {
     pub fn set_preferences(&mut self, preferences: TerminalUiPreferences, cx: &mut Context<Self>) {
         let mut preferences = preferences;
         self.preference_overrides.apply_to(&mut preferences);
+        if let Some(highlight_override) = &self.session_highlight_override {
+            preferences.highlight_rules = highlight_override.rules.clone();
+        }
         if self.preferences.terminal_encoding != preferences.terminal_encoding {
             self.terminal
                 .lock()
@@ -1177,6 +1215,28 @@ impl TerminalPane {
         // pane retains them only to preserve host behavior on later refreshes.
         self.preference_overrides = preference_overrides;
         self
+    }
+
+    pub fn preference_overrides_snapshot(&self) -> TerminalUiPreferenceOverrides {
+        self.preference_overrides.clone()
+    }
+
+    pub fn session_highlight_rule_set_id(&self) -> Option<&str> {
+        self.session_highlight_override
+            .as_ref()
+            .map(|highlight_override| highlight_override.id.as_str())
+    }
+
+    pub fn set_session_highlight_override(
+        &mut self,
+        highlight_override: Option<TerminalHighlightRuleSetOverride>,
+        application_preferences: TerminalUiPreferences,
+        cx: &mut Context<Self>,
+    ) {
+        // Session-only state is retained by this pane and is discarded with
+        // the pane without mutating the shared SSH node or saved connection.
+        self.session_highlight_override = highlight_override;
+        self.set_preferences(application_preferences, cx);
     }
 
     pub fn set_preference_overrides(
@@ -1684,12 +1744,19 @@ impl TerminalPane {
     }
 
     pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.paste_text_without_broadcast(text, cx) {
+            self.broadcast_user_input(TerminalBroadcastInputKind::Paste, text.as_bytes(), cx);
+        }
+    }
+
+    fn paste_text_without_broadcast(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         if !self.terminal_accepts_input() {
-            return;
+            return false;
         }
         let Some(bytes) = self.apply_plugin_input_interceptor(text.as_bytes()) else {
-            return;
+            return false;
         };
+        let bytes = Zeroizing::new(bytes);
         let mode = self.terminal.lock().mode();
         self.delete_free_type_selection_if_active(mode, cx);
         let now = Instant::now();
@@ -1709,7 +1776,9 @@ impl TerminalPane {
             self.last_terminal_input = Instant::now();
             self.reset_cursor_blink();
             cx.notify();
+            return true;
         }
+        false
     }
 
     pub fn send_command_line(&mut self, command: &str, cx: &mut Context<Self>) {
@@ -1876,7 +1945,9 @@ impl TerminalPane {
         if bytes.is_empty() || !self.terminal_accepts_input() {
             return;
         }
-        self.send_user_protocol_bytes(bytes, cx);
+        // AI input remains scoped to its selected pane even while the user has
+        // interactive terminal broadcasting enabled.
+        self.send_user_protocol_bytes_without_broadcast(bytes, cx);
     }
 
     pub fn send_privilege_secret_input_bytes(
@@ -1915,6 +1986,29 @@ impl TerminalPane {
 
     pub fn set_plugin_input_interceptor(&mut self, interceptor: Option<TerminalInputInterceptor>) {
         self.plugin_input_interceptor = interceptor;
+    }
+
+    pub fn set_input_broadcaster(&mut self, broadcaster: Option<TerminalInputBroadcaster>) {
+        self.input_broadcaster = broadcaster;
+    }
+
+    pub fn send_broadcast_input(
+        &mut self,
+        kind: TerminalBroadcastInputKind,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Mirrored input uses the target pane's normal interception and PTY
+        // path, but never re-enters the broadcaster and creates a loop.
+        match kind {
+            TerminalBroadcastInputKind::Protocol => {
+                self.send_user_protocol_bytes_without_broadcast(bytes, cx)
+            }
+            TerminalBroadcastInputKind::Text => std::str::from_utf8(bytes)
+                .is_ok_and(|text| self.commit_text_without_broadcast(text, cx)),
+            TerminalBroadcastInputKind::Paste => std::str::from_utf8(bytes)
+                .is_ok_and(|text| self.paste_text_without_broadcast(text, cx)),
+        }
     }
 
     pub fn set_input_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
@@ -2013,6 +2107,7 @@ impl TerminalPane {
             // built only when GPUI actually renders this pane.
             self.snapshot_dirty = true;
             self.mark_terminal_content_changed(cx);
+            cx.emit(TerminalPaneEvent::OutputActivity);
         }
         let render_stats_changed = self.update_render_stats(&report, now);
 
@@ -2577,16 +2672,43 @@ impl TerminalPane {
     }
 
     pub(crate) fn send_user_protocol_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        if self.send_user_protocol_bytes_without_broadcast(bytes, cx) {
+            self.broadcast_user_input(TerminalBroadcastInputKind::Protocol, bytes, cx);
+        }
+    }
+
+    fn send_user_protocol_bytes_without_broadcast(
+        &mut self,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.terminal_accepts_input() {
-            return;
+            return false;
         }
         let Some(bytes) = self.apply_plugin_input_interceptor(bytes) else {
-            return;
+            return false;
         };
+        let bytes = Zeroizing::new(bytes);
         self.observe_user_input("protocol", &bytes, cx);
         if self.send_protocol_bytes(&bytes, cx) {
             self.restore_live_output_after_user_input();
+            return true;
         }
+        false
+    }
+
+    fn broadcast_user_input(
+        &self,
+        kind: TerminalBroadcastInputKind,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(broadcaster) = self.input_broadcaster.clone() else {
+            return;
+        };
+        // The callback is synchronous and receives borrowed input so commands
+        // are never retained in pane events, logs, or background tasks.
+        broadcaster(kind, bytes, cx);
     }
 
     fn send_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -2735,18 +2857,27 @@ impl TerminalPane {
 
     fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.marked_text = None;
+        if self.commit_text_without_broadcast(text, cx) {
+            self.broadcast_user_input(TerminalBroadcastInputKind::Text, text.as_bytes(), cx);
+        }
+    }
+
+    fn commit_text_without_broadcast(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         if !self.terminal_accepts_input() {
-            return;
+            return false;
         }
         let Some(bytes) = self.apply_plugin_input_interceptor(text.as_bytes()) else {
-            return;
+            return false;
         };
+        let bytes = Zeroizing::new(bytes);
         let mode = self.terminal.lock().mode();
         self.delete_free_type_selection_if_active(mode, cx);
         self.observe_user_input("text", &bytes, cx);
         if self.send_protocol_bytes(&bytes, cx) {
             self.restore_live_output_after_user_input();
+            return true;
         }
+        false
     }
 
     fn set_marked_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -2835,6 +2966,30 @@ impl TerminalPane {
             });
         })
         .detach();
+    }
+
+    pub fn resize_grid(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        // Preserve the pane's measured cell size while changing only the requested grid.
+        let (_, _, cell_width_px, cell_height_px) = self.last_pty_resize.unwrap_or_else(|| {
+            (
+                self.snapshot.cols,
+                self.snapshot.rows,
+                self.metrics.cell_width_f32().ceil().max(1.0) as u16,
+                self.metrics.line_height_f32().ceil().max(1.0) as u16,
+            )
+        });
+        let requested = (cols, rows, cell_width_px, cell_height_px);
+        self.pending_pty_resize = Some(requested);
+        self.pty_resize_generation = self.pty_resize_generation.wrapping_add(1);
+        self.flush_pending_pty_resize(self.pty_resize_generation, cx);
+        (self.last_pty_resize == Some(requested))
+            .then_some(())
+            .ok_or_else(|| "The terminal backend rejected the requested grid size.".to_string())
     }
 
     fn flush_pending_pty_resize(&mut self, generation: u64, cx: &mut Context<Self>) {
@@ -2941,7 +3096,18 @@ fn graphics_options_from_preferences(preferences: &TerminalUiPreferences) -> Gra
 
 fn current_terminal_timestamp_label() -> String {
     let now = chrono::Local::now();
-    format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
+    terminal_timestamp_label(
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.timestamp_subsec_millis(),
+    )
+}
+
+fn terminal_timestamp_label(hour: u32, minute: u32, second: u32, millis: u32) -> String {
+    // Bracketed fixed-width labels separate timestamp metadata from terminal
+    // output while keeping the paint-only gutter stable.
+    format!("[{hour:02}:{minute:02}:{second:02}.{millis:03}]")
 }
 
 fn record_timestampable_snapshot_rows(
@@ -3044,7 +3210,20 @@ mod tests {
     use super::*;
     use std::{cell::Cell, collections::HashMap, sync::Arc};
 
+    use gpui::{AppContext, IntoElement, Render, TestAppContext, div};
     use oxideterm_terminal::{TerminalAttrs, TerminalCell, TerminalColor, TerminalCursorShape};
+
+    struct TerminalTestRoot;
+
+    struct TerminalBroadcastRecorder {
+        delivered: Vec<(TerminalBroadcastInputKind, Vec<u8>)>,
+    }
+
+    impl Render for TerminalTestRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
 
     #[test]
     fn command_mark_ui_is_hidden_while_a_tui_owns_the_terminal_surface() {
@@ -3156,6 +3335,48 @@ mod tests {
         assert!(!viewport_needs_live_output_restore(0, px(0.0), false));
     }
 
+    #[gpui::test]
+    fn direct_user_input_broadcasts_once_for_each_input_path(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| TerminalPane::new(window, cx).expect("test terminal pane"))
+        });
+        let recorder = cx.new(|_| TerminalBroadcastRecorder {
+            delivered: Vec::new(),
+        });
+        let recorder_for_broadcaster = recorder.downgrade();
+        pane.update(cx, |pane, _cx| {
+            pane.set_input_broadcaster(Some(Rc::new(move |kind, bytes, cx| {
+                let _ = recorder_for_broadcaster.update(cx, |recorder, _cx| {
+                    recorder.delivered.push((kind, bytes.to_vec()));
+                });
+            })));
+        });
+
+        pane.update(cx, |pane, cx| {
+            pane.commit_text("x", cx);
+            pane.send_user_protocol_bytes(b"\x1b[D", cx);
+            pane.paste_text("y", cx);
+        });
+        let delivered = recorder.read_with(cx, |recorder, _cx| recorder.delivered.clone());
+        assert_eq!(
+            delivered.as_slice(),
+            [
+                (TerminalBroadcastInputKind::Text, b"x".to_vec()),
+                (TerminalBroadcastInputKind::Protocol, b"\x1b[D".to_vec()),
+                (TerminalBroadcastInputKind::Paste, b"y".to_vec()),
+            ]
+        );
+
+        pane.update(cx, |pane, cx| {
+            assert!(pane.send_broadcast_input(TerminalBroadcastInputKind::Text, b"z", cx));
+        });
+        assert_eq!(
+            recorder.read_with(cx, |recorder, _cx| recorder.delivered.len()),
+            3
+        );
+    }
+
     #[test]
     fn osc52_clipboard_read_does_not_touch_clipboard_when_denied() {
         let read_called = Cell::new(false);
@@ -3191,6 +3412,7 @@ mod tests {
             wide: false,
             fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
             bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: Default::default(),
             attrs: TerminalAttrs::default(),
             hyperlink: None,
             cursor: false,
@@ -3253,15 +3475,6 @@ mod tests {
         assert_eq!(cols, 11);
         assert!(scrollbar_right <= 120.0);
         assert_eq!(scrollbar_right, 120.0);
-    }
-
-    #[test]
-    fn terminal_grid_span_keeps_timestamp_gutter_paint_only() {
-        let cell_width = 10.0;
-        let grid_span = terminal_grid_span_for_viewport(px(160.0), cell_width, 0.0);
-        let cols = whole_cells_in_span(grid_span, cell_width);
-
-        assert_eq!(cols, 15);
     }
 
     #[test]
@@ -3341,6 +3554,56 @@ mod tests {
         record_timestampable_snapshot_rows(&mut row_timestamps, &cleared_snapshot, "10:00:04");
 
         assert!(!row_timestamps.contains_key(&42));
+    }
+
+    #[test]
+    fn terminal_timestamp_labels_are_bracketed_and_match_the_gutter_width() {
+        let label = terminal_timestamp_label(1, 2, 3, 4);
+
+        assert_eq!(label, "[01:02:03.004]");
+        assert_eq!(label.chars().count(), TERMINAL_TIMESTAMP_LABEL_CELLS);
+    }
+
+    #[gpui::test]
+    fn session_highlight_override_wins_over_connection_and_application_rules(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| TerminalPane::new(window, cx).expect("test terminal pane"))
+        });
+        let rule = |id: &str| TerminalHighlightRule {
+            id: id.to_string(),
+            pattern: id.to_string(),
+            enabled: true,
+            ..TerminalHighlightRule::default()
+        };
+        pane.update(cx, |pane, cx| {
+            let mut application = TerminalUiPreferences::default();
+            application.highlight_rules = Arc::from([rule("application")]);
+            pane.set_preference_overrides(
+                TerminalUiPreferenceOverrides {
+                    highlight_rules: Some(Arc::from([rule("connection")])),
+                    highlight_rule_set_id: Some("connection-set".to_string()),
+                    ..TerminalUiPreferenceOverrides::default()
+                },
+                application.clone(),
+                cx,
+            );
+            pane.set_session_highlight_override(
+                Some(TerminalHighlightRuleSetOverride {
+                    id: "session-set".to_string(),
+                    rules: Arc::from([rule("session")]),
+                }),
+                application,
+                cx,
+            );
+        });
+
+        pane.read_with(cx, |pane, _cx| {
+            assert_eq!(pane.preferences.highlight_rules[0].id, "session");
+            assert_eq!(pane.session_highlight_rule_set_id(), Some("session-set"));
+        });
     }
 
     #[test]

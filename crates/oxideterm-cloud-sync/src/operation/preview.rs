@@ -104,6 +104,11 @@ impl CloudSyncOperationService {
         let encrypted_entry_count = manifest.sections.app_settings.len()
             + manifest.sections.plugin_settings.len()
             + usize::from(manifest.sections.sensitive_credentials.is_some());
+        let mut decryption_context = sync_password
+            .as_ref()
+            .map(|password| OxideBatchDecryptionContext::new(password.as_str()))
+            .transpose()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let total_units = 4.0;
         report_progress(
             progress,
@@ -118,11 +123,15 @@ impl CloudSyncOperationService {
             forwards_snapshot: None,
             quick_commands_snapshot_json: None,
             serial_profiles_snapshot: None,
+            telnet_profiles_snapshot: None,
+            mosh_profiles_snapshot: None,
             remote_desktop_profiles_snapshot: None,
             base_connections_snapshot: None,
             base_forwards_snapshot: None,
             base_quick_commands_snapshot_json: None,
             base_serial_profiles_snapshot: None,
+            base_telnet_profiles_snapshot: None,
+            base_mosh_profiles_snapshot: None,
             base_remote_desktop_profiles_snapshot: None,
             sensitive_credentials_entry: None,
             sensitive_credentials_preview: None,
@@ -158,6 +167,18 @@ impl CloudSyncOperationService {
                 .read_required_object(settings, &metadata_secrets, entry)
                 .await?;
             preview.serial_profiles_snapshot = Some(serde_json::from_slice(&object.bytes)?);
+        }
+        if let Some(entry) = preview.manifest.sections.telnet_profiles.as_ref() {
+            let object = self
+                .read_required_object(settings, &metadata_secrets, entry)
+                .await?;
+            preview.telnet_profiles_snapshot = Some(serde_json::from_slice(&object.bytes)?);
+        }
+        if let Some(entry) = preview.manifest.sections.mosh_profiles.as_ref() {
+            let object = self
+                .read_required_object(settings, &metadata_secrets, entry)
+                .await?;
+            preview.mosh_profiles_snapshot = Some(serde_json::from_slice(&object.bytes)?);
         }
         if let Some(entry) = preview.manifest.sections.remote_desktop_profiles.as_ref() {
             let object = self
@@ -200,6 +221,22 @@ impl CloudSyncOperationService {
                 serial_profiles_object_path,
             )
             .await?;
+            preview.base_telnet_profiles_snapshot = read_optional_snapshot_at_revision(
+                self,
+                settings,
+                &metadata_secrets,
+                previous.telnet_profiles.as_deref(),
+                telnet_profiles_object_path,
+            )
+            .await?;
+            preview.base_mosh_profiles_snapshot = read_optional_snapshot_at_revision(
+                self,
+                settings,
+                &metadata_secrets,
+                previous.mosh_profiles.as_deref(),
+                mosh_profiles_object_path,
+            )
+            .await?;
             preview.base_remote_desktop_profiles_snapshot = read_optional_snapshot_at_revision(
                 self,
                 settings,
@@ -216,11 +253,11 @@ impl CloudSyncOperationService {
             let object = self
                 .read_required_object(settings, &metadata_secrets, entry)
                 .await?;
-            if let Some(password) = sync_password.as_ref().map(|password| password.as_str()) {
-                let import_preview = preview_oxide_import_with_progress(
+            if let Some(decryption_context) = decryption_context.as_mut() {
+                let import_preview = preview_oxide_import_with_context_and_progress(
                     connection_store,
                     &object.bytes,
-                    password,
+                    decryption_context,
                     ImportConflictStrategy::Merge,
                     |stage, current, total| {
                         let fraction = fractional_import_progress(current, total);
@@ -245,11 +282,11 @@ impl CloudSyncOperationService {
             let object = self
                 .read_required_object(settings, &metadata_secrets, entry)
                 .await?;
-            if let Some(password) = sync_password.as_ref().map(|password| password.as_str()) {
-                let import_preview = preview_oxide_import_with_progress(
+            if let Some(decryption_context) = decryption_context.as_mut() {
+                let import_preview = preview_oxide_import_with_context_and_progress(
                     connection_store,
                     &object.bytes,
-                    password,
+                    decryption_context,
                     ImportConflictStrategy::Replace,
                     |stage, current, total| {
                         let fraction = fractional_import_progress(current, total);
@@ -302,11 +339,11 @@ impl CloudSyncOperationService {
             let object = self
                 .read_required_object(settings, &metadata_secrets, entry)
                 .await?;
-            if let Some(password) = sync_password.as_ref().map(|password| password.as_str()) {
-                let import_preview = preview_oxide_import_with_progress(
+            if let Some(decryption_context) = decryption_context.as_mut() {
+                let import_preview = preview_oxide_import_with_context_and_progress(
                     connection_store,
                     &object.bytes,
-                    password,
+                    decryption_context,
                     ImportConflictStrategy::Replace,
                     |stage, current, total| {
                         let fraction = fractional_import_progress(current, total);

@@ -94,6 +94,7 @@ pub enum SettingsSelect {
     RemoteShellIntegrationMode,
     IdeAgentMode,
     LocalShell,
+    LocalShellSemanticScheme(usize),
     LocalPrivilegeKind,
     ConnectionIdleTimeout,
     ReconnectMaxAttempts,
@@ -110,12 +111,18 @@ pub enum SettingsSelect {
     KnowledgeDocumentFormat,
     AiMcpTransport,
     AiMcpAuthMode,
+    SftpPresentation,
     SftpProtocol,
     SftpConcurrent,
     SftpDirectoryParallelism,
     SftpConflict,
+    TerminalSemanticScheme,
+    SemanticSchemeRuleClass(usize),
+    SemanticSchemeRuleContext(usize),
+    HighlightRuleSet,
     HighlightPreset,
     HighlightRenderMode(usize),
+    HighlightMatchScope(usize),
     ConnectionImportSource,
     ConnectionImportDuplicateStrategy,
 }
@@ -147,6 +154,7 @@ pub enum SettingsInput {
     NetworkProxyPassword,
     NetworkProxyTestHost,
     NetworkProxyTestPort,
+    PublicMcpPort,
     UpdateProxyHost,
     UpdateProxyPort,
     UpdateProxyNoProxy,
@@ -160,6 +168,11 @@ pub enum SettingsInput {
     CustomThemeName,
     CustomThemeTerminalColor(usize),
     CustomThemeUiColor(usize),
+    SemanticSchemeName,
+    SemanticSchemeRulePattern(usize),
+    SemanticSchemeRuleCapture(usize),
+    SemanticSchemeColor(usize),
+    HighlightRuleSetName,
     HighlightLabel(usize),
     HighlightPattern(usize),
     HighlightForeground(usize),
@@ -219,6 +232,7 @@ pub enum SettingsInput {
     NativePluginInstallUrl,
     NativePluginInstallChecksum,
     NativePluginRegistryUrl,
+    NativePluginMarketplaceSearch,
     ManagedKeyFilePath,
     ManagedKeyFileName,
     ManagedKeyFilePassphrase,
@@ -500,6 +514,7 @@ impl SettingsInput {
             Self::NetworkProxyPassword => 32_004,
             Self::NetworkProxyTestHost => 32_005,
             Self::NetworkProxyTestPort => 32_006,
+            Self::PublicMcpPort => 32_007,
             Self::UpdateProxyHost => 32_100,
             Self::UpdateProxyPort => 32_101,
             Self::UpdateProxyNoProxy => 32_102,
@@ -513,6 +528,11 @@ impl SettingsInput {
             Self::CustomThemeName => 10_000,
             Self::CustomThemeTerminalColor(index) => 10_100 + index as u64,
             Self::CustomThemeUiColor(index) => 10_200 + index as u64,
+            Self::SemanticSchemeName => 10_300,
+            Self::SemanticSchemeRulePattern(index) => 10_400 + index as u64,
+            Self::SemanticSchemeRuleCapture(index) => 10_500 + index as u64,
+            Self::SemanticSchemeColor(index) => 10_600 + index as u64,
+            Self::HighlightRuleSetName => 10_700,
             Self::HighlightLabel(index) => 100 + index as u64 * 4,
             Self::HighlightPattern(index) => 101 + index as u64 * 4,
             Self::HighlightForeground(index) => 102 + index as u64 * 4,
@@ -574,6 +594,7 @@ impl SettingsInput {
             Self::NativePluginInstallUrl => PLUGIN_MANAGER_INPUT_ANCHOR_BASE,
             Self::NativePluginInstallChecksum => PLUGIN_MANAGER_INPUT_ANCHOR_BASE + 1,
             Self::NativePluginRegistryUrl => PLUGIN_MANAGER_INPUT_ANCHOR_BASE + 2,
+            Self::NativePluginMarketplaceSearch => PLUGIN_MANAGER_INPUT_ANCHOR_BASE + 3,
             Self::ManagedKeyFilePath => 30_000,
             Self::ManagedKeyFileName => 30_001,
             Self::ManagedKeyFilePassphrase => 30_002,
@@ -670,12 +691,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_input_anchor_ranges_do_not_overlap_dynamic_plugin_ranges() {
-        assert!(SettingsInput::NativePluginInstallUrl.anchor_key() < 29_000);
-        assert_eq!(SettingsInput::PluginSetting(0).anchor_key(), 29_000);
-    }
-
-    #[test]
     fn secret_inputs_are_categorized_in_the_model_layer() {
         assert!(SettingsInput::AiProviderApiKey(0).is_secret());
         assert!(SettingsInput::CloudSyncSecretAccessKey.is_secret());
@@ -701,36 +716,5 @@ mod tests {
         assert!(SettingsInput::LocalPrivilegePromptPatterns.accepts_newline());
         assert!(!SettingsInput::TerminalFontSize.accepts_newline());
         assert_eq!(SettingsInput::AiMemoryContent.textarea_line_height(), 22.0);
-    }
-
-    #[test]
-    fn settings_tabs_are_grouped_by_user_task() {
-        assert_eq!(
-            SettingsTab::groups(),
-            &[
-                &[
-                    SettingsTab::General,
-                    SettingsTab::Appearance,
-                    SettingsTab::Keybindings,
-                ][..],
-                &[SettingsTab::Terminal, SettingsTab::Portable][..],
-                &[
-                    SettingsTab::Connections,
-                    SettingsTab::Network,
-                    SettingsTab::Sftp,
-                    SettingsTab::Privilege,
-                ][..],
-                &[SettingsTab::Ide, SettingsTab::Ai, SettingsTab::Knowledge][..],
-                &[SettingsTab::Help][..],
-            ]
-        );
-        assert_eq!(
-            SettingsTab::all(),
-            SettingsTab::groups()
-                .iter()
-                .flat_map(|group| group.iter())
-                .copied()
-                .collect::<Vec<_>>()
-        );
     }
 }

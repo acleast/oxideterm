@@ -66,23 +66,84 @@ impl WorkspaceApp {
                     }
                 }
             }
-            if let Err(error) = validate_proxy_chain_form(form) {
-                form.error = Some(error);
-                cx.notify();
-                return None;
-            }
-            // Resolve every fallible proxy input before moving any form-owned secret.
-            let upstream_proxy = match upstream_proxy_config_from_form(
-                &this.connection_store,
-                this.settings_store.settings(),
-                form,
-                secret_handoff,
-            ) {
-                Ok(upstream_proxy) => upstream_proxy,
-                Err(error) => {
-                    form.error = Some(error.to_string());
+            let saved_proxy_hop_auth = if form.proxy_command_enabled {
+                Vec::new()
+            } else {
+                if let Err(error) = validate_proxy_chain_form(form) {
+                    form.error = Some(error);
                     cx.notify();
                     return None;
+                }
+                let missing_credentials_message =
+                    this.i18n.t("sessions.saved_next_hop.missing_credentials");
+                match saved_proxy_hop_auth_from_store(
+                    &this.connection_store,
+                    form,
+                    &missing_credentials_message,
+                ) {
+                    Ok(saved_auth) => saved_auth,
+                    Err(error) => {
+                        form.error = Some(error);
+                        cx.notify();
+                        return None;
+                    }
+                }
+            };
+            // Resolve every fallible route input before moving authentication drafts.
+            let proxy_command = if form.proxy_command_enabled {
+                let command = if form.proxy_command.trim().is_empty() {
+                    let saved_command = SavedProxyCommand {
+                        keychain_id: form.proxy_command_keychain_id.clone(),
+                        plaintext_command: None,
+                    };
+                    match this
+                        .connection_store
+                        .get_saved_proxy_command(&saved_command)
+                    {
+                        Ok(command) => command,
+                        Err(error) => {
+                            form.error = Some(error.to_string());
+                            cx.notify();
+                            return None;
+                        }
+                    }
+                } else {
+                    SecretString::from(secret_handoff.zeroizing(&mut form.proxy_command))
+                };
+                let proxy_alias = if form.name.trim().is_empty() {
+                    host.as_str()
+                } else {
+                    form.name.trim()
+                };
+                Some(proxy_command_from_value(
+                    this.settings_store
+                        .settings()
+                        .ssh_config
+                        .allow_proxy_command,
+                    command,
+                    proxy_alias,
+                    &host,
+                    Some(&username),
+                    port,
+                ))
+            } else {
+                None
+            };
+            let upstream_proxy = if proxy_command.is_some() {
+                None
+            } else {
+                match upstream_proxy_config_from_form(
+                    &this.connection_store,
+                    this.settings_store.settings(),
+                    form,
+                    secret_handoff,
+                ) {
+                    Ok(upstream_proxy) => upstream_proxy,
+                    Err(error) => {
+                        form.error = Some(error.to_string());
+                        cx.notify();
+                        return None;
+                    }
                 }
             };
             let auth = match form.auth_tab {
@@ -112,13 +173,17 @@ impl WorkspaceApp {
                 ),
                 SshAuthTab::TwoFactor => AuthMethod::KeyboardInteractive,
             };
-            let proxy_chain = proxy_chain_from_form(form, secret_handoff)
-                .expect("proxy-chain validation completed before secret handoff");
+            let proxy_chain = if proxy_command.is_some() {
+                None
+            } else {
+                proxy_chain_from_form(form, secret_handoff, saved_proxy_hop_auth)
+            };
             let config = SshConfig {
                 host: host.clone(),
                 port: port.unwrap_or(22),
                 username: username.clone(),
                 auth,
+                timeout_secs: form.connect_timeout_seconds,
                 agent_forwarding: form.agent_forwarding,
                 identity_agent: identity_agent_from_form(&form.identity_agent),
                 agent_forwarding_socket: form.agent_forwarding_socket.clone(),
@@ -126,6 +191,7 @@ impl WorkspaceApp {
                 x11_forwarding: x11_forward_policy(form.x11_forwarding),
                 proxy_chain,
                 upstream_proxy,
+                proxy_command,
                 strict_host_key_checking: true,
                 post_connect_command: (!form.post_connect_command.trim().is_empty())
                     .then(|| form.post_connect_command.trim().to_string()),
@@ -173,27 +239,36 @@ impl WorkspaceApp {
                     cx,
                 ),
                 SshConnectionWorkerResult::Test { result } => {
-                    let (form_message, session_message) = match result {
-                        Ok(()) => (
-                            self.i18n.t("ssh.form.test_success"),
-                            self.i18n.t("sessionManager.toast.test_success"),
-                        ),
-                        Err(error) => (
-                            error.clone(),
-                            format!(
+                    match result {
+                        Ok(()) => {
+                            let form_message = self.i18n.t("ssh.form.test_success");
+                            let session_message = self.i18n.t("sessionManager.toast.test_success");
+                            // Preserve the existing inline location while selecting success chrome.
+                            let reported_to_form =
+                                self.connection_flow.update(cx, |connection_flow, cx| {
+                                    connection_flow.set_form_success_feedback(form_message, cx)
+                                });
+                            if !reported_to_form {
+                                self.session_manager.update(cx, |session_manager, cx| {
+                                    session_manager.set_status(Some(session_message), cx);
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            let session_message = format!(
                                 "{}: {error}",
                                 self.i18n.t("sessionManager.toast.test_failed")
-                            ),
-                        ),
-                    };
-                    let reported_to_form =
-                        self.connection_flow.update(cx, |connection_flow, cx| {
-                            connection_flow.set_form_feedback(Some(false), Some(form_message), cx)
-                        });
-                    if !reported_to_form {
-                        self.session_manager.update(cx, |session_manager, cx| {
-                            session_manager.set_status(Some(session_message), cx);
-                        });
+                            );
+                            let reported_to_form =
+                                self.connection_flow.update(cx, |connection_flow, cx| {
+                                    connection_flow.set_form_feedback(Some(false), Some(error), cx)
+                                });
+                            if !reported_to_form {
+                                self.session_manager.update(cx, |session_manager, cx| {
+                                    session_manager.set_status(Some(session_message), cx);
+                                });
+                            }
+                        }
                     }
                     cx.notify();
                 }
@@ -248,6 +323,7 @@ impl WorkspaceApp {
                 cx.notify();
             }
             HostKeyStatus::Error { message } => {
+                self.fail_public_mcp_mosh_open_for_intent(&intent, message.clone());
                 let reported_to_form = self.connection_flow.update(cx, |connection_flow, cx| {
                     connection_flow.set_form_feedback(None, Some(message.clone()), cx)
                 });
@@ -531,6 +607,10 @@ impl WorkspaceApp {
         }
         let tx = self.ssh_worker_sender(cx);
         let router = self.node_router.clone();
+        let connect_timeout_seconds = router
+            .node_runtime_snapshot(&step.node_id)
+            .map(|snapshot| snapshot.config.timeout_secs)
+            .unwrap_or(DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS);
         let Some(preflight_context) = self.connection_flow.update(cx, |connection_flow, cx| {
             connection_flow.take_proxy_connect_preflight_context(cx)
         }) else {
@@ -557,7 +637,7 @@ impl WorkspaceApp {
                                 .acquire_connection_wait(
                                     &parent_id,
                                     consumer.clone(),
-                                    Duration::from_secs(30),
+                                    Duration::from_secs(connect_timeout_seconds),
                                 )
                                 .await
                             {
@@ -566,7 +646,9 @@ impl WorkspaceApp {
                                     let status = parent
                                         .handle
                                         .preflight_host_key_via_direct_tcpip(
-                                            &step.host, step.port, 10,
+                                            &step.host,
+                                            step.port,
+                                            connect_timeout_seconds,
                                         )
                                         .await;
                                     router.release_consumer(&connection_id, &consumer);
@@ -584,7 +666,7 @@ impl WorkspaceApp {
                             check_host_key_with_upstream_proxy(
                                 &step.host,
                                 step.port,
-                                10,
+                                connect_timeout_seconds,
                                 upstream_proxy.as_ref(),
                             )
                             .await
@@ -683,7 +765,7 @@ impl WorkspaceApp {
             SshConnectionIntent::ConnectSaved(id) => {
                 if let Some(connection_options) = self.connection_store.get(&id).map(|connection| {
                     (
-                        connection.options.terminal,
+                        connection.options.terminal.clone(),
                         connection.options.dedicated_new_terminal_connection,
                     )
                 }) && let Some(node) = self.ssh_nodes.get_mut(&target_node_id)
@@ -712,7 +794,9 @@ impl WorkspaceApp {
                     cx,
                 );
             }
-            SshConnectionIntent::Test | SshConnectionIntent::DrillDown { .. } => {}
+            SshConnectionIntent::Test
+            | SshConnectionIntent::DrillDown { .. }
+            | SshConnectionIntent::Mosh(_) => {}
         }
     }
 
@@ -1007,6 +1091,100 @@ impl WorkspaceApp {
                     session_manager.set_status(None, cx);
                 });
                 let _ = self.open_or_create_saved_ssh_terminal_tab(id, config, title, window, cx);
+            }
+            SshConnectionIntent::Mosh(options) => {
+                let public_mcp_open_token = options.public_mcp_open_token.clone();
+                if public_mcp_open_token
+                    .as_deref()
+                    .is_some_and(|token| self.cancel_public_mcp_mosh_open_if_request_ended(token))
+                {
+                    return;
+                }
+                self.connection_flow.update(cx, |connection_flow, cx| {
+                    connection_flow.clear_host_key_challenge(cx);
+                });
+                if self.connection_form_state(cx).form.is_some() {
+                    self.update_connection_form_state(cx, ConnectionFormState::clear);
+                }
+                self.session_manager.update(cx, |session_manager, cx| {
+                    session_manager.set_status(None, cx);
+                });
+
+                let mut bootstrap = MoshBootstrapConfig::new("pending", config);
+                bootstrap.server_executable = options.server_executable;
+                bootstrap.udp_host_override = options.udp_host_override;
+                bootstrap.udp_port = match options.udp_port {
+                    SavedMoshUdpPortSelection::Automatic => {
+                        oxideterm_mosh::MoshUdpPortSelection::Automatic
+                    }
+                    SavedMoshUdpPortSelection::Fixed { port } => {
+                        oxideterm_mosh::MoshUdpPortSelection::Fixed(port)
+                    }
+                    SavedMoshUdpPortSelection::Range { start, end } => {
+                        oxideterm_mosh::MoshUdpPortSelection::Range { start, end }
+                    }
+                };
+                bootstrap.ip_family = match options.ip_family {
+                    SavedMoshIpFamily::Auto => oxideterm_mosh::MoshIpFamily::Auto,
+                    SavedMoshIpFamily::Ipv4 => oxideterm_mosh::MoshIpFamily::Ipv4,
+                    SavedMoshIpFamily::Ipv6 => oxideterm_mosh::MoshIpFamily::Ipv6,
+                };
+                bootstrap.locale_assignments = options
+                    .locale
+                    .filter(|locale| !locale.trim().is_empty())
+                    .map(|locale| vec![("LANG".to_string(), locale)])
+                    .unwrap_or_default();
+                let bootstrap_context = MoshBootstrapContext {
+                    registry: self.ssh_registry.clone(),
+                    prompt_handler: Some(
+                        self.workspace_runtime.read(cx).native_ssh_prompt_handler(),
+                    ),
+                    managed_key_resolver: Some(managed_key_resolver_from_store(
+                        &self.connection_store,
+                    )),
+                };
+                let terminal_config = MoshTerminalConfig {
+                    title: title.clone(),
+                    bootstrap,
+                    bootstrap_context,
+                    prediction: match options.prediction {
+                        MoshPredictionMode::Adaptive => {
+                            oxideterm_terminal::MoshPredictionDisplay::Adaptive
+                        }
+                        MoshPredictionMode::Always => {
+                            oxideterm_terminal::MoshPredictionDisplay::Always
+                        }
+                        MoshPredictionMode::Never => {
+                            oxideterm_terminal::MoshPredictionDisplay::Never
+                        }
+                    },
+                    task_runtime: self.workspace_runtime.read(cx).task_runtime(),
+                };
+                match self.create_mosh_terminal_tab(terminal_config, title, window, cx) {
+                    Ok(session_id) => {
+                        if let Some(saved_profile_id) = options.saved_profile_id {
+                            let _ = self
+                                .connection_store
+                                .mark_mosh_profile_used(&saved_profile_id);
+                        }
+                        if let Some(token) = public_mcp_open_token {
+                            self.complete_public_mcp_mosh_terminal_open(token, Ok(session_id), cx);
+                        }
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+                        if let Some(token) = public_mcp_open_token {
+                            self.complete_public_mcp_mosh_terminal_open(
+                                token,
+                                Err(error.clone()),
+                                cx,
+                            );
+                        }
+                        self.session_manager.update(cx, |session_manager, cx| {
+                            session_manager.set_status(Some(error), cx);
+                        });
+                    }
+                }
             }
             SshConnectionIntent::DrillDown {
                 parent_id,

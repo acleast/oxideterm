@@ -5,7 +5,7 @@ use super::*;
 
 impl CloudSyncPageRenderer {
     pub(super) fn render_cloud_sync_config_connection_card(&self, cx: &mut App) -> AnyElement {
-        let (config_rows, auto_upload_enabled) = {
+        let (config_rows, auto_upload_enabled, busy) = {
             let cloud_sync = self.cloud_sync.read(cx);
             (
                 cloud_sync_config_rows(
@@ -13,6 +13,7 @@ impl CloudSyncPageRenderer {
                     &cloud_sync.view.form.auth_mode,
                 ),
                 cloud_sync.view.form.auto_upload_enabled,
+                cloud_sync.operation_in_flight(),
             )
         };
         let mut connection_rows = Vec::with_capacity(config_rows.len());
@@ -57,8 +58,24 @@ impl CloudSyncPageRenderer {
         self.render
             .plugin_card()
             .child(
-                self.render
-                    .section_title("plugin.cloud_sync.sections.connection_settings", cx),
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.0))
+                    .child(
+                        self.render
+                            .section_title("plugin.cloud_sync.sections.connection_settings", cx),
+                    )
+                    .child(self.render_cloud_sync_toolbar_button(
+                        LucideIcon::Save,
+                        "plugin.cloud_sync.actions.save_settings",
+                        CloudSyncActionTone::Muted,
+                        busy,
+                        self.intent_listener(CloudSyncUiIntent::SaveConfiguration),
+                    )),
             )
             .child(cloud_sync_form_grid(connection_rows))
             .into_any_element()
@@ -92,6 +109,18 @@ impl CloudSyncPageRenderer {
                 "plugin.cloud_sync.settings.sync_serial_profiles",
                 scope.sync_serial_profiles,
                 |scope, next| scope.sync_serial_profiles = Some(next),
+                cx,
+            ),
+            self.render_scope_bool_toggle(
+                "plugin.cloud_sync.settings.sync_telnet_profiles",
+                scope.sync_telnet_profiles,
+                |scope, next| scope.sync_telnet_profiles = Some(next),
+                cx,
+            ),
+            self.render_scope_bool_toggle(
+                "plugin.cloud_sync.settings.sync_mosh_profiles",
+                scope.sync_mosh_profiles,
+                |scope, next| scope.sync_mosh_profiles = Some(next),
                 cx,
             ),
             self.render_scope_bool_toggle(
@@ -928,14 +957,17 @@ impl WorkspaceApp {
         });
         let secret_result = store_cloud_sync_touched_secrets(&secret_handoff, &mut provider);
         if let Err(error) = secret_result {
+            // Credential-store failures contain operation context and platform
+            // status details, never the submitted secret values.
+            let error_message = format!("{error:#}");
             self.cloud_sync.update(cx, |cloud_sync, _cx| {
                 cloud_sync.view.form.restore_secret_handoff(secret_handoff);
-                cloud_sync.controller.store.state_mut().last_error = Some(error.to_string());
+                cloud_sync.controller.store.state_mut().last_error = Some(error_message.clone());
             });
             self.push_cloud_sync_toast(
                 self.i18n
                     .t("plugin.cloud_sync.toast.settings_saved_failed_title"),
-                Some(error.to_string()),
+                Some(error_message),
                 TerminalNoticeVariant::Error,
                 cx,
             );

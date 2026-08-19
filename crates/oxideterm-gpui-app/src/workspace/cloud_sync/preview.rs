@@ -433,6 +433,14 @@ impl CloudSyncPageRenderer {
                 CloudSyncUploadSelectionAction::ToggleSerialProfiles,
             ),
             (
+                "plugin.cloud_sync.settings.sync_telnet_profiles",
+                CloudSyncUploadSelectionAction::ToggleTelnetProfiles,
+            ),
+            (
+                "plugin.cloud_sync.settings.sync_mosh_profiles",
+                CloudSyncUploadSelectionAction::ToggleMoshProfiles,
+            ),
+            (
                 "plugin.cloud_sync.settings.sync_remote_desktop_profiles",
                 CloudSyncUploadSelectionAction::ToggleRemoteDesktopProfiles,
             ),
@@ -481,6 +489,12 @@ impl CloudSyncPageRenderer {
             CloudSyncUploadSelectionAction::ToggleSerialProfiles => {
                 selection.sync_serial_profiles || !selection.serial_profile_item_ids.is_empty()
             }
+            CloudSyncUploadSelectionAction::ToggleTelnetProfiles => {
+                selection.sync_telnet_profiles || !selection.telnet_profile_item_ids.is_empty()
+            }
+            CloudSyncUploadSelectionAction::ToggleMoshProfiles => {
+                selection.sync_mosh_profiles || !selection.mosh_profile_item_ids.is_empty()
+            }
             CloudSyncUploadSelectionAction::ToggleRemoteDesktopProfiles => {
                 selection.sync_remote_desktop_profiles
                     || !selection.remote_desktop_profile_item_ids.is_empty()
@@ -509,6 +523,12 @@ impl CloudSyncPageRenderer {
             }
             CloudSyncUploadSelectionAction::ToggleSerialProfiles => {
                 selection.serial_profile_item_ids.len()
+            }
+            CloudSyncUploadSelectionAction::ToggleTelnetProfiles => {
+                selection.telnet_profile_item_ids.len()
+            }
+            CloudSyncUploadSelectionAction::ToggleMoshProfiles => {
+                selection.mosh_profile_item_ids.len()
             }
             CloudSyncUploadSelectionAction::ToggleRemoteDesktopProfiles => {
                 selection.remote_desktop_profile_item_ids.len()
@@ -948,6 +968,9 @@ impl CloudSyncPageRenderer {
             "plugin.cloud_sync.settings.sync_serial_profiles" => Some(
                 CloudSyncPreviewSelectionAction::ToggleSerialProfileItem(item.item_key.clone()),
             ),
+            "plugin.cloud_sync.settings.sync_telnet_profiles" => Some(
+                CloudSyncPreviewSelectionAction::ToggleTelnetProfileItem(item.item_key.clone()),
+            ),
             "plugin.cloud_sync.settings.sync_app_settings" => Some(
                 CloudSyncPreviewSelectionAction::ToggleAppSettingsSection(item.item_key.clone()),
             ),
@@ -972,6 +995,9 @@ impl CloudSyncPageRenderer {
             }
             CloudSyncPreviewSelectionAction::ToggleSerialProfileItem(id) => {
                 selection.selected_serial_profile_ids.contains(id)
+            }
+            CloudSyncPreviewSelectionAction::ToggleTelnetProfileItem(id) => {
+                selection.selected_telnet_profile_ids.contains(id)
             }
             CloudSyncPreviewSelectionAction::ToggleAppSettingsSection(id) => {
                 selection.selected_app_settings_sections.contains(id)
@@ -1049,6 +1075,9 @@ impl CloudSyncPageRenderer {
             ),
             "plugin.cloud_sync.settings.sync_serial_profiles" => Some(
                 CloudSyncUploadSelectionAction::ToggleSerialProfileItem(item.item_key.clone()),
+            ),
+            "plugin.cloud_sync.settings.sync_telnet_profiles" => Some(
+                CloudSyncUploadSelectionAction::ToggleTelnetProfileItem(item.item_key.clone()),
             ),
             "plugin.cloud_sync.settings.sync_app_settings" => Some(
                 CloudSyncUploadSelectionAction::ToggleAppSettingsSection(item.item_key.clone()),

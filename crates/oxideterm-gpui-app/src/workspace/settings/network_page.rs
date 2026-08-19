@@ -2,6 +2,40 @@ use super::*;
 
 pub(in crate::workspace) const SETTINGS_NETWORK_FIELD_WIDTH: f32 = 320.0; // Desktop preference for normal proxy fields.
 pub(in crate::workspace) const SETTINGS_NETWORK_PORT_FIELD_WIDTH: f32 = 140.0; // Ports should stay compact instead of sharing a full row.
+// External MCP rows use compact settings-card spacing rather than terminal layout metrics.
+const SETTINGS_PUBLIC_MCP_ENDPOINT_GAP: f32 = 12.0;
+const SETTINGS_PUBLIC_MCP_ROW_GAP: f32 = 10.0;
+const SETTINGS_PUBLIC_MCP_STATUS_GAP: f32 = 2.0;
+const SETTINGS_PUBLIC_MCP_DETAIL_GAP: f32 = 4.0;
+const SETTINGS_PUBLIC_MCP_CREDENTIAL_PADDING: f32 = 12.0;
+const SETTINGS_PUBLIC_MCP_COMMAND_PADDING_X: f32 = 8.0;
+const SETTINGS_PUBLIC_MCP_COMMAND_PADDING_Y: f32 = 6.0;
+const SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE: f32 = 14.0;
+
+#[derive(serde::Serialize)]
+struct PublicMcpStdioEnvironment<'a> {
+    #[serde(rename = "OXIDETERM_MCP_TOKEN")]
+    credential: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct PublicMcpStdioConfig<'a> {
+    command: &'static str,
+    args: [&'static str; 2],
+    env: PublicMcpStdioEnvironment<'a>,
+}
+
+fn public_mcp_stdio_json(credential: &str) -> zeroize::Zeroizing<String> {
+    // Borrow the credential during serialization so the JSON output is the only temporary copy.
+    zeroize::Zeroizing::new(
+        serde_json::to_string_pretty(&PublicMcpStdioConfig {
+            command: CLI_COMPANION_COMMAND_NAME,
+            args: ["mcp", "bridge"],
+            env: PublicMcpStdioEnvironment { credential },
+        })
+        .expect("serializing the stdio MCP configuration cannot fail"),
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::workspace) enum NetworkProxyAuthMode {
@@ -57,6 +91,101 @@ pub(in crate::workspace) fn network_application_proxy_mode_label(
         SettingsApplicationProxyMode::Shared => {
             i18n.t("settings_view.network.application_mode_shared")
         }
+    }
+}
+
+fn public_mcp_tool_group_label_key(tool_group: oxideterm_public_mcp::ToolGroup) -> &'static str {
+    match tool_group {
+        oxideterm_public_mcp::ToolGroup::Basic => "settings_view.network.mcp_group_basic",
+        oxideterm_public_mcp::ToolGroup::ConnectionDirectory => {
+            "settings_view.network.mcp_group_connection_directory"
+        }
+        oxideterm_public_mcp::ToolGroup::ConnectionRead => {
+            "settings_view.network.mcp_group_connection_read"
+        }
+        oxideterm_public_mcp::ToolGroup::ConnectionManage => {
+            "settings_view.network.mcp_group_connection_manage"
+        }
+        oxideterm_public_mcp::ToolGroup::CredentialManage => {
+            "settings_view.network.mcp_group_credential_manage"
+        }
+        oxideterm_public_mcp::ToolGroup::NodeSession => {
+            "settings_view.network.mcp_group_node_session"
+        }
+        oxideterm_public_mcp::ToolGroup::TerminalSession => {
+            "settings_view.network.mcp_group_terminal_session"
+        }
+        oxideterm_public_mcp::ToolGroup::TerminalObserve => {
+            "settings_view.network.mcp_group_terminal_observe"
+        }
+        oxideterm_public_mcp::ToolGroup::TerminalInput => {
+            "settings_view.network.mcp_group_terminal_input"
+        }
+        oxideterm_public_mcp::ToolGroup::RecordingControl => {
+            "settings_view.network.mcp_group_recording_control"
+        }
+        oxideterm_public_mcp::ToolGroup::RecordingContent => {
+            "settings_view.network.mcp_group_recording_content"
+        }
+        oxideterm_public_mcp::ToolGroup::DesktopSession => {
+            "settings_view.network.mcp_group_desktop_session"
+        }
+        oxideterm_public_mcp::ToolGroup::DesktopObserve => {
+            "settings_view.network.mcp_group_desktop_observe"
+        }
+        oxideterm_public_mcp::ToolGroup::DesktopInput => {
+            "settings_view.network.mcp_group_desktop_input"
+        }
+        oxideterm_public_mcp::ToolGroup::DesktopClipboard => {
+            "settings_view.network.mcp_group_desktop_clipboard"
+        }
+        oxideterm_public_mcp::ToolGroup::CommandObserve => {
+            "settings_view.network.mcp_group_command_observe"
+        }
+        oxideterm_public_mcp::ToolGroup::CommandExecute => {
+            "settings_view.network.mcp_group_command_execute"
+        }
+        oxideterm_public_mcp::ToolGroup::AuditRead => "settings_view.network.mcp_group_audit_read",
+        oxideterm_public_mcp::ToolGroup::ArtifactTransfer => {
+            "settings_view.network.mcp_group_artifact_transfer"
+        }
+        oxideterm_public_mcp::ToolGroup::HostToolsObserve => {
+            "settings_view.network.mcp_group_host_tools_observe"
+        }
+        oxideterm_public_mcp::ToolGroup::HostToolsOperate => {
+            "settings_view.network.mcp_group_host_tools_operate"
+        }
+        oxideterm_public_mcp::ToolGroup::QuickCommandRead => {
+            "settings_view.network.mcp_group_quick_command_read"
+        }
+        oxideterm_public_mcp::ToolGroup::QuickCommandContentRead => {
+            "settings_view.network.mcp_group_quick_command_content_read"
+        }
+        oxideterm_public_mcp::ToolGroup::QuickCommandManage => {
+            "settings_view.network.mcp_group_quick_command_manage"
+        }
+        oxideterm_public_mcp::ToolGroup::QuickCommandExecute => {
+            "settings_view.network.mcp_group_quick_command_execute"
+        }
+        oxideterm_public_mcp::ToolGroup::AddonRead => "settings_view.network.mcp_group_addon_read",
+        oxideterm_public_mcp::ToolGroup::AddonManage => {
+            "settings_view.network.mcp_group_addon_manage"
+        }
+        oxideterm_public_mcp::ToolGroup::ForwardRead => {
+            "settings_view.network.mcp_group_forward_read"
+        }
+        oxideterm_public_mcp::ToolGroup::ForwardManage => {
+            "settings_view.network.mcp_group_forward_manage"
+        }
+        oxideterm_public_mcp::ToolGroup::FileRead => "settings_view.network.mcp_group_file_read",
+        oxideterm_public_mcp::ToolGroup::FileWrite => "settings_view.network.mcp_group_file_write",
+        oxideterm_public_mcp::ToolGroup::WorkspaceRead => {
+            "settings_view.network.mcp_group_workspace_read"
+        }
+        oxideterm_public_mcp::ToolGroup::WorkspaceEdit => {
+            "settings_view.network.mcp_group_workspace_edit"
+        }
+        oxideterm_public_mcp::ToolGroup::CloudSync => "settings_view.network.mcp_group_cloud_sync",
     }
 }
 
@@ -223,8 +352,629 @@ impl WorkspaceApp {
         match section_index {
             0 => self.settings_network_shared_proxy_section(proxy, cx),
             1 => self.settings_network_routing_section(cx),
+            2 => self.settings_public_mcp_section(cx),
             _ => div().into_any_element(),
         }
+    }
+
+    fn settings_public_mcp_section(&self, cx: &mut Context<Self>) -> AnyElement {
+        let endpoint = self.public_mcp.endpoint_url().map(str::to_owned);
+        let startup_error = self.public_mcp.startup_error().map(str::to_owned);
+        let clients = self.public_mcp.clients();
+        let client_labels = clients
+            .iter()
+            .map(|client| (client.client_ref.clone(), client.label.clone()))
+            .collect::<HashMap<_, _>>();
+        let approvals = self.public_mcp.approvals();
+        let credential_ready = self.public_mcp.revealed_credential().is_some();
+
+        let mut content = div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(self.tokens.metrics.settings_card_gap));
+
+        if let Some(error) = startup_error {
+            content = content.child(
+                div()
+                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                    .text_color(rgb(self.tokens.ui.error))
+                    .child(error),
+            );
+        }
+        if let Some(endpoint) = endpoint {
+            let endpoint_for_copy = endpoint.clone();
+            content = content.child(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(SETTINGS_PUBLIC_MCP_ENDPOINT_GAP))
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .flex_1()
+                            .text_size(px(self.tokens.metrics.ui_text_sm))
+                            .text_color(rgb(self.tokens.ui.text_muted))
+                            .child(endpoint),
+                    )
+                    .child(self.workspace_toolbar_action_button(
+                        self.i18n.t("settings_view.network.copy_endpoint"),
+                        Some(Self::render_lucide_icon(
+                            LucideIcon::Copy,
+                            SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE,
+                            rgb(self.tokens.ui.text),
+                        )),
+                        ToolbarButtonOptions::default(),
+                        cx.listener(move |_this, _event, _window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                endpoint_for_copy.clone(),
+                            ));
+                            cx.stop_propagation();
+                        }),
+                    )),
+            );
+        }
+
+        content = content.child(
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .flex()
+                .flex_wrap()
+                .items_end()
+                .gap(px(SETTINGS_PUBLIC_MCP_ENDPOINT_GAP))
+                .child(
+                    div()
+                        .w(px(SETTINGS_NETWORK_PORT_FIELD_WIDTH))
+                        .max_w_full()
+                        .child(self.network_input_field(
+                            "settings_view.network.public_mcp_port",
+                            "settings_view.network.public_mcp_port_hint",
+                            SettingsInput::PublicMcpPort,
+                            self.current_settings_input_value(SettingsInput::PublicMcpPort, cx),
+                            "0".to_string(),
+                            true,
+                            cx,
+                        )),
+                )
+                .child(self.workspace_toolbar_action_button(
+                    self.i18n.t("settings_view.network.apply_public_mcp_port"),
+                    None,
+                    ToolbarButtonOptions::default(),
+                    cx.listener(move |this, _event, _window, cx| {
+                        let draft = this.public_mcp.port_draft().trim().to_owned();
+                        let Ok(port) = draft.parse::<u16>() else {
+                            let error =
+                                this.i18n.t("settings_view.network.invalid_public_mcp_port");
+                            this.public_mcp.record_action_error(error);
+                            cx.notify();
+                            return;
+                        };
+                        let runtime = this.forwarding_runtime.handle().clone();
+                        if let Err(error) = this.public_mcp.apply_preferred_port(&runtime, port) {
+                            this.public_mcp.record_action_error(error.to_string());
+                        }
+                        cx.notify();
+                    }),
+                )),
+        );
+
+        content = content.child(
+            div()
+                .text_size(px(self.tokens.metrics.ui_text_xs))
+                .text_color(rgb(self.tokens.ui.text_muted))
+                .child(
+                    self.i18n
+                        .t("settings_view.network.public_mcp_security_hint"),
+                ),
+        );
+
+        if credential_ready {
+            content = content.child(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .rounded(px(self.tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(self.tokens.ui.warning))
+                    .p(px(SETTINGS_PUBLIC_MCP_CREDENTIAL_PADDING))
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(SETTINGS_PUBLIC_MCP_ROW_GAP))
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap(px(SETTINGS_PUBLIC_MCP_STATUS_GAP))
+                            .child(
+                                div()
+                                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                                    .text_color(rgb(self.tokens.ui.text))
+                                    .child(self.i18n.t("settings_view.network.credential_once")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(self.tokens.metrics.ui_text_xs))
+                                    .text_color(rgb(self.tokens.ui.warning))
+                                    .child(self.i18n.t("settings_view.network.stdio_json_hint")),
+                            ),
+                    )
+                    .child(self.workspace_toolbar_action_button(
+                        self.i18n.t("settings_view.network.copy_credential"),
+                        Some(Self::render_lucide_icon(
+                            LucideIcon::Copy,
+                            SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE,
+                            rgb(self.tokens.ui.bg),
+                        )),
+                        ToolbarButtonOptions {
+                            button: ButtonOptions {
+                                variant: ButtonVariant::Default,
+                                ..ButtonOptions::default()
+                            },
+                            ..ToolbarButtonOptions::default()
+                        },
+                        cx.listener(|this, _event, _window, cx| {
+                            if let Some(credential) = this.public_mcp.revealed_credential() {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    credential.to_owned(),
+                                ));
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ))
+                    .child(self.workspace_toolbar_action_button(
+                        self.i18n.t("settings_view.network.copy_stdio_json"),
+                        Some(Self::render_lucide_icon(
+                            LucideIcon::Copy,
+                            SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE,
+                            rgb(self.tokens.ui.text),
+                        )),
+                        ToolbarButtonOptions::default(),
+                        cx.listener(|this, _event, _window, cx| {
+                            if let Some(credential) = this.public_mcp.revealed_credential() {
+                                let mut config = public_mcp_stdio_json(credential);
+                                // The clipboard is the explicit external boundary; app state never retains the JSON.
+                                let clipboard_config = std::mem::take(&mut *config);
+                                cx.write_to_clipboard(ClipboardItem::new_string(clipboard_config));
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ))
+                    .child(self.workspace_toolbar_action_button(
+                        self.i18n.t("settings_view.network.dismiss_credential"),
+                        None,
+                        ToolbarButtonOptions::default(),
+                        cx.listener(|this, _event, _window, cx| {
+                            this.public_mcp.dismiss_revealed_credential();
+                            cx.notify();
+                            cx.stop_propagation();
+                        }),
+                    )),
+            );
+        }
+
+        content = content
+            .child(self.card_separator())
+            .child(self.network_subsection_heading(
+                "settings_view.network.external_clients",
+                "settings_view.network.external_clients_hint",
+            ));
+
+        if clients.is_empty() {
+            content = content.child(
+                div()
+                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                    .text_color(rgb(self.tokens.ui.text_muted))
+                    .child(self.i18n.t("settings_view.network.no_external_clients")),
+            );
+        } else {
+            for client in clients {
+                let client_ref_for_toggle = client.client_ref.clone();
+                let client_ref_for_remove = client.client_ref.clone();
+                let client_ref_for_mode = client.client_ref.clone();
+                let next_enabled = !client.enabled;
+                let next_approval_mode = match client.approval_mode {
+                    oxideterm_public_mcp::ClientApprovalMode::Standard => {
+                        oxideterm_public_mcp::ClientApprovalMode::Unattended
+                    }
+                    oxideterm_public_mcp::ClientApprovalMode::Unattended => {
+                        oxideterm_public_mcp::ClientApprovalMode::Standard
+                    }
+                };
+                let status_key = if client.enabled {
+                    "settings_view.network.client_enabled"
+                } else {
+                    "settings_view.network.client_disabled"
+                };
+                let toggle_key = if client.enabled {
+                    "settings_view.network.disable_client"
+                } else {
+                    "settings_view.network.enable_client"
+                };
+                let mode_key = match client.approval_mode {
+                    oxideterm_public_mcp::ClientApprovalMode::Standard => {
+                        "settings_view.network.client_mode_standard"
+                    }
+                    oxideterm_public_mcp::ClientApprovalMode::Unattended => {
+                        "settings_view.network.client_mode_full"
+                    }
+                };
+                let mode_toggle_key = match client.approval_mode {
+                    oxideterm_public_mcp::ClientApprovalMode::Standard => {
+                        "settings_view.network.switch_to_full_mode"
+                    }
+                    oxideterm_public_mcp::ClientApprovalMode::Unattended => {
+                        "settings_view.network.switch_to_standard_mode"
+                    }
+                };
+                let mut group_controls = div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(SETTINGS_PUBLIC_MCP_ROW_GAP));
+                let visible_tool_groups = std::iter::once(oxideterm_public_mcp::ToolGroup::Basic)
+                    .chain(
+                        oxideterm_public_mcp::ToolGroup::selectable()
+                            .iter()
+                            .copied(),
+                    );
+                for tool_group in visible_tool_groups {
+                    let label_key = public_mcp_tool_group_label_key(tool_group);
+                    let checked = client.tool_groups.contains(&tool_group);
+                    let client_ref_for_group = client.client_ref.clone();
+                    let required_group = tool_group == oxideterm_public_mcp::ToolGroup::Basic;
+                    let mut control = checkbox_with_state(
+                        &self.tokens,
+                        String::new(),
+                        if checked {
+                            CheckboxState::Checked
+                        } else {
+                            CheckboxState::Unchecked
+                        },
+                        CheckboxOptions {
+                            disabled: required_group,
+                            ..CheckboxOptions::default()
+                        },
+                    );
+                    if !required_group {
+                        control = control.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, _window, cx| {
+                                if let Err(error) = this.set_public_mcp_client_tool_group(
+                                    &client_ref_for_group,
+                                    tool_group,
+                                    !checked,
+                                    cx,
+                                ) {
+                                    this.public_mcp.record_action_error(error);
+                                }
+                                cx.notify();
+                                cx.stop_propagation();
+                            }),
+                        );
+                    }
+                    group_controls = group_controls.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(SETTINGS_PUBLIC_MCP_STATUS_GAP))
+                            .child(control)
+                            .child(
+                                div()
+                                    .text_size(px(self.tokens.metrics.ui_text_xs))
+                                    .text_color(rgb(self.tokens.ui.text_muted))
+                                    .child(self.i18n.t(label_key)),
+                            ),
+                    );
+                }
+                content = content.child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(SETTINGS_PUBLIC_MCP_DETAIL_GAP))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap(px(SETTINGS_PUBLIC_MCP_ROW_GAP))
+                                .child(
+                                    div()
+                                        .min_w(px(0.0))
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(SETTINGS_PUBLIC_MCP_STATUS_GAP))
+                                        .child(
+                                            div()
+                                                .text_size(px(self.tokens.metrics.ui_text_sm))
+                                                .text_color(rgb(self.tokens.ui.text))
+                                                .child(client.label),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(self.tokens.metrics.ui_text_xs))
+                                                .text_color(rgb(self.tokens.ui.text_muted))
+                                                .child(format!(
+                                                    "{} · {}",
+                                                    self.i18n.t(status_key),
+                                                    self.i18n.t(mode_key)
+                                                )),
+                                        ),
+                                )
+                                .child(self.workspace_toolbar_action_button(
+                                    self.i18n.t(mode_toggle_key),
+                                    None,
+                                    ToolbarButtonOptions::default(),
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        if let Err(error) = this
+                                            .set_public_mcp_client_approval_mode(
+                                                &client_ref_for_mode,
+                                                next_approval_mode,
+                                                cx,
+                                            )
+                                        {
+                                            this.public_mcp.record_action_error(error);
+                                        }
+                                        cx.notify();
+                                        cx.stop_propagation();
+                                    }),
+                                ))
+                                .child(self.workspace_toolbar_action_button(
+                                    self.i18n.t(toggle_key),
+                                    None,
+                                    ToolbarButtonOptions::default(),
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        if let Err(error) = this.set_public_mcp_client_enabled(
+                                            &client_ref_for_toggle,
+                                            next_enabled,
+                                            cx,
+                                        ) {
+                                            this.public_mcp.record_action_error(error);
+                                        }
+                                        cx.notify();
+                                        cx.stop_propagation();
+                                    }),
+                                ))
+                                .child(self.workspace_toolbar_action_button(
+                                    self.i18n.t("settings_view.network.revoke_client"),
+                                    Some(Self::render_lucide_icon(
+                                        LucideIcon::Trash2,
+                                        SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE,
+                                        rgb(self.tokens.ui.text),
+                                    )),
+                                    ToolbarButtonOptions::default(),
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        if let Err(error) = this
+                                            .remove_public_mcp_client(&client_ref_for_remove, cx)
+                                        {
+                                            this.public_mcp.record_action_error(error);
+                                        }
+                                        cx.notify();
+                                        cx.stop_propagation();
+                                    }),
+                                )),
+                        )
+                        .child(group_controls),
+                );
+            }
+        }
+
+        let next_client_number = self.public_mcp.clients().len() + 1;
+        content = content.child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(SETTINGS_PUBLIC_MCP_ROW_GAP))
+                .child(self.workspace_toolbar_action_button(
+                    self.i18n.t("settings_view.network.create_standard_client"),
+                    Some(Self::render_lucide_icon(
+                        LucideIcon::Plus,
+                        SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE,
+                        rgb(self.tokens.ui.bg),
+                    )),
+                    ToolbarButtonOptions {
+                        button: ButtonOptions {
+                            variant: ButtonVariant::Default,
+                            ..ButtonOptions::default()
+                        },
+                        ..ToolbarButtonOptions::default()
+                    },
+                    cx.listener(move |this, _event, _window, cx| {
+                        let label = format!(
+                            "{} {}",
+                            this.i18n.t("settings_view.network.external_client_name"),
+                            next_client_number
+                        );
+                        if let Err(error) = this.public_mcp.create_client(
+                            label,
+                            oxideterm_public_mcp::ClientApprovalMode::Standard,
+                        ) {
+                            this.public_mcp.record_action_error(error);
+                        }
+                        cx.notify();
+                        cx.stop_propagation();
+                    }),
+                ))
+                .child(self.workspace_toolbar_action_button(
+                    self.i18n.t("settings_view.network.create_full_client"),
+                    None,
+                    ToolbarButtonOptions::default(),
+                    cx.listener(move |this, _event, _window, cx| {
+                        let label = format!(
+                            "{} {}",
+                            this.i18n.t("settings_view.network.external_client_name"),
+                            next_client_number
+                        );
+                        if let Err(error) = this.public_mcp.create_client(
+                            label,
+                            oxideterm_public_mcp::ClientApprovalMode::Unattended,
+                        ) {
+                            this.public_mcp.record_action_error(error);
+                        }
+                        cx.notify();
+                        cx.stop_propagation();
+                    }),
+                )),
+        );
+
+        content = content
+            .child(self.card_separator())
+            .child(self.network_subsection_heading(
+                "settings_view.network.pending_approvals",
+                "settings_view.network.pending_approvals_hint",
+            ));
+        let pending = approvals
+            .into_iter()
+            .filter(|approval| approval.status == oxideterm_public_mcp::ApprovalStatus::Pending)
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            content = content.child(
+                div()
+                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                    .text_color(rgb(self.tokens.ui.text_muted))
+                    .child(self.i18n.t("settings_view.network.no_pending_approvals")),
+            );
+        } else {
+            for approval in pending {
+                let approval_ref_for_accept = approval.approval_ref.clone();
+                let approval_ref_for_reject = approval.approval_ref.clone();
+                let client_label = client_labels
+                    .get(&approval.client_ref)
+                    .cloned()
+                    .unwrap_or_else(|| approval.client_ref.to_string());
+                let client_summary = self
+                    .i18n
+                    .t("settings_view.network.approval_client")
+                    .replace("{{client}}", &client_label);
+                let target_label =
+                    self.public_mcp_target_label(&approval.client_ref, &approval.target, cx);
+                let mut approval_details = div()
+                    .min_w(px(0.0))
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SETTINGS_PUBLIC_MCP_DETAIL_GAP))
+                    .child(
+                        div()
+                            .text_size(px(self.tokens.metrics.ui_text_sm))
+                            .text_color(rgb(self.tokens.ui.text))
+                            .child(approval.tool_name),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(self.tokens.metrics.ui_text_xs))
+                            .text_color(rgb(self.tokens.ui.text_muted))
+                            .child(client_summary),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(self.tokens.metrics.ui_text_xs))
+                            .text_color(rgb(self.tokens.ui.text_muted))
+                            .child(target_label),
+                    );
+                if let Some(command) = approval.review.command() {
+                    let command_summary = self
+                        .i18n
+                        .t("settings_view.network.approval_command")
+                        .replace("{{command}}", command);
+                    approval_details = approval_details.child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .rounded(px(self.tokens.radii.sm))
+                            .bg(rgb(self.tokens.ui.bg_hover))
+                            .px(px(SETTINGS_PUBLIC_MCP_COMMAND_PADDING_X))
+                            .py(px(SETTINGS_PUBLIC_MCP_COMMAND_PADDING_Y))
+                            .font_family(settings_mono_font_family(self.settings_store.settings()))
+                            .text_size(px(self.tokens.metrics.ui_text_xs))
+                            .text_color(rgb(self.tokens.ui.text))
+                            .whitespace_normal()
+                            .child(command_summary),
+                    );
+                }
+                if let Some(working_directory) = approval.review.working_directory() {
+                    approval_details = approval_details.child(
+                        div()
+                            .text_size(px(self.tokens.metrics.ui_text_xs))
+                            .text_color(rgb(self.tokens.ui.text_muted))
+                            .child(
+                                self.i18n
+                                    .t("settings_view.network.approval_working_directory")
+                                    .replace("{{directory}}", working_directory),
+                            ),
+                    );
+                }
+                content = content.child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(SETTINGS_PUBLIC_MCP_ROW_GAP))
+                        .child(approval_details)
+                        .child(self.workspace_toolbar_action_button(
+                            self.i18n.t("settings_view.network.approve_action"),
+                            Some(Self::render_lucide_icon(
+                                LucideIcon::Check,
+                                SETTINGS_PUBLIC_MCP_ACTION_ICON_SIZE,
+                                rgb(self.tokens.ui.bg),
+                            )),
+                            ToolbarButtonOptions {
+                                button: ButtonOptions {
+                                    variant: ButtonVariant::Default,
+                                    ..ButtonOptions::default()
+                                },
+                                ..ToolbarButtonOptions::default()
+                            },
+                            cx.listener(move |this, _event, _window, cx| {
+                                if let Err(error) = this.public_mcp.set_approval_status(
+                                    &approval_ref_for_accept,
+                                    oxideterm_public_mcp::ApprovalStatus::Approved,
+                                ) {
+                                    this.public_mcp.record_action_error(error);
+                                }
+                                cx.notify();
+                                cx.stop_propagation();
+                            }),
+                        ))
+                        .child(self.workspace_toolbar_action_button(
+                            self.i18n.t("settings_view.network.reject_action"),
+                            None,
+                            ToolbarButtonOptions::default(),
+                            cx.listener(move |this, _event, _window, cx| {
+                                if let Err(error) = this.public_mcp.set_approval_status(
+                                    &approval_ref_for_reject,
+                                    oxideterm_public_mcp::ApprovalStatus::Rejected,
+                                ) {
+                                    this.public_mcp.record_action_error(error);
+                                }
+                                cx.notify();
+                                cx.stop_propagation();
+                            }),
+                        )),
+                );
+            }
+        }
+
+        self.settings_card(
+            "settings_view.network.public_mcp",
+            "settings_view.network.public_mcp_hint",
+            vec![content.into_any_element()],
+        )
     }
 
     fn settings_network_shared_proxy_section(
@@ -1304,6 +2054,18 @@ mod tests {
     use super::*;
     use gpui::{AppContext, TestAppContext};
     use oxideterm_ssh::{UpstreamProxyAuth, UpstreamProxyProtocol};
+
+    #[test]
+    fn stdio_mcp_json_escapes_the_one_time_credential() {
+        let credential = "credential-with-\"quote\\slash";
+        let config = public_mcp_stdio_json(credential);
+        let value: serde_json::Value =
+            serde_json::from_str(&config).expect("parse generated stdio MCP configuration");
+
+        assert_eq!(value["command"], CLI_COMPANION_COMMAND_NAME);
+        assert_eq!(value["args"], serde_json::json!(["mcp", "bridge"]));
+        assert_eq!(value["env"]["OXIDETERM_MCP_TOKEN"], credential);
+    }
 
     #[test]
     fn proxy_route_test_enters_workspace_tokio_runtime() {

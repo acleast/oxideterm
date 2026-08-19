@@ -21,12 +21,14 @@ pub(super) fn build_client_rdp_config(config: &RdpWorkerConfig) -> Result<Client
         domain: None,
         enable_tls: true,
         enable_credssp: true,
+        enable_standard_rdp_security: false,
         desktop_size: connector::DesktopSize { width, height },
         desktop_scale_factor: config.scale_factor,
         keyboard_type: KeyboardType::IbmEnhanced,
         keyboard_subtype: 0,
         keyboard_layout: 0,
         keyboard_functional_keys_count: 12,
+        connection_type: ConnectionType::Lan,
         ime_file_name: String::new(),
         bitmap: Some(connector::BitmapConfig {
             lossy_compression: true,
@@ -55,8 +57,15 @@ pub(super) fn build_client_rdp_config(config: &RdpWorkerConfig) -> Result<Client
     };
     log_rdp_client_graphics_config(&connector);
 
+    let destination = ClientRdpDestination::from_parts(&config.endpoint.host, config.endpoint.port);
+    let transport_destination = config
+        .transport_endpoint
+        .as_ref()
+        .map(|endpoint| ClientRdpDestination::from_parts(&endpoint.host, endpoint.port))
+        .unwrap_or_else(|| destination.clone());
     Ok(ClientRdpConfig {
-        destination: ClientRdpDestination::from_parts(&config.endpoint.host, config.endpoint.port),
+        destination,
+        transport_destination,
         connector,
         graphics_epoch: config.graphics_epoch,
         session_options: config.session_options,
@@ -219,6 +228,10 @@ pub(super) fn remote_desktop_error_category_from_message(
         || normalized.contains("socket")
         || normalized.contains("network")
         || normalized.contains("transport")
+        || normalized.contains("server closed established")
+        || normalized.contains("connection reset")
+        || normalized.contains("broken pipe")
+        || normalized.contains("unexpected eof")
     {
         RemoteDesktopErrorCategory::Network
     } else if normalized.contains("protocol")

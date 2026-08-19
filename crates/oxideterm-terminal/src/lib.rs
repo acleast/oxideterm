@@ -51,7 +51,7 @@ pub use data::{
     GraphicsOptions, TerminalAttrs, TerminalCell, TerminalColor, TerminalCursorShape,
     TerminalImageAnimationState, TerminalImageData, TerminalImageFrame, TerminalImageId,
     TerminalImageProtocol, TerminalImageSnapshot, TerminalRow, TerminalSearchMatch,
-    TerminalSearchRange, TerminalSnapshot,
+    TerminalSearchRange, TerminalSnapshot, TerminalStyleOrigin,
 };
 pub use editor_integration::{
     EMACS_FREE_TYPE_INTEGRATION_SOURCE, TerminalEditorApplication, TerminalEditorCapabilities,
@@ -81,9 +81,10 @@ pub use remote_shell_integration::{
 };
 pub use search::TerminalSearchSource;
 pub use session::{
-    SerialControlLine, SerialControlState, SerialDisplayMode, SerialError, SerialErrorCode,
-    SerialFlowControl, SerialLineEnding, SerialParity, SerialPortInfo, SerialRuntimeOptions,
-    SerialSendMode, SerialSessionConfig, SshPtySession, SshSessionConfig, TelnetControlCommand,
+    MoshConnectionStatus, MoshPredictionDisplay, MoshTerminalConfig, SerialControlLine,
+    SerialControlState, SerialDisplayMode, SerialError, SerialErrorCode, SerialFlowControl,
+    SerialLineEnding, SerialParity, SerialPortInfo, SerialRuntimeOptions, SerialSendMode,
+    SerialSessionConfig, SshPtySession, SshSessionConfig, TelnetControlCommand,
     TelnetSessionConfig, TerminalDrainBudget, TerminalDrainReport, TerminalMagicKind,
     TerminalOutputProcessor, TerminalResize, TerminalSession, TerminalSessionBackend,
     TerminalSessionKind, TerminalSessionStatus, serial_list_ports,
@@ -103,7 +104,7 @@ pub use shell_integration::{
 
 use color::{
     OXIDETERM_DARK_THEME, attrs_from_flags, color_for_alacritty_request_with_override,
-    style_colors_for_cell,
+    style_colors_for_cell, style_origin_for_cell,
 };
 use local_graphics_event_loop::{
     LocalGraphicsEventLoop, LocalGraphicsMsg, LocalGraphicsNotifier, LocalPtyReadReport,

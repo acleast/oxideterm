@@ -5,8 +5,9 @@ mod tests {
 
     use crate::{
         ConnectionTerminalOptions, PrivilegeCredentialKind, SavePrivilegeCredentialRequest,
-        SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest, SavedUpstreamProxyProtocol,
-        SerialFlowControl, SerialProfile, SerialProfilesSyncSnapshot,
+        MoshIpFamily, MoshPredictionMode, MoshUdpPortSelection, SaveMoshProfileRequest,
+        SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest, SaveTelnetProfileRequest,
+        SavedUpstreamProxyProtocol, SerialFlowControl, SerialProfile, SerialProfilesSyncSnapshot,
     };
     use oxideterm_remote_desktop::RemoteDesktopProtocol;
     use rand10::{rand_core::UnwrapErr, rngs::SysRng};
@@ -58,7 +59,9 @@ mod tests {
                 legacy_ssh_compatibility: false,
             }],
             upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
+            proxy_command: None,
             options: ConnectionOptions {
+                connect_timeout_seconds: Some(120),
                 keep_alive_interval: 30,
                 compression: true,
                 jump_host: None,
@@ -169,6 +172,7 @@ mod tests {
         assert_eq!(imported.host, "example.com");
         assert_eq!(imported.port, 2222);
         assert_eq!(imported.options.keep_alive_interval, 30);
+        assert_eq!(imported.options.connect_timeout_seconds, Some(120));
         assert!(imported.options.compression);
         assert_eq!(imported.proxy_chain.len(), 1);
         assert!(
@@ -324,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn export_import_roundtrip_preserves_serial_profiles() {
+    fn export_import_roundtrip_preserves_serial_and_telnet_profiles() {
         let mut source = temp_store("serial-profile-source");
         source
             .upsert_imported_connection(saved_connection("conn-1", "Prod"))
@@ -341,6 +345,18 @@ mod tests {
         let serial_profiles_json =
             serde_json::to_string_pretty(&source.export_serial_profiles_snapshot().unwrap())
                 .unwrap();
+        let telnet_profile = source
+            .upsert_telnet_profile(SaveTelnetProfileRequest {
+                id: Some("telnet-1".to_string()),
+                name: "Router console".to_string(),
+                host: "router.example.test".to_string(),
+                port: 2323,
+                ..SaveTelnetProfileRequest::default()
+            })
+            .unwrap();
+        let telnet_profiles_json =
+            serde_json::to_string_pretty(&source.export_telnet_profiles_snapshot().unwrap())
+                .unwrap();
 
         let bytes = export_connections_to_oxide(
             &source,
@@ -348,12 +364,14 @@ mod tests {
             "secret!",
             OxideExportOptions {
                 serial_profiles_json: Some(serial_profiles_json),
+                telnet_profiles_json: Some(telnet_profiles_json),
                 ..OxideExportOptions::default()
             },
         )
         .unwrap();
         let file = OxideFile::from_bytes(&bytes).unwrap();
         assert_eq!(file.metadata.serial_profiles_count, Some(1));
+        assert_eq!(file.metadata.telnet_profiles_count, Some(1));
 
         let preview = preview_oxide_import(
             &temp_store("serial-profile-preview"),
@@ -363,6 +381,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(preview.serial_profiles_count, 1);
+        assert_eq!(preview.telnet_profiles_count, 1);
 
         let mut target = temp_store("serial-profile-target");
         let imported = apply_oxide_import(
@@ -373,7 +392,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(imported.imported_serial_profiles, 1);
+        assert_eq!(imported.imported_telnet_profiles, 1);
         assert_eq!(target.serial_profiles(), &[profile]);
+        assert_eq!(target.telnet_profiles(), &[telnet_profile]);
 
         let mut skipped_target = temp_store("serial-profile-skip-target");
         let skipped = apply_oxide_import_with_options(
@@ -382,19 +403,89 @@ mod tests {
             "secret!",
             OxideImportOptions {
                 import_serial_profiles: false,
+                import_telnet_profiles: false,
                 ..OxideImportOptions::default()
             },
         )
         .unwrap();
         assert_eq!(skipped.imported_serial_profiles, 0);
         assert_eq!(skipped.skipped_serial_profiles, 1);
+        assert_eq!(skipped.imported_telnet_profiles, 0);
+        assert_eq!(skipped.skipped_telnet_profiles, 1);
         assert!(skipped_target.serial_profiles().is_empty());
+        assert!(skipped_target.telnet_profiles().is_empty());
+    }
+
+    #[test]
+    fn export_import_roundtrip_preserves_mosh_profiles_without_credentials() {
+        let mut source = temp_store("mosh-profile-source");
+        let profile = source
+            .upsert_mosh_profile(SaveMoshProfileRequest {
+                id: Some("mosh-1".to_string()),
+                name: "Roaming shell".to_string(),
+                group: Some("Mobile".to_string()),
+                icon: None,
+                color: None,
+                icon_background_color: None,
+                host: "example.test".to_string(),
+                ssh_port: 22,
+                username: "alice".to_string(),
+                auth: SavedAuth::Agent,
+                server_executable: "mosh-server".to_string(),
+                udp_host_override: None,
+                udp_port: MoshUdpPortSelection::Automatic,
+                ip_family: MoshIpFamily::Auto,
+                prediction: MoshPredictionMode::Adaptive,
+                locale: Some("en_US.UTF-8".to_string()),
+                identity_agent: None,
+                legacy_ssh_compatibility: false,
+            })
+            .unwrap();
+        let mosh_profiles_json =
+            serde_json::to_string_pretty(&source.export_mosh_profiles_snapshot().unwrap())
+                .unwrap();
+
+        let bytes = export_connections_to_oxide(
+            &source,
+            &[],
+            "secret!",
+            OxideExportOptions {
+                mosh_profiles_json: Some(mosh_profiles_json),
+                ..OxideExportOptions::default()
+            },
+        )
+        .unwrap();
+        let file = OxideFile::from_bytes(&bytes).unwrap();
+        assert_eq!(file.metadata.mosh_profiles_count, Some(1));
+        let preview = preview_oxide_import(
+            &temp_store("mosh-profile-preview"),
+            &bytes,
+            "secret!",
+            ImportConflictStrategy::Rename,
+        )
+        .unwrap();
+        assert_eq!(preview.mosh_profiles_count, 1);
+
+        let mut target = temp_store("mosh-profile-target");
+        let imported = apply_oxide_import(
+            &mut target,
+            &bytes,
+            "secret!",
+            ImportConflictStrategy::Rename,
+        )
+        .unwrap();
+        assert_eq!(imported.imported_mosh_profiles, 1);
+        assert_eq!(target.mosh_profiles()[0].id, profile.id);
+        assert!(matches!(target.mosh_profiles()[0].auth, SavedAuth::Agent));
     }
 
     #[test]
     fn export_import_roundtrip_preserves_remote_desktop_assets_without_credentials() {
         const CREDENTIAL: &str = "oxide-remote-desktop-secret";
         let mut source = temp_store("remote-desktop-profile-source");
+        source
+            .upsert_imported_connection(saved_connection("gateway-source", "SSH gateway"))
+            .unwrap();
         source
             .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
                 id: Some("remote-1".to_string()),
@@ -405,6 +496,7 @@ mod tests {
                 port: 5900,
                 username: Some("operator".to_string()),
                 credential: Some(SecretString::from(CREDENTIAL)),
+                ssh_gateway_connection_id: Some("gateway-source".to_string()),
                 ..SaveRemoteDesktopProfileRequest::default()
             })
             .unwrap();
@@ -417,7 +509,7 @@ mod tests {
 
         let bytes = export_connections_to_oxide(
             &source,
-            &[],
+            &["gateway-source".to_string()],
             "secret!",
             OxideExportOptions {
                 remote_desktop_profiles_json: Some(snapshot_json),
@@ -460,6 +552,10 @@ mod tests {
         assert_eq!(imported_profile.protocol, RemoteDesktopProtocol::Vnc);
         assert_eq!(imported_profile.host, "vnc.example.com");
         assert!(imported_profile.credential_ref.is_none());
+        assert_eq!(
+            imported_profile.ssh_gateway_connection_id.as_deref(),
+            Some(target.connections()[0].id.as_str())
+        );
 
         let mut skipped_target = temp_store("remote-desktop-profile-skip-target");
         let skipped = apply_oxide_import_with_options(
@@ -744,6 +840,129 @@ mod tests {
     }
 
     #[test]
+    fn batch_encryption_context_keeps_files_independent_and_compatible() {
+        let source = temp_store("batch-encryption-source");
+        let context = OxideBatchEncryptionContext::new("secret!").unwrap();
+        let mut first_progress = Vec::new();
+        let first = export_connections_to_oxide_with_context_and_progress(
+            &source,
+            &[],
+            OxideExportOptions {
+                description: Some("first".to_string()),
+                app_settings_json: Some(r#"{"general":{"language":"en"}}"#.to_string()),
+                ..OxideExportOptions::default()
+            },
+            &context,
+            |stage, _, _| first_progress.push(stage.to_string()),
+        )
+        .unwrap();
+        let second = export_connections_to_oxide_with_context_and_progress(
+            &source,
+            &[],
+            OxideExportOptions {
+                description: Some("second".to_string()),
+                app_settings_json: Some(r#"{"general":{"language":"zh-CN"}}"#.to_string()),
+                ..OxideExportOptions::default()
+            },
+            &context,
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        let first_file = OxideFile::from_bytes(&first).unwrap();
+        let second_file = OxideFile::from_bytes(&second).unwrap();
+        assert_eq!(first_file.salt, second_file.salt);
+        assert_ne!(first_file.nonce, second_file.nonce);
+        assert!(first_progress.iter().any(|stage| stage == "reusing_derived_key"));
+        assert!(!first_progress.iter().any(|stage| stage == "deriving_key"));
+
+        let payload = decrypt_payload(&first, "secret!").unwrap();
+        assert_eq!(
+            payload.app_settings_json.as_deref(),
+            Some(r#"{"general":{"language":"en"}}"#)
+        );
+    }
+
+    #[test]
+    fn batch_encryption_context_rejects_short_passwords_before_derivation() {
+        assert!(matches!(
+            OxideBatchEncryptionContext::new("short"),
+            Err(OxideFileError::PasswordTooShort)
+        ));
+    }
+
+    #[test]
+    fn batch_decryption_context_reuses_matching_salt_and_supports_legacy_salts() {
+        let source = temp_store("batch-decryption-source");
+        let encryption_context = OxideBatchEncryptionContext::new("secret!").unwrap();
+        let first = export_connections_to_oxide_with_context_and_progress(
+            &source,
+            &[],
+            OxideExportOptions {
+                app_settings_json: Some(r#"{"general":{"language":"en"}}"#.to_string()),
+                ..OxideExportOptions::default()
+            },
+            &encryption_context,
+            |_, _, _| {},
+        )
+        .unwrap();
+        let second = export_connections_to_oxide_with_context_and_progress(
+            &source,
+            &[],
+            OxideExportOptions {
+                app_settings_json: Some(r#"{"general":{"language":"zh-CN"}}"#.to_string()),
+                ..OxideExportOptions::default()
+            },
+            &encryption_context,
+            |_, _, _| {},
+        )
+        .unwrap();
+        let legacy = export_connections_to_oxide(
+            &source,
+            &[],
+            "secret!",
+            OxideExportOptions {
+                app_settings_json: Some(r#"{"general":{"language":"fr"}}"#.to_string()),
+                ..OxideExportOptions::default()
+            },
+        )
+        .unwrap();
+
+        let mut decryption_context = OxideBatchDecryptionContext::new("secret!").unwrap();
+        let mut first_stages = Vec::new();
+        preview_oxide_import_with_context_and_progress(
+            &source,
+            &first,
+            &mut decryption_context,
+            ImportConflictStrategy::Replace,
+            |stage, _, _| first_stages.push(stage.to_string()),
+        )
+        .unwrap();
+        let mut second_stages = Vec::new();
+        preview_oxide_import_with_context_and_progress(
+            &source,
+            &second,
+            &mut decryption_context,
+            ImportConflictStrategy::Replace,
+            |stage, _, _| second_stages.push(stage.to_string()),
+        )
+        .unwrap();
+        let mut legacy_stages = Vec::new();
+        preview_oxide_import_with_context_and_progress(
+            &source,
+            &legacy,
+            &mut decryption_context,
+            ImportConflictStrategy::Replace,
+            |stage, _, _| legacy_stages.push(stage.to_string()),
+        )
+        .unwrap();
+
+        assert!(first_stages.iter().any(|stage| stage == "deriving_key"));
+        assert!(second_stages.iter().any(|stage| stage == "reusing_derived_key"));
+        assert!(legacy_stages.iter().any(|stage| stage == "deriving_key"));
+    }
+
+    #[test]
     fn rename_strategy_matches_copy_suffix_contract() {
         let mut store = temp_store("rename");
         store
@@ -751,6 +970,7 @@ mod tests {
             .unwrap();
 
         let payload = vec![EncryptedConnection {
+            source_connection_id: None,
             name: "Prod".to_string(),
             group: None,
             host: "example.org".to_string(),
@@ -1106,9 +1326,13 @@ mod tests {
 
     #[test]
     fn replace_and_merge_import_report_forward_owner_operations() {
+        let imported_connect_timeout_seconds = 120;
+        let existing_connect_timeout_seconds = 60;
         let mut source = temp_store("forward-op-source");
+        let mut source_connection = saved_connection("conn-1", "Prod");
+        source_connection.options.connect_timeout_seconds = Some(imported_connect_timeout_seconds);
         source
-            .upsert_imported_connection(saved_connection("conn-1", "Prod"))
+            .upsert_imported_connection(source_connection)
             .unwrap();
         let bytes = export_connections_to_oxide(
             &source,
@@ -1149,8 +1373,10 @@ mod tests {
         assert!(replaced.forward_merge_owner_ids.is_empty());
 
         let mut merge_target = temp_store("forward-op-merge");
+        let mut existing_connection = saved_connection("existing", "Prod");
+        existing_connection.options.connect_timeout_seconds = Some(existing_connect_timeout_seconds);
         merge_target
-            .upsert_imported_connection(saved_connection("existing", "Prod"))
+            .upsert_imported_connection(existing_connection)
             .unwrap();
         let merged = apply_oxide_import(
             &mut merge_target,
@@ -1161,6 +1387,14 @@ mod tests {
         .unwrap();
         assert_eq!(merged.forward_merge_owner_ids, vec!["existing".to_string()]);
         assert!(merged.forward_replace_owner_ids.is_empty());
+        assert_eq!(
+            merge_target
+                .get("existing")
+                .unwrap()
+                .options
+                .connect_timeout_seconds,
+            Some(imported_connect_timeout_seconds)
+        );
     }
 
     #[test]
@@ -1214,6 +1448,7 @@ mod tests {
 
     fn encrypted_agent_connection(name: &str, host: &str) -> EncryptedConnection {
         EncryptedConnection {
+            source_connection_id: None,
             name: name.to_string(),
             group: None,
             host: host.to_string(),

@@ -3,7 +3,7 @@ use alacritty_terminal::{
     vte::ansi::{Color, NamedColor, Rgb},
 };
 
-use crate::{TerminalAttrs, TerminalColor};
+use crate::{TerminalAttrs, TerminalColor, TerminalStyleOrigin};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OxideTermTheme {
@@ -64,7 +64,7 @@ pub(crate) fn attrs_from_flags(flags: Flags) -> TerminalAttrs {
     }
 }
 
-fn color_to_rgb(color: Color) -> TerminalColor {
+pub(crate) fn color_to_rgb(color: Color) -> TerminalColor {
     match color {
         Color::Named(named) => named_color_to_rgb(named),
         Color::Spec(rgb) => TerminalColor::rgb(rgb.r, rgb.g, rgb.b),
@@ -208,6 +208,44 @@ pub(crate) fn style_colors_for_cell(
     }
 
     (fg, bg)
+}
+
+pub(crate) fn style_origin_for_cell(
+    mut foreground: Color,
+    mut background: Color,
+    attrs: TerminalAttrs,
+) -> TerminalStyleOrigin {
+    if attrs.inverse {
+        std::mem::swap(&mut foreground, &mut background);
+    }
+    TerminalStyleOrigin {
+        foreground_explicit: !matches!(foreground, Color::Named(NamedColor::Foreground)),
+        background_explicit: !matches!(background, Color::Named(NamedColor::Background)),
+    }
+}
+
+#[cfg(test)]
+mod style_origin_tests {
+    use super::*;
+
+    #[test]
+    fn style_origin_distinguishes_default_and_explicit_ansi_colors() {
+        let default = style_origin_for_cell(
+            Color::Named(NamedColor::Foreground),
+            Color::Named(NamedColor::Background),
+            TerminalAttrs::default(),
+        );
+        let explicit = style_origin_for_cell(
+            Color::Indexed(1),
+            Color::Named(NamedColor::Background),
+            TerminalAttrs::default(),
+        );
+
+        assert!(!default.foreground_explicit);
+        assert!(!default.background_explicit);
+        assert!(explicit.foreground_explicit);
+        assert!(!explicit.background_explicit);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

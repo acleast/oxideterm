@@ -366,6 +366,77 @@ impl SshConnectionHandle {
         timeout: Duration,
         max_output_size: usize,
     ) -> Result<SshCommandOutput, SshTransportError> {
+        let output = self
+            .run_command_capture_bytes(command, timeout, max_output_size)
+            .await?;
+        Ok(SshCommandOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            exit_code: output.exit_code,
+            truncated: output.truncated,
+        })
+    }
+
+    pub async fn run_secret_command_capture(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output_size: usize,
+    ) -> Result<SshSecretCommandOutput, SshTransportError> {
+        let output = self
+            .run_command_capture_bytes(command, timeout, max_output_size)
+            .await?;
+        // Move both streams directly into zeroizing owners without a plaintext copy.
+        Ok(SshSecretCommandOutput {
+            stdout: Zeroizing::new(output.stdout),
+            stderr: Zeroizing::new(output.stderr),
+            exit_code: output.exit_code,
+            truncated: output.truncated,
+        })
+    }
+
+    pub async fn run_secret_pty_command_capture(
+        &self,
+        command: &str,
+        columns: u32,
+        rows: u32,
+        timeout: Duration,
+        max_output_size: usize,
+    ) -> Result<SshSecretCommandOutput, SshTransportError> {
+        let output = self
+            .run_command_capture_bytes_with_pty(
+                command,
+                timeout,
+                max_output_size,
+                Some((columns.max(1), rows.max(1))),
+            )
+            .await?;
+        // The PTY can echo secret bootstrap material, so both streams retain zeroizing owners.
+        Ok(SshSecretCommandOutput {
+            stdout: Zeroizing::new(output.stdout),
+            stderr: Zeroizing::new(output.stderr),
+            exit_code: output.exit_code,
+            truncated: output.truncated,
+        })
+    }
+
+    async fn run_command_capture_bytes(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output_size: usize,
+    ) -> Result<SshCommandCaptureBytes, SshTransportError> {
+        self.run_command_capture_bytes_with_pty(command, timeout, max_output_size, None)
+            .await
+    }
+
+    async fn run_command_capture_bytes_with_pty(
+        &self,
+        command: &str,
+        timeout: Duration,
+        max_output_size: usize,
+        pty_size: Option<(u32, u32)>,
+    ) -> Result<SshCommandCaptureBytes, SshTransportError> {
         let Some(pooled) = self.physical::<PooledSshConnection>() else {
             return Err(SshTransportError::ConnectionFailed(
                 "no active SSH connection is available for remote command execution".to_string(),
@@ -384,6 +455,20 @@ impl SshConnectionHandle {
                 .await
                 .map_err(|error| SshTransportError::Channel(error.to_string()))?
         };
+        if let Some((columns, rows)) = pty_size {
+            channel
+                .request_pty(
+                    false,
+                    "xterm-256color",
+                    columns,
+                    rows,
+                    0,
+                    0,
+                    DEFAULT_PTY_MODES,
+                )
+                .await
+                .map_err(|error| SshTransportError::Channel(error.to_string()))?;
+        }
         channel
             .exec(true, command)
             .await
@@ -433,9 +518,9 @@ impl SshConnectionHandle {
         .map_err(|_| SshTransportError::Timeout)?;
         let _ = channel.close().await;
 
-        Ok(SshCommandOutput {
-            stdout: String::from_utf8_lossy(&stdout).to_string(),
-            stderr: String::from_utf8_lossy(&stderr).to_string(),
+        Ok(SshCommandCaptureBytes {
+            stdout,
+            stderr,
             exit_code: exit_status.and_then(|status| i32::try_from(status).ok()),
             truncated,
         })
@@ -524,6 +609,13 @@ impl SshConnectionHandle {
             *pooled.x11_forward_handler.write() = None;
         }
     }
+}
+
+struct SshCommandCaptureBytes {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_code: Option<i32>,
+    truncated: bool,
 }
 
 fn resolve_remote_forward_port(

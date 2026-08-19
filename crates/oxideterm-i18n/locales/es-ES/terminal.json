@@ -84,6 +84,20 @@
       "search_no_results": "No results",
       "player_empty": "No playback output yet"
     },
+    "highlight_override": {
+      "title": "Resaltado de palabras clave y regex",
+      "source_global_base": "Usando reglas base globales",
+      "source_session": "Reemplazo de sesión: {{name}}",
+      "source_connection": "Reemplazo de conexión: {{name}}",
+      "source_global": "Configuración global: {{name}}",
+      "override_hint": "La selección reemplaza la configuración base de esta sesión.",
+      "use_inherited": "Usar configuración heredada",
+      "use_global_for_session": "Usar configuración global en esta sesión: {{name}}",
+      "save_to_connection": "Guardar la selección en esta conexión",
+      "saved_to_connection": "Reemplazo guardado en la conexión",
+      "reset_connection": "Restablecer esta conexión para heredar",
+      "manage_rule_sets": "Administrar reglas base y conjuntos…"
+    },
     "trzsz": {
       "select_upload_directory_title": "Seleccionar carpeta para subir",
       "select_upload_directory_description": "Elige el directorio local que debe enviarse mediante trzsz.",
@@ -246,6 +260,7 @@
       "action_stage_all": "Preparar",
       "action_unstage_all": "Despreparar",
       "action_commit": "Commit",
+      "commit_message_placeholder": "Mensaje del commit...",
       "action_amend": "Enmendar",
       "action_ai_commit_message": "Msg IA",
       "action_rebase": "Rebase",
@@ -266,6 +281,9 @@
       "section_commit": "Commit",
       "section_history": "Historial",
       "section_refs": "Referencias",
+      "section_more": "Más",
+      "group_repository": "Repositorio",
+      "group_advanced": "Avanzado",
       "rename_branch_query": "Renombrar la rama actual a {{branch}}",
       "track_remote_query": "Rastrear remoto {{branch}}",
       "action_fetch_all": "Obtener todo",

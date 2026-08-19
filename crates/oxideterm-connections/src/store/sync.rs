@@ -145,6 +145,14 @@ impl ConnectionStore {
         build_serial_profiles_sync_snapshot(&self.data)
     }
 
+    pub fn export_telnet_profiles_snapshot(&self) -> Result<TelnetProfilesSyncSnapshot> {
+        build_telnet_profiles_sync_snapshot(&self.data)
+    }
+
+    pub fn export_mosh_profiles_snapshot(&self) -> Result<MoshProfilesSyncSnapshot> {
+        build_mosh_profiles_sync_snapshot(&self.data)
+    }
+
     pub fn export_remote_desktop_profiles_snapshot(
         &self,
     ) -> Result<RemoteDesktopProfilesSyncSnapshot> {
@@ -464,6 +472,38 @@ impl ConnectionStore {
         Ok(applied)
     }
 
+    pub fn apply_telnet_profiles_snapshot(
+        &mut self,
+        snapshot: TelnetProfilesSyncSnapshot,
+    ) -> Result<usize> {
+        // Validate the complete batch before changing the shared connection store.
+        for profile in &snapshot.records {
+            profile.validate()?;
+        }
+        let mut applied = 0usize;
+        for profile in snapshot.records {
+            if let Some(existing) = self
+                .data
+                .telnet_profiles
+                .iter_mut()
+                .find(|existing| existing.id == profile.id)
+            {
+                if profile.updated_at >= existing.updated_at {
+                    *existing = profile;
+                    applied += 1;
+                }
+            } else {
+                self.data.telnet_profiles.push(profile);
+                applied += 1;
+            }
+        }
+        if applied > 0 {
+            self.normalize();
+            self.save()?;
+        }
+        Ok(applied)
+    }
+
     pub fn apply_remote_desktop_profiles_snapshot(
         &mut self,
         snapshot: RemoteDesktopProfilesSyncSnapshot,
@@ -490,6 +530,41 @@ impl ConnectionStore {
                 }
             } else {
                 self.data.remote_desktop_profiles.push(profile);
+                applied += 1;
+            }
+        }
+        if applied > 0 {
+            self.normalize();
+            self.save()?;
+        }
+        Ok(applied)
+    }
+
+    pub fn apply_mosh_profiles_snapshot(
+        &mut self,
+        snapshot: MoshProfilesSyncSnapshot,
+    ) -> Result<usize> {
+        // Mosh snapshots carry portable metadata only; local keychain references stay local.
+        for profile in &snapshot.records {
+            profile.validate()?;
+        }
+        let mut applied = 0usize;
+        for mut profile in snapshot.records {
+            if let Some(existing) = self
+                .data
+                .mosh_profiles
+                .iter_mut()
+                .find(|existing| existing.id == profile.id)
+            {
+                if profile.updated_at >= existing.updated_at {
+                    if mosh_auth_target_matches(&profile.auth, &existing.auth) {
+                        profile.auth = existing.auth.clone();
+                    }
+                    *existing = profile;
+                    applied += 1;
+                }
+            } else {
+                self.data.mosh_profiles.push(profile);
                 applied += 1;
             }
         }
@@ -528,7 +603,13 @@ fn build_saved_connection_from_sync_payload(
         username: non_empty(payload.username.trim(), "Username")?.to_string(),
         auth,
         proxy_chain,
-        upstream_proxy: payload.upstream_proxy.clone(),
+        upstream_proxy: build_synced_upstream_proxy(
+            &payload.upstream_proxy,
+            existing,
+            preserve_auth,
+        ),
+        // ProxyCommand text is device-local protected data and never enters cloud snapshots.
+        proxy_command: existing.and_then(|connection| connection.proxy_command.clone()),
         options: synced_options
             .cloned()
             .unwrap_or_else(|| ConnectionOptions {
@@ -614,6 +695,106 @@ fn build_serial_profiles_sync_snapshot(
     })
 }
 
+fn build_telnet_profiles_sync_snapshot(
+    data: &ConnectionStoreData,
+) -> Result<TelnetProfilesSyncSnapshot> {
+    let mut records = data.telnet_profiles.clone();
+    records.sort_by(|left, right| left.id.cmp(&right.id));
+    let revision = sha256_hex(
+        &records
+            .iter()
+            .map(|profile| (&profile.id, profile.updated_at.to_rfc3339()))
+            .collect::<Vec<_>>(),
+    )?;
+
+    Ok(TelnetProfilesSyncSnapshot {
+        revision,
+        exported_at: Utc::now().to_rfc3339(),
+        records,
+    })
+}
+
+fn build_mosh_profiles_sync_snapshot(
+    data: &ConnectionStoreData,
+) -> Result<MoshProfilesSyncSnapshot> {
+    let mut records = data.mosh_profiles.clone();
+    for profile in &mut records {
+        profile.auth = portable_mosh_auth(&profile.auth);
+    }
+    records.sort_by(|left, right| left.id.cmp(&right.id));
+    let revision = sha256_hex(
+        &records
+            .iter()
+            .map(|profile| (&profile.id, profile.updated_at.to_rfc3339()))
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(MoshProfilesSyncSnapshot {
+        revision,
+        exported_at: Utc::now().to_rfc3339(),
+        records,
+    })
+}
+
+fn portable_mosh_auth(auth: &SavedAuth) -> SavedAuth {
+    match auth {
+        SavedAuth::Password { .. } => SavedAuth::Password {
+            keychain_id: None,
+            plaintext_password: None,
+        },
+        SavedAuth::Key { key_path, .. } => SavedAuth::Key {
+            key_path: key_path.clone(),
+            has_passphrase: false,
+            passphrase_keychain_id: None,
+            plaintext_passphrase: None,
+        },
+        SavedAuth::ManagedKey { key_id, .. } => SavedAuth::ManagedKey {
+            key_id: key_id.clone(),
+            passphrase_keychain_id: None,
+            plaintext_passphrase: None,
+        },
+        SavedAuth::Certificate {
+            key_path, cert_path, ..
+        } => SavedAuth::Certificate {
+            key_path: key_path.clone(),
+            cert_path: cert_path.clone(),
+            has_passphrase: false,
+            passphrase_keychain_id: None,
+            plaintext_passphrase: None,
+        },
+        SavedAuth::KeyboardInteractive => SavedAuth::KeyboardInteractive,
+        SavedAuth::Agent => SavedAuth::Agent,
+    }
+}
+
+fn mosh_auth_target_matches(left: &SavedAuth, right: &SavedAuth) -> bool {
+    match (left, right) {
+        (SavedAuth::Password { .. }, SavedAuth::Password { .. })
+        | (SavedAuth::KeyboardInteractive, SavedAuth::KeyboardInteractive)
+        | (SavedAuth::Agent, SavedAuth::Agent) => true,
+        (
+            SavedAuth::Key { key_path: left, .. },
+            SavedAuth::Key { key_path: right, .. },
+        ) => left == right,
+        (
+            SavedAuth::ManagedKey { key_id: left, .. },
+            SavedAuth::ManagedKey { key_id: right, .. },
+        ) => left == right,
+        (
+            SavedAuth::Certificate {
+                key_path: left_key,
+                cert_path: left_cert,
+                ..
+            },
+            SavedAuth::Certificate {
+                key_path: right_key,
+                cert_path: right_cert,
+                ..
+            },
+        ) => left_key == right_key && left_cert == right_cert,
+        _ => false,
+    }
+}
+
 fn build_remote_desktop_profiles_sync_snapshot(
     data: &ConnectionStoreData,
 ) -> Result<RemoteDesktopProfilesSyncSnapshot> {
@@ -640,7 +821,9 @@ fn build_remote_desktop_profiles_sync_snapshot(
 fn build_saved_connection_sync_record(
     connection: &SavedConnection,
 ) -> Result<SavedConnectionSyncRecord> {
-    let payload = ConnectionInfo::from(connection);
+    let mut payload = ConnectionInfo::from(connection);
+    // Protected-store references identify one device and must never enter a portable snapshot.
+    payload.upstream_proxy = portable_upstream_proxy(&payload.upstream_proxy);
     let options = connection.options.clone();
     Ok(SavedConnectionSyncRecord {
         id: connection.id.clone(),
@@ -777,6 +960,76 @@ fn build_synced_proxy_chain(
         .collect()
 }
 
+fn portable_upstream_proxy(policy: &SavedUpstreamProxyPolicy) -> SavedUpstreamProxyPolicy {
+    match policy {
+        SavedUpstreamProxyPolicy::Custom { proxy } => {
+            let mut proxy = proxy.clone();
+            if let SavedUpstreamProxyAuth::Password {
+                username,
+                ..
+            } = &proxy.auth
+            {
+                proxy.auth = SavedUpstreamProxyAuth::Password {
+                    username: username.clone(),
+                    keychain_id: None,
+                    plaintext_password: None,
+                };
+            }
+            SavedUpstreamProxyPolicy::Custom { proxy }
+        }
+        SavedUpstreamProxyPolicy::UseGlobal => SavedUpstreamProxyPolicy::UseGlobal,
+        SavedUpstreamProxyPolicy::Direct => SavedUpstreamProxyPolicy::Direct,
+    }
+}
+
+fn build_synced_upstream_proxy(
+    incoming: &SavedUpstreamProxyPolicy,
+    existing: Option<&SavedConnection>,
+    preserve_auth: bool,
+) -> SavedUpstreamProxyPolicy {
+    let mut synced_policy = portable_upstream_proxy(incoming);
+    if !preserve_auth {
+        return synced_policy;
+    }
+    let (
+        SavedUpstreamProxyPolicy::Custom {
+            proxy: incoming_proxy,
+        },
+        Some(SavedUpstreamProxyPolicy::Custom {
+            proxy: existing_proxy,
+        }),
+    ) = (
+        &mut synced_policy,
+        existing.map(|connection| &connection.upstream_proxy),
+    )
+    else {
+        return synced_policy;
+    };
+    let (
+        SavedUpstreamProxyAuth::Password {
+            username: incoming_username,
+            keychain_id: incoming_keychain_id,
+            ..
+        },
+        SavedUpstreamProxyAuth::Password {
+            username: existing_username,
+            keychain_id: existing_keychain_id,
+            ..
+        },
+    ) = (&mut incoming_proxy.auth, &existing_proxy.auth)
+    else {
+        return synced_policy;
+    };
+    if incoming_proxy.protocol == existing_proxy.protocol
+        && incoming_proxy.host == existing_proxy.host
+        && incoming_proxy.port == existing_proxy.port
+        && incoming_username == existing_username
+    {
+        *incoming_keychain_id = existing_keychain_id.clone();
+    }
+    synced_policy
+}
+
 fn active_connection_tombstones(
     tombstones: &[DeletedConnectionTombstone],
 ) -> Vec<DeletedConnectionTombstone> {
@@ -791,4 +1044,90 @@ fn active_connection_tombstones(
 fn sha256_hex<T: Serialize>(value: &T) -> Result<String> {
     let bytes = serde_json::to_vec(value).context("Failed to serialize sync payload")?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+#[cfg(test)]
+mod mosh_tests {
+    use super::*;
+
+    fn password_profile(keychain_id: Option<&str>) -> MoshProfile {
+        MoshProfile::new(
+            "Mobile shell",
+            "example.test",
+            22,
+            "alice",
+            SavedAuth::Password {
+                keychain_id: keychain_id.map(str::to_string),
+                plaintext_password: None,
+            },
+        )
+    }
+
+    #[test]
+    fn mosh_snapshot_strips_device_local_credential_references() {
+        let data = ConnectionStoreData {
+            mosh_profiles: vec![password_profile(Some("local-keychain-entry"))],
+            ..ConnectionStoreData::default()
+        };
+
+        let snapshot = build_mosh_profiles_sync_snapshot(&data).expect("snapshot must build");
+
+        assert_eq!(snapshot.records.len(), 1);
+        assert!(matches!(
+            snapshot.records[0].auth,
+            SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: None
+            }
+        ));
+        let json = serde_json::to_string(&snapshot).expect("snapshot must serialize");
+        assert!(!json.contains("local-keychain-entry"));
+    }
+
+    #[test]
+    fn mosh_snapshot_apply_preserves_matching_local_credential() {
+        let path = std::env::temp_dir().join(format!(
+            "oxideterm-mosh-sync-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let mut store = ConnectionStore::load(&path).expect("store must load");
+        let local = password_profile(Some("local-keychain-entry"));
+        let mut incoming = local.clone();
+        incoming.name = "Renamed mobile shell".to_string();
+        incoming.updated_at = local.updated_at + chrono::Duration::seconds(1);
+        incoming.auth = portable_mosh_auth(&incoming.auth);
+        store.data.mosh_profiles.push(local);
+
+        let applied = store
+            .apply_mosh_profiles_snapshot(MoshProfilesSyncSnapshot {
+                revision: "remote-revision".to_string(),
+                exported_at: Utc::now().to_rfc3339(),
+                records: vec![incoming],
+            })
+            .expect("snapshot must apply");
+
+        assert_eq!(applied, 1);
+        let profile = &store.mosh_profiles()[0];
+        assert_eq!(profile.name, "Renamed mobile shell");
+        assert!(matches!(
+            &profile.auth,
+            SavedAuth::Password {
+                keychain_id: Some(keychain_id),
+                plaintext_password: None
+            } if keychain_id == "local-keychain-entry"
+        ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn mosh_runtime_secret_debug_is_redacted() {
+        let secret = "mosh-bootstrap-password";
+        let runtime = SavedMoshProfileRuntimeSecrets {
+            auth: Some(SecretString::from(secret)),
+        };
+
+        let debug = format!("{runtime:?}");
+        assert!(!debug.contains(secret));
+        assert!(debug.contains("redacted secret"));
+    }
 }

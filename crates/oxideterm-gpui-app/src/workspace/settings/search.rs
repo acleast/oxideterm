@@ -163,6 +163,8 @@ fn settings_search_specs() -> Vec<SettingsSearchEntrySpec> {
             &[
                 "settings_view.terminal.scrollback",
                 "settings_view.terminal.scrollback_hint",
+                "settings_view.terminal.highlight_tab_on_new_output",
+                "settings_view.terminal.highlight_tab_on_new_output_hint",
             ],
         ),
         terminal_search_entry(
@@ -277,9 +279,19 @@ fn settings_search_specs() -> Vec<SettingsSearchEntrySpec> {
             "settings_view.terminal.highlight_rules.title",
             &[
                 "settings_view.terminal.highlight_rules.description",
+                "settings_view.terminal.highlight_rules.rule_set",
+                "settings_view.terminal.highlight_rules.rule_set_hint",
+                "settings_view.terminal.highlight_rules.semantic_coloring",
+                "settings_view.terminal.highlight_rules.semantic_coloring_hint",
+                "settings_view.terminal.highlight_rules.semantic_scheme",
+                "settings_view.terminal.highlight_rules.semantic_scheme_hint",
+                "settings_view.terminal.highlight_rules.semantic_scheme_balanced",
+                "settings_view.terminal.highlight_rules.semantic_scheme_conservative",
                 "settings_view.terminal.highlight_rules.pattern",
                 "settings_view.terminal.highlight_rules.foreground",
                 "settings_view.terminal.highlight_rules.background",
+                "settings_view.terminal.highlight_rules.match_scope",
+                "settings_view.terminal.highlight_rules.preserve_background",
             ],
         ),
         settings_search_entry(
@@ -399,6 +411,12 @@ fn settings_search_specs() -> Vec<SettingsSearchEntrySpec> {
             1,
             "settings_view.network.routing",
             &["settings_view.network.routing_hint"],
+        ),
+        settings_search_entry(
+            SettingsTab::Network,
+            2,
+            "settings_view.network.public_mcp",
+            &["settings_view.network.public_mcp_hint"],
         ),
         settings_search_entry(
             SettingsTab::Sftp,

@@ -1,7 +1,19 @@
-use super::helpers::effective_shortcut_label;
+use super::helpers::{
+    WelcomeRecentConnection, WelcomeRecentKind, WelcomeRecentTarget, effective_shortcut_label,
+    welcome_layout_is_stacked, welcome_recent_connections,
+};
 use super::*;
 
 use gpui::StatefulInteractiveElement;
+
+#[derive(Clone, Copy)]
+enum WelcomeToolAction {
+    NewConnection,
+    LocalTerminal,
+    ImportConnections,
+    SessionManager,
+    CloudSync,
+}
 
 fn tab_kind_icon(
     workspace: &WorkspaceApp,
@@ -11,6 +23,7 @@ fn tab_kind_icon(
     match kind {
         TabKind::LocalTerminal => LucideIcon::Square,
         TabKind::SshTerminal => LucideIcon::Terminal,
+        TabKind::MoshTerminal => LucideIcon::Terminal,
         TabKind::FileManager => LucideIcon::FolderOpen,
         TabKind::Launcher | TabKind::Graphics | TabKind::RemoteDesktop => LucideIcon::Monitor,
         TabKind::Runtime | TabKind::ConnectionPool => LucideIcon::Gauge,
@@ -35,6 +48,28 @@ fn tab_kind_icon(
 }
 
 impl WorkspaceApp {
+    fn render_skip_future_ssh_close_confirmations(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .w_full()
+            .flex()
+            .justify_center()
+            .child(
+                checkbox(
+                    &self.tokens,
+                    self.i18n.t("common.actions.do_not_ask_again"),
+                    self.skip_future_ssh_close_confirmations,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| {
+                        this.toggle_skip_future_ssh_close_confirmations(cx);
+                        cx.stop_propagation();
+                    }),
+                ),
+            )
+            .into_any_element()
+    }
+
     pub(in crate::workspace) fn render_tab_bar(
         &self,
         window: &Window,
@@ -86,6 +121,8 @@ impl WorkspaceApp {
             })
         });
         let outside_main_tabs = self.tab_host.read(cx).outside_main_tab_ids();
+        let tabs_with_unread_terminal_output =
+            self.tab_host.read(cx).unread_terminal_output_tab_ids();
         let active_tab_id = self.active_tab_id(cx);
         let mut live_tabs = self
             .tabs(cx)
@@ -159,6 +196,7 @@ impl WorkspaceApp {
             let current_visible_index = visible_tab_index;
             visible_tab_index += 1;
             let active = Some(tab_id) == active_tab_id;
+            let has_unread_terminal_output = tabs_with_unread_terminal_output.contains(&tab_id);
             let drag_state = self.main_window_tabs.drag.as_ref();
             let drag_active = drag_state.is_some_and(|drag| drag.active);
             let is_being_dragged = drag_state.is_some_and(|drag| drag.tab_id == tab_id);
@@ -178,6 +216,8 @@ impl WorkspaceApp {
             let close_button_tooltip_id = tab_tooltip_id.clone();
             let tab_text_color = if active {
                 rgb(theme.text)
+            } else if has_unread_terminal_output {
+                rgb(theme.success)
             } else {
                 rgb(theme.text_muted)
             };
@@ -205,11 +245,7 @@ impl WorkspaceApp {
                 } else {
                     theme.bg
                 }))
-                .text_color(if active {
-                    rgb(theme.text)
-                } else {
-                    rgb(theme.text_muted)
-                })
+                .text_color(tab_text_color)
                 .opacity(if is_being_dragged && drag_active {
                     0.5
                 } else {
@@ -327,8 +363,8 @@ impl WorkspaceApp {
             scroll_viewport = scroll_viewport.child(oxideterm_gpui_ui::motion::horizontal_reveal(
                 &self.tokens,
                 ("workspace-tab-open", tab_id.0),
-                // The animated wrapper is the scroll viewport's direct flex
-                // child, so it must retain the tab width for overflow measurement.
+                // Keep the content at full width while the clipping viewport
+                // animates as the scroll area's direct flex child.
                 div()
                     .w(px(tab_width))
                     .h_full()
@@ -651,7 +687,7 @@ impl WorkspaceApp {
             ConfirmDialogView {
                 variant: ConfirmDialogVariant::Danger,
                 title: div().child(title).into_any_element(),
-                description: None,
+                description: Some(self.render_skip_future_ssh_close_confirmations(cx)),
                 cancel_label: div()
                     .child(self.i18n.t("common.actions.cancel"))
                     .into_any_element(),
@@ -699,6 +735,25 @@ impl WorkspaceApp {
             (Some(key), None) => self.i18n.t(key),
             (None, _) => String::new(),
         };
+        let is_ssh_confirmation = matches!(
+            &snapshot.confirm,
+            TabCloseConfirm::Single { .. } | TabCloseConfirm::Other { .. }
+        );
+        let description = if is_ssh_confirmation {
+            Some(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_3()
+                    .when(!description.is_empty(), |body| body.child(description))
+                    .child(self.render_skip_future_ssh_close_confirmations(cx))
+                    .into_any_element(),
+            )
+        } else {
+            (!description.is_empty()).then(|| div().child(description).into_any_element())
+        };
         oxideterm_gpui_ui::confirm::confirm_dialog_with_focus_motion(
             &self.tokens,
             "tab-close-confirm-motion",
@@ -706,8 +761,7 @@ impl WorkspaceApp {
             ConfirmDialogView {
                 variant: ConfirmDialogVariant::Danger,
                 title: div().child(self.i18n.t(title_key)).into_any_element(),
-                description: (!description.is_empty())
-                    .then(|| div().child(description).into_any_element()),
+                description,
                 cancel_label: div()
                     .child(self.i18n.t("common.actions.cancel"))
                     .into_any_element(),
@@ -901,17 +955,15 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn render_empty_workspace(
         &self,
+        available_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        const WELCOME_CONTENT_MAX_WIDTH: f32 = 520.0;
+        const WELCOME_CONTENT_MAX_WIDTH: f32 = 920.0;
 
         let theme = self.tokens.ui;
+        let stacked = welcome_layout_is_stacked(available_width);
         div()
             .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .px(px(16.0))
             // Match both sidebars at the top-level content layer. Fixed tab
             // chrome keeps its stronger tint independently for readability.
             .bg(self.workspace_sidebar_background(theme.bg))
@@ -921,28 +973,80 @@ impl WorkspaceApp {
             ))
             .child(
                 div()
-                    .w_full()
-                    // Leave enough room for all four localized shortcut hints
-                    // while retaining wrapping in genuinely narrow windows.
-                    .max_w(px(WELCOME_CONTENT_MAX_WIDTH))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(self.render_welcome_brand())
-                    .child(self.render_welcome_actions(cx))
-                    .child(self.render_welcome_shortcuts()),
+                    .id("welcome-workspace-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h_full()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .px(px(24.0))
+                            .py(px(24.0))
+                            .child(
+                                div()
+                                    .w_full()
+                                    // Leave enough room for all four localized shortcut hints
+                                    // while retaining wrapping in genuinely narrow windows.
+                                    .max_w(px(WELCOME_CONTENT_MAX_WIDTH))
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(16.0))
+                                    .child(self.render_welcome_header())
+                                    .child(self.render_welcome_workbench(stacked, cx))
+                                    .child(self.render_welcome_shortcuts()),
+                            ),
+                    ),
             )
             .into_any_element()
     }
 
+    pub(in crate::workspace) fn welcome_main_content_width(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> f32 {
+        let settings = self.settings_store.settings();
+        let mut available_width = f32::from(window.viewport_size().width);
+        if !settings.sidebar_ui.zen_mode {
+            available_width -= self.tokens.metrics.activity_bar_width;
+            if !self.sidebar_collapsed {
+                available_width -= self.sidebar_panel_width();
+            }
+            if self.context_sidebar_visible() {
+                available_width -= self.ai_entity.read(cx).chat_ui().sidebar_width;
+            }
+        }
+        available_width.max(self.tokens.metrics.min_main_width)
+    }
+
+    fn render_welcome_header(&self) -> AnyElement {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            // Separate the brand statement from the operational surfaces below.
+            .pb(px(12.0))
+            .child(self.render_welcome_brand())
+            .into_any_element()
+    }
+
     fn render_welcome_brand(&self) -> AnyElement {
+        const BRAND_ICON_SIZE: f32 = 84.0;
         const BRAND_GLOW_BG_ALPHA: u32 = 0x02;
-        const BRAND_GLOW_INNER_ALPHA: u32 = 0x18;
-        const BRAND_GLOW_OUTER_ALPHA: u32 = 0x0c;
-        const BRAND_CARET_GLOW_ALPHA: u32 = 0x66;
+        const BRAND_GLOW_INNER_ALPHA: u32 = 0x12;
+        const BRAND_GLOW_OUTER_ALPHA: u32 = 0x08;
+        const BRAND_CARET_GLOW_ALPHA: u32 = 0x4d;
 
         let theme = self.tokens.ui;
+        let icon_path = crate::app_icon::app_icon_variant_resource_path(
+            self.settings_store.settings().appearance.app_icon,
+        );
         let brand_glow = vec![
             gpui::BoxShadow {
                 inset: false,
@@ -970,128 +1074,474 @@ impl WorkspaceApp {
         div()
             .flex()
             .items_center()
-            .justify_center()
+            .gap(px(28.0))
+            // Reuse the active runtime icon variant selected in Appearance settings.
+            .child(
+                gpui::img(icon_path)
+                    .size(px(BRAND_ICON_SIZE))
+                    .object_fit(ObjectFit::Contain),
+            )
             .child(
                 div()
-                    .relative()
                     .flex()
-                    .items_center()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    // GPUI does not expose CSS text-shadow; a static shadowed
-                    // backing glow keeps the Tauri brand halo without drawing
-                    // a visible capsule behind the wordmark.
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(14.0))
-                            .left(px(18.0))
-                            .right(px(18.0))
-                            .bottom(px(14.0))
-                            .rounded(px(self.tokens.radii.lg))
-                            .bg(rgba((theme.accent << 8) | BRAND_GLOW_BG_ALPHA))
-                            .shadow(brand_glow),
-                    )
+                    .flex_col()
+                    .items_start()
+                    .gap(px(8.0))
                     .child(
                         div()
                             .relative()
                             .flex()
                             .items_center()
-                            .text_size(px(48.0))
-                            .line_height(px(48.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(rgb(theme.text))
-                            .child(self.i18n.t("layout.empty.title"))
+                            .py(px(2.0))
+                            // GPUI does not expose CSS text-shadow; a static shadowed
+                            // backing glow keeps the Tauri brand halo without drawing
+                            // a visible capsule behind the wordmark.
                             .child(
                                 div()
-                                    .w(px(3.0))
-                                    .h(px(34.0))
-                                    .ml(px(6.0))
-                                    .rounded(px(self.tokens.radii.active_indicator))
-                                    .bg(rgb(theme.accent))
-                                    .shadow(caret_glow),
+                                    .absolute()
+                                    .top(px(10.0))
+                                    .left(px(8.0))
+                                    .right(px(8.0))
+                                    .bottom(px(10.0))
+                                    .rounded(px(self.tokens.radii.lg))
+                                    .bg(rgba((theme.accent << 8) | BRAND_GLOW_BG_ALPHA))
+                                    .shadow(brand_glow),
+                            )
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    // The brand must remain the strongest type in the start-page hierarchy.
+                                    .text_size(px(38.0))
+                                    .line_height(px(42.0))
+                                    .font_weight(gpui::FontWeight::EXTRA_BOLD)
+                                    .text_color(rgb(theme.text))
+                                    .child(self.i18n.t("layout.empty.title"))
+                                    .child(
+                                        div()
+                                            .w(px(2.0))
+                                            .h(px(27.0))
+                                            .ml(px(5.0))
+                                            .rounded(px(self.tokens.radii.active_indicator))
+                                            .bg(rgb(theme.accent))
+                                            .shadow(caret_glow),
+                                    ),
                             ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(self.tokens.metrics.ui_text_base))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(rgb(theme.text))
+                            .child(self.i18n.t("layout.empty.subtitle")),
                     ),
             )
             .into_any_element()
     }
 
-    fn render_welcome_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_welcome_workbench(&self, stacked: bool, cx: &mut Context<Self>) -> AnyElement {
         div()
             .w_full()
             .flex()
             .flex_row()
-            .flex_wrap()
-            .items_center()
+            .items_stretch()
             .justify_center()
-            .gap(px(12.0))
-            .child(self.render_welcome_action_button(
-                LucideIcon::Plus,
-                "layout.empty.new_connection",
-                true,
-                true,
-                cx,
-            ))
-            .child(self.render_welcome_action_button(
-                LucideIcon::Terminal,
-                "layout.empty.new_local_terminal",
-                false,
-                false,
-                cx,
-            ))
+            .gap(px(16.0))
+            .when(stacked, |workbench| workbench.flex_col())
+            .when(!stacked, |workbench| workbench.flex_wrap())
+            .child(self.render_welcome_recent_connections(stacked, cx))
+            .child(self.render_welcome_guidance(stacked, cx))
             .into_any_element()
     }
 
-    fn render_welcome_action_button(
+    fn render_welcome_recent_connections(
         &self,
-        icon: LucideIcon,
-        label_key: &str,
-        opens_connection_form: bool,
-        filled: bool,
+        stacked: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        const RECENT_CONNECTION_LIMIT: usize = 4;
+
+        let theme = self.tokens.ui;
+        let recent = welcome_recent_connections(&self.connection_store, RECENT_CONNECTION_LIMIT);
+        let saved_count = self.connection_store.connections().len()
+            + self.connection_store.serial_profiles().len()
+            + self.connection_store.telnet_profiles().len()
+            + self.connection_store.mosh_profiles().len()
+            + self.connection_store.remote_desktop_profiles().len();
+        let count_label = self
+            .i18n
+            .t("layout.empty.saved_count")
+            .replace("{{count}}", &saved_count.to_string());
+        let has_background = self.window_background_preferences().is_some();
+        let mut surface = oxideterm_gpui_ui::semantic_surface(
+            &self.tokens,
+            oxideterm_gpui_ui::SurfaceOptions::new(oxideterm_gpui_ui::SurfaceKind::Inspector)
+                .padding(oxideterm_gpui_ui::SurfacePadding::Normal)
+                .has_background_image(has_background),
+        )
+        // The start page uses borders and fill for grouping; extra elevation
+        // makes the three peer surfaces feel heavier than the brand above.
+        .shadow_none()
+        .min_w(px(360.0))
+        .flex_1()
+        .flex_basis(px(540.0))
+        .when(stacked, |surface| {
+            surface
+                .w_full()
+                .max_w_full()
+                .min_w(px(0.0))
+                .flex_basis(gpui::auto())
+        })
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_start()
+                .justify_between()
+                .gap(px(16.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(self.tokens.metrics.ui_text_base))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(theme.text))
+                                .child(self.i18n.t("layout.empty.recent_connections")),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(self.tokens.metrics.ui_text_xs))
+                                .text_color(rgb(theme.text_muted))
+                                .child(self.i18n.t("layout.empty.recent_connections_hint")),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .rounded_full()
+                        .bg(rgb(theme.bg_sunken))
+                        .text_size(px(self.tokens.metrics.ui_text_xs))
+                        .text_color(rgb(theme.text_muted))
+                        .child(count_label),
+                ),
+        );
+
+        if recent.is_empty() {
+            surface = surface.child(self.render_welcome_recent_empty(cx));
+        } else {
+            surface = surface.child(
+                div().w_full().flex().flex_col().gap(px(3.0)).children(
+                    recent
+                        .into_iter()
+                        .map(|connection| self.render_welcome_recent_row(connection, cx)),
+                ),
+            );
+        }
+
+        surface.into_any_element()
+    }
+
+    fn render_welcome_recent_empty(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.tokens.ui;
+        div()
+            .w_full()
+            .min_h(px(156.0))
+            .flex()
+            .flex_col()
+            .items_start()
+            .justify_center()
+            .gap(px(10.0))
+            .border_t_1()
+            .border_color(rgb(theme.border))
+            .child(
+                div()
+                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                    .text_color(rgb(theme.text_muted))
+                    .child(self.i18n.t("layout.empty.recent_connections_empty")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .text_size(px(self.tokens.metrics.ui_text_sm))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(rgb(theme.accent))
+                    .cursor_pointer()
+                    .hover(move |row| row.text_color(rgb(theme.accent_hover)))
+                    .child(Self::render_lucide_icon(
+                        LucideIcon::LayoutList,
+                        15.0,
+                        rgb(theme.accent),
+                    ))
+                    .child(self.i18n.t("layout.empty.open_session_manager"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _event, window, cx| {
+                            this.open_session_manager_tab(window, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_welcome_recent_row(
+        &self,
+        connection: WelcomeRecentConnection,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.tokens.ui;
-        let (bg, border) = if filled {
-            (rgb(theme.bg_panel), rgb(theme.border))
-        } else {
-            (rgba(0x00000000), rgb(theme.border))
-        };
+        let target = connection.target.clone();
+        oxideterm_gpui_ui::entity_list_row(
+            &self.tokens,
+            oxideterm_gpui_ui::EntityListRowOptions::new().compact(),
+            Some(
+                div()
+                    .size(px(30.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(self.tokens.radii.md))
+                    .bg(rgb(theme.bg_sunken))
+                    .child(Self::render_lucide_icon(
+                        self.welcome_recent_icon(connection.kind),
+                        15.0,
+                        rgb(theme.accent),
+                    ))
+                    .into_any_element(),
+            ),
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(self.tokens.metrics.ui_text_sm))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(theme.text))
+                .child(connection.name)
+                .into_any_element(),
+            Some(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(self.tokens.metrics.ui_text_xs))
+                    .text_color(rgb(theme.text_muted))
+                    .child(connection.subtitle)
+                    .into_any_element(),
+            ),
+            vec![
+                div()
+                    .text_size(px(11.0))
+                    .text_color(rgb(theme.text_muted))
+                    .child(self.i18n.t(self.welcome_recent_kind_label(connection.kind)))
+                    .into_any_element(),
+            ],
+            vec![Self::render_lucide_icon(
+                LucideIcon::ChevronRight,
+                14.0,
+                rgb(theme.text_muted),
+            )],
+        )
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _event, window, cx| {
+                this.open_welcome_recent_target(target.clone(), window, cx);
+                cx.stop_propagation();
+            }),
+        )
+        .into_any_element()
+    }
+
+    fn render_welcome_guidance(&self, stacked: bool, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.tokens.ui;
+        let has_background = self.window_background_preferences().is_some();
+        oxideterm_gpui_ui::semantic_surface(
+            &self.tokens,
+            oxideterm_gpui_ui::SurfaceOptions::new(oxideterm_gpui_ui::SurfaceKind::Inspector)
+                .padding(oxideterm_gpui_ui::SurfacePadding::Normal)
+                .has_background_image(has_background),
+        )
+        .shadow_none()
+        .min_w(px(260.0))
+        .max_w(px(344.0))
+        .flex_1()
+        .flex_basis(px(300.0))
+        .when(stacked, |surface| {
+            surface
+                .w_full()
+                .max_w_full()
+                .min_w(px(0.0))
+                .flex_basis(gpui::auto())
+        })
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .child(
+            div()
+                .text_size(px(self.tokens.metrics.ui_text_base))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(theme.text))
+                .child(self.i18n.t("layout.empty.get_started")),
+        )
+        // Every destination is a flat peer option inside one semantic surface.
+        .child(self.render_welcome_tool_row(
+            LucideIcon::Plus,
+            "layout.empty.new_connection",
+            "layout.empty.new_connection_hint",
+            WelcomeToolAction::NewConnection,
+            cx,
+        ))
+        .child(self.render_welcome_tool_row(
+            LucideIcon::Terminal,
+            "layout.empty.new_local_terminal",
+            "layout.empty.new_local_terminal_hint",
+            WelcomeToolAction::LocalTerminal,
+            cx,
+        ))
+        .child(self.render_welcome_tool_row(
+            LucideIcon::Download,
+            "layout.empty.import_connections",
+            "layout.empty.import_connections_hint",
+            WelcomeToolAction::ImportConnections,
+            cx,
+        ))
+        .child(self.render_welcome_tool_row(
+            LucideIcon::LayoutList,
+            "layout.empty.open_session_manager",
+            "layout.empty.open_session_manager_hint",
+            WelcomeToolAction::SessionManager,
+            cx,
+        ))
+        .child(self.render_welcome_tool_row(
+            LucideIcon::Cloud,
+            "plugin.cloud_sync.panel_title",
+            "layout.empty.cloud_sync_hint",
+            WelcomeToolAction::CloudSync,
+            cx,
+        ))
+        .into_any_element()
+    }
+
+    fn render_welcome_tool_row(
+        &self,
+        icon: LucideIcon,
+        title_key: &str,
+        description_key: &str,
+        action: WelcomeToolAction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.tokens.ui;
         div()
-            .flex_none()
-            .h(px(self.tokens.metrics.ui_button_default_height))
-            .px(px(self.tokens.metrics.ui_button_default_padding_x))
+            .w_full()
+            .min_w_0()
             .flex()
             .items_center()
-            .justify_center()
-            .gap(px(8.0))
+            .gap(px(10.0))
+            .px(px(6.0))
+            .py(px(9.0))
             .rounded(px(self.tokens.radii.md))
-            .border_1()
-            .border_color(border)
-            .bg(bg)
-            .text_size(px(self.tokens.metrics.ui_text_sm))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(rgb(theme.text))
-            .whitespace_nowrap()
             .cursor_pointer()
-            .hover(move |button| {
-                button
-                    .bg(rgb(theme.bg_hover))
-                    .border_color(rgb(theme.border_strong))
-            })
-            .child(Self::render_lucide_icon(icon, 16.0, rgb(theme.text)))
-            .child(self.i18n.t(label_key))
+            .hover(move |row| row.bg(rgb(theme.bg_hover)))
+            .child(Self::render_lucide_icon(icon, 17.0, rgb(theme.accent)))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(self.tokens.metrics.ui_text_sm))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(rgb(theme.text))
+                            .child(self.i18n.t(title_key)),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(self.tokens.metrics.ui_text_xs))
+                            .text_color(rgb(theme.text_muted))
+                            .child(self.i18n.t(description_key)),
+                    ),
+            )
+            .child(Self::render_lucide_icon(
+                LucideIcon::ChevronRight,
+                14.0,
+                rgb(theme.text_muted),
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {
-                    if opens_connection_form {
-                        this.open_new_connection_form(window, cx);
-                    } else {
-                        let _ = this.create_local_terminal_tab(window, cx);
+                    match action {
+                        WelcomeToolAction::NewConnection => {
+                            this.open_new_connection_form(window, cx)
+                        }
+                        WelcomeToolAction::LocalTerminal => {
+                            let _ = this.create_local_terminal_tab(window, cx);
+                        }
+                        WelcomeToolAction::ImportConnections => {
+                            this.open_connection_importers_settings(window, cx)
+                        }
+                        WelcomeToolAction::SessionManager => {
+                            this.open_session_manager_tab(window, cx)
+                        }
+                        WelcomeToolAction::CloudSync => this.open_cloud_sync_tab(window, cx),
                     }
                     cx.stop_propagation();
                 }),
             )
             .into_any_element()
+    }
+
+    fn welcome_recent_icon(&self, kind: WelcomeRecentKind) -> LucideIcon {
+        match kind {
+            WelcomeRecentKind::Ssh => LucideIcon::Server,
+            WelcomeRecentKind::Serial => LucideIcon::Radio,
+            WelcomeRecentKind::Telnet => LucideIcon::Terminal,
+            WelcomeRecentKind::Mosh => LucideIcon::Wifi,
+            WelcomeRecentKind::Rdp | WelcomeRecentKind::Vnc => LucideIcon::Monitor,
+        }
+    }
+
+    fn welcome_recent_kind_label(&self, kind: WelcomeRecentKind) -> &'static str {
+        match kind {
+            WelcomeRecentKind::Ssh => "terminal.typeSsh",
+            WelcomeRecentKind::Serial => "modals.new_connection.transport_serial",
+            WelcomeRecentKind::Telnet => "modals.new_connection.transport_telnet",
+            WelcomeRecentKind::Mosh => "terminal.typeMosh",
+            WelcomeRecentKind::Rdp => "modals.new_connection.transport_rdp",
+            WelcomeRecentKind::Vnc => "modals.new_connection.transport_vnc",
+        }
+    }
+
+    fn open_welcome_recent_target(
+        &mut self,
+        target: WelcomeRecentTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            WelcomeRecentTarget::Ssh(id) => self.open_saved_connection(&id, window, cx),
+            WelcomeRecentTarget::Serial(id) => self.open_saved_serial_profile(&id, window, cx),
+            WelcomeRecentTarget::Telnet(id) => self.open_saved_telnet_profile(&id, window, cx),
+            WelcomeRecentTarget::Mosh(id) => self.open_saved_mosh_profile(&id, window, cx),
+            WelcomeRecentTarget::RemoteDesktop(id) => {
+                self.open_saved_remote_desktop_profile(&id, window, cx)
+            }
+        }
     }
 
     fn render_welcome_shortcuts(&self) -> AnyElement {
@@ -1103,25 +1553,32 @@ impl WorkspaceApp {
         ];
 
         let overrides = &self.settings_store.settings().keybindings.overrides;
-        div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .justify_center()
-            .gap_x(px(20.0))
-            .gap_y(px(8.0))
-            .pt(px(4.0))
-            // Invalid registry entries are omitted instead of showing a shortcut that cannot fire.
-            .children(
-                WELCOME_SHORTCUTS
-                    .into_iter()
-                    .filter_map(|(action_id, label_key)| {
-                        effective_shortcut_label(action_id, overrides)
-                            .map(|key| self.render_welcome_shortcut(key, label_key))
-                    }),
-            )
-            .into_any_element()
+        let has_background = self.window_background_preferences().is_some();
+        oxideterm_gpui_ui::semantic_surface(
+            &self.tokens,
+            oxideterm_gpui_ui::SurfaceOptions::new(oxideterm_gpui_ui::SurfaceKind::Inspector)
+                .padding(oxideterm_gpui_ui::SurfacePadding::Compact)
+                .has_background_image(has_background),
+        )
+        .shadow_none()
+        .w_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_center()
+        .gap_x(px(20.0))
+        .gap_y(px(8.0))
+        // Invalid registry entries are omitted instead of showing a shortcut that cannot fire.
+        .children(
+            WELCOME_SHORTCUTS
+                .into_iter()
+                .filter_map(|(action_id, label_key)| {
+                    effective_shortcut_label(action_id, overrides)
+                        .map(|key| self.render_welcome_shortcut(key, label_key))
+                }),
+        )
+        .into_any_element()
     }
 
     fn render_welcome_shortcut(&self, key: String, label_key: &str) -> AnyElement {

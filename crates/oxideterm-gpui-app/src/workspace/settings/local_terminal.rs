@@ -1,5 +1,36 @@
 use super::*;
 
+pub(in crate::workspace) fn semantic_scheme_label_for_id(
+    settings: &PersistedSettings,
+    scheme_id: &str,
+    i18n: &I18n,
+) -> String {
+    match scheme_id {
+        "balanced" => terminal_semantic_scheme_label(TerminalSemanticScheme::Balanced, i18n),
+        "conservative" => {
+            terminal_semantic_scheme_label(TerminalSemanticScheme::Conservative, i18n)
+        }
+        custom_id => settings
+            .terminal
+            .custom_semantic_schemes
+            .iter()
+            .find(|scheme| scheme.id == custom_id)
+            .map(|scheme| scheme.name.clone())
+            .unwrap_or_else(|| custom_id.to_string()),
+    }
+}
+
+pub(in crate::workspace) fn application_semantic_scheme_label(
+    settings: &PersistedSettings,
+    i18n: &I18n,
+) -> String {
+    settings
+        .terminal
+        .active_custom_semantic_scheme()
+        .map(|scheme| scheme.name.clone())
+        .unwrap_or_else(|| terminal_semantic_scheme_label(settings.terminal.semantic_scheme, i18n))
+}
+
 pub(in crate::workspace) const LOCAL_GIT_BASH_ID: &str = "git-bash";
 // Compact shell rows keep stable scan columns without nesting another card surface.
 const LOCAL_SHELL_NAME_COLUMN_WIDTH: f32 = 160.0;
@@ -62,6 +93,19 @@ pub(in crate::workspace) fn effective_local_shells(
     effective
 }
 
+pub(in crate::workspace) fn resolve_local_shell(
+    shells: &[ShellInfo],
+    selected_shell_id: Option<&str>,
+    default_shell_id: Option<&str>,
+) -> Option<ShellInfo> {
+    // An explicit one-shot choice wins, then the configured default, then discovery order.
+    selected_shell_id
+        .and_then(|id| shells.iter().find(|shell| shell.id == id))
+        .or_else(|| default_shell_id.and_then(|id| shells.iter().find(|shell| shell.id == id)))
+        .or_else(|| shells.first())
+        .cloned()
+}
+
 impl WorkspaceApp {
     pub(in crate::workspace) fn effective_local_shells_for_settings(
         &self,
@@ -70,6 +114,19 @@ impl WorkspaceApp {
         effective_local_shells(
             &self.local_shells,
             settings.local_terminal.git_bash_path.as_deref(),
+        )
+    }
+
+    pub(in crate::workspace) fn resolved_local_shell(
+        &self,
+        selected_shell_id: Option<&str>,
+    ) -> Option<ShellInfo> {
+        let settings = self.settings_store.settings();
+        let effective_shells = self.effective_local_shells_for_settings(settings);
+        resolve_local_shell(
+            &effective_shells,
+            selected_shell_id,
+            settings.local_terminal.default_shell_id.as_deref(),
         )
     }
 
@@ -142,9 +199,24 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn available_shell_row(
         &self,
+        index: usize,
         shell: &ShellInfo,
-        default_shell_id: Option<&str>,
+        settings: &PersistedSettings,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
+        let default_shell_id = settings.local_terminal.default_shell_id.as_deref();
+        let scheme_label = settings
+            .local_terminal
+            .semantic_scheme_for_shell(&shell.id)
+            .map(|scheme_id| semantic_scheme_label_for_id(settings, scheme_id, &self.i18n))
+            .unwrap_or_else(|| {
+                self.i18n
+                    .t("ssh.form.terminal_use_application_default")
+                    .replace(
+                        "{{value}}",
+                        &application_semantic_scheme_label(settings, &self.i18n),
+                    )
+            });
         div()
             .w_full()
             .min_w(px(0.0))
@@ -182,6 +254,13 @@ impl WorkspaceApp {
                     self.tokens.ui.warning,
                 ))
             })
+            .child(self.settings_select_control(
+                SettingsSelect::LocalShellSemanticScheme(index),
+                scheme_label,
+                false,
+                Some(196.0),
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -279,5 +358,26 @@ mod local_terminal_tests {
         assert!(!local_shell_supports_oh_my_posh(Some("wsl-ubuntu")));
         assert!(!local_shell_supports_oh_my_posh(Some("zsh")));
         assert!(!local_shell_supports_oh_my_posh(None));
+    }
+
+    #[test]
+    pub(in crate::workspace) fn one_shot_shell_choice_precedes_default_and_fallback() {
+        let shells = vec![
+            ShellInfo::new("bash", "Bash", "/bin/bash"),
+            ShellInfo::new("zsh", "Zsh", "/bin/zsh"),
+        ];
+
+        assert_eq!(
+            resolve_local_shell(&shells, Some("zsh"), Some("bash")).map(|shell| shell.id),
+            Some("zsh".to_string())
+        );
+        assert_eq!(
+            resolve_local_shell(&shells, Some("missing"), Some("zsh")).map(|shell| shell.id),
+            Some("zsh".to_string())
+        );
+        assert_eq!(
+            resolve_local_shell(&shells, None, None).map(|shell| shell.id),
+            Some("bash".to_string())
+        );
     }
 }

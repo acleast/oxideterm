@@ -16,9 +16,10 @@ pub use connection_import::{
     apply_connection_import, preview_connection_import,
 };
 pub use connection_transport::{
-    ConnectionTransport, RDP_DEFAULT_PORT_TEXT, SSH_DEFAULT_PORT_TEXT, TELNET_DEFAULT_PORT_TEXT,
-    TransportUsernameTransition, VNC_DEFAULT_PORT_TEXT, transport_default_port,
-    transport_port_replacement, transport_username_transition,
+    ConnectionTransport, MOSH_DEFAULT_PORT_TEXT, RDP_DEFAULT_PORT_TEXT, SSH_DEFAULT_PORT_TEXT,
+    TELNET_DEFAULT_PORT_TEXT, TransportUsernameTransition, VNC_DEFAULT_PORT_TEXT,
+    transport_default_port, transport_is_persistable, transport_port_replacement,
+    transport_username_transition,
 };
 pub use draft::{
     ConnectionAuthDraft, ConnectionAuthDraftKind, ConnectionDraft, IMPORTED_GROUP, ProxyHopDraft,
@@ -30,7 +31,7 @@ pub use ssh_config::{
     SshBatchImportResult, SshConfigHost, SshConfigImportError, SshConfigProxyHop,
     canonical_ssh_config_alias, default_ssh_config_path, import_ssh_config_alias,
     is_literal_ssh_config_alias_query, list_ssh_config_hosts, list_ssh_config_hosts_from_path,
-    resolve_ssh_config_alias,
+    resolve_proxy_command, resolve_ssh_config_alias,
 };
 pub use ssh_config_sync::{
     SshConfigSyncOutcome, SshConfigSyncService, sync_ssh_config_path_into_store,
@@ -38,19 +39,22 @@ pub use ssh_config_sync::{
 pub use ssh_keys::{SshKeyInfo, list_available_ssh_keys};
 pub use store::{
     ApplySavedConnectionsSyncOutcome, ApplySavedConnectionsSyncSnapshotResult, AuthType,
-    CONFIG_VERSION, ConnectionInfo, ConnectionOptions, ConnectionStore, ConnectionStoreCheckpoint,
-    ConnectionStoreData, ConnectionTerminalBackspaceSequence, ConnectionTerminalDeleteSequence,
-    ConnectionTerminalEncoding, ConnectionTerminalOptions, ConnectionX11ForwardingMode,
-    ConnectionX11ForwardingOptions, DEFAULT_X11_UNTRUSTED_TIMEOUT_SECONDS,
+    CONFIG_VERSION, ConnectionCredentialSlot, ConnectionInfo, ConnectionOptions, ConnectionStore,
+    ConnectionStoreCheckpoint, ConnectionStoreData, ConnectionTerminalBackspaceSequence,
+    ConnectionTerminalDeleteSequence, ConnectionTerminalEncoding, ConnectionTerminalOptions,
+    ConnectionX11ForwardingMode, ConnectionX11ForwardingOptions,
+    DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS, DEFAULT_X11_UNTRUSTED_TIMEOUT_SECONDS,
     DeletedConnectionTombstone, GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID,
     LOCAL_SHELL_PRIVILEGE_CONNECTION_ID, LocalSyncMetadata, ManagedSshKeyInfo, ManagedSshKeyOrigin,
-    ManagedSshKeyUsage, PreparedSavedConnectionsSync, PrivilegeCredentialKind, ProxyHopInfo,
+    ManagedSshKeyUsage, MoshIpFamily, MoshPredictionMode, MoshProfile, MoshProfilesSyncSnapshot,
+    MoshUdpPortSelection, PreparedSavedConnectionsSync, PrivilegeCredentialKind, ProxyHopInfo,
     RemoteDesktopProfile, RemoteDesktopProfilesSyncSnapshot, SaveConnectionRequest,
-    SavePrivilegeCredentialRequest, SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest,
-    SaveTelnetProfileRequest, SavedAuth, SavedConnection, SavedConnectionRuntimeSecrets,
-    SavedConnectionSyncRecord, SavedConnectionsConflictStrategy, SavedConnectionsSyncCleanup,
-    SavedConnectionsSyncSnapshot, SavedPrivilegeCredential, SavedProxyHop, SavedUpstreamProxyAuth,
+    SaveMoshProfileRequest, SavePrivilegeCredentialRequest, SaveRemoteDesktopProfileRequest,
+    SaveSerialProfileRequest, SaveTelnetProfileRequest, SavedAuth, SavedConnection,
+    SavedConnectionRuntimeSecrets, SavedConnectionSyncRecord, SavedConnectionsConflictStrategy,
+    SavedConnectionsSyncCleanup, SavedConnectionsSyncSnapshot, SavedMoshProfileRuntimeSecrets,
+    SavedPrivilegeCredential, SavedProxyCommand, SavedProxyHop, SavedUpstreamProxyAuth,
     SavedUpstreamProxyConfig, SavedUpstreamProxyPolicy, SavedUpstreamProxyProtocol,
     SerialFlowControl, SerialParity, SerialProfile, SerialProfilesSyncSnapshot, TelnetProfile,
-    validate_group_name,
+    TelnetProfilesSyncSnapshot, validate_group_name,
 };

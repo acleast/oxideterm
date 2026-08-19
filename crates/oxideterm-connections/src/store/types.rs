@@ -135,7 +135,7 @@ pub enum ConnectionTerminalDeleteSequence {
     ControlH,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionTerminalOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -144,6 +144,10 @@ pub struct ConnectionTerminalOptions {
     pub backspace_sequence: Option<ConnectionTerminalBackspaceSequence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delete_sequence: Option<ConnectionTerminalDeleteSequence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_scheme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_rule_set: Option<String>,
 }
 
 impl ConnectionTerminalOptions {
@@ -151,10 +155,13 @@ impl ConnectionTerminalOptions {
         self.encoding.is_none()
             && self.backspace_sequence.is_none()
             && self.delete_sequence.is_none()
+            && self.semantic_scheme.is_none()
+            && self.highlight_rule_set.is_none()
     }
 }
 
 pub const DEFAULT_X11_UNTRUSTED_TIMEOUT_SECONDS: u32 = 20 * 60;
+pub const DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -196,6 +203,9 @@ fn default_x11_untrusted_timeout_seconds() -> u32 {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ConnectionOptions {
+    /// Overrides the SSH TCP and protocol-handshake timeout for this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub keep_alive_interval: u32,
     #[serde(default)]
@@ -230,6 +240,14 @@ pub struct ConnectionOptions {
         skip_serializing_if = "ConnectionTerminalOptions::inherits_application_defaults"
     )]
     pub terminal: ConnectionTerminalOptions,
+}
+
+impl ConnectionOptions {
+    pub fn effective_connect_timeout_seconds(&self) -> u64 {
+        self.connect_timeout_seconds
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -306,6 +324,30 @@ impl SavedUpstreamProxyPolicy {
 impl Default for SavedUpstreamProxyPolicy {
     fn default() -> Self {
         Self::UseGlobal
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SavedProxyCommand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keychain_id: Option<String>,
+    #[serde(skip)]
+    pub plaintext_command: Option<SecretString>,
+}
+
+impl fmt::Debug for SavedProxyCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SavedProxyCommand")
+            .field("keychain_id", &self.keychain_id)
+            .field(
+                "plaintext_command",
+                &self
+                    .plaintext_command
+                    .as_ref()
+                    .map(|_| "[redacted secret]"),
+            )
+            .finish()
     }
 }
 
@@ -393,6 +435,9 @@ pub struct SavedConnection {
     pub proxy_chain: Vec<SavedProxyHop>,
     #[serde(default, skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global")]
     pub upstream_proxy: SavedUpstreamProxyPolicy,
+    /// Manual ProxyCommand text stays in the protected store; metadata keeps only its reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_command: Option<SavedProxyCommand>,
     #[serde(default)]
     pub options: ConnectionOptions,
     pub created_at: DateTime<Utc>,
@@ -682,6 +727,112 @@ pub struct SaveTelnetProfileRequest {
     pub connect_on_open: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoshIpFamily {
+    #[default]
+    Auto,
+    Ipv4,
+    Ipv6,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum MoshUdpPortSelection {
+    #[default]
+    Automatic,
+    Fixed { port: u16 },
+    Range { start: u16, end: u16 },
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoshPredictionMode {
+    #[default]
+    Adaptive,
+    Always,
+    Never,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MoshProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_background_color: Option<String>,
+    pub host: String,
+    #[serde(default = "default_port")]
+    pub ssh_port: u16,
+    pub username: String,
+    pub auth: SavedAuth,
+    #[serde(default = "default_mosh_server_executable")]
+    pub server_executable: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_host_override: Option<String>,
+    #[serde(default)]
+    pub udp_port: MoshUdpPortSelection,
+    #[serde(default)]
+    pub ip_family: MoshIpFamily,
+    #[serde(default)]
+    pub prediction: MoshPredictionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub legacy_ssh_compatibility: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+fn default_mosh_server_executable() -> String {
+    "mosh-server".to_string()
+}
+
+#[derive(Clone, Debug)]
+pub struct SaveMoshProfileRequest {
+    pub id: Option<String>,
+    pub name: String,
+    pub group: Option<String>,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub icon_background_color: Option<String>,
+    pub host: String,
+    pub ssh_port: u16,
+    pub username: String,
+    pub auth: SavedAuth,
+    pub server_executable: String,
+    pub udp_host_override: Option<String>,
+    pub udp_port: MoshUdpPortSelection,
+    pub ip_family: MoshIpFamily,
+    pub prediction: MoshPredictionMode,
+    pub locale: Option<String>,
+    pub identity_agent: Option<String>,
+    pub legacy_ssh_compatibility: bool,
+}
+
+/// Carries a newly saved Mosh auth secret directly into one bootstrap attempt.
+pub struct SavedMoshProfileRuntimeSecrets {
+    pub auth: Option<SecretString>,
+}
+
+impl fmt::Debug for SavedMoshProfileRuntimeSecrets {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SavedMoshProfileRuntimeSecrets")
+            .field("auth", &self.auth.as_ref().map(|_| "[redacted secret]"))
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RemoteDesktopProfile {
     pub id: String,
@@ -701,6 +852,9 @@ pub struct RemoteDesktopProfile {
     pub username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain: Option<String>,
+    /// Saved SSH connection used to reach this endpoint through a local tunnel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_gateway_connection_id: Option<String>,
     /// Stable protected-store reference; the credential value is never serialized here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_ref: Option<String>,
@@ -727,6 +881,7 @@ pub struct SaveRemoteDesktopProfileRequest {
     pub port: u16,
     pub username: Option<String>,
     pub domain: Option<String>,
+    pub ssh_gateway_connection_id: Option<String>,
     /// An explicit reference is primarily used by trusted import and sync paths.
     pub credential_ref: Option<String>,
     /// The store moves this secret into the protected credential backend.
@@ -817,6 +972,80 @@ impl TelnetProfile {
     }
 }
 
+impl MoshProfile {
+    pub fn new(
+        name: impl Into<String>,
+        host: impl Into<String>,
+        ssh_port: u16,
+        username: impl Into<String>,
+        auth: SavedAuth,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            group: None,
+            icon: None,
+            color: None,
+            icon_background_color: None,
+            host: host.into(),
+            ssh_port,
+            username: username.into(),
+            auth,
+            server_executable: default_mosh_server_executable(),
+            udp_host_override: None,
+            udp_port: MoshUdpPortSelection::Automatic,
+            ip_family: MoshIpFamily::Auto,
+            prediction: MoshPredictionMode::Adaptive,
+            locale: None,
+            identity_agent: None,
+            legacy_ssh_compatibility: false,
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.id.trim().is_empty() {
+            bail!("Mosh profile id is required");
+        }
+        if self.name.trim().is_empty() {
+            bail!("Mosh profile name is required");
+        }
+        if self.host.trim().is_empty() {
+            bail!("Mosh host is required");
+        }
+        if self.ssh_port == 0 {
+            bail!("Mosh SSH port must be greater than zero");
+        }
+        if self.username.trim().is_empty() {
+            bail!("Mosh username is required");
+        }
+        if self.server_executable.trim().is_empty() {
+            bail!("Mosh server executable is required");
+        }
+        match self.udp_port {
+            MoshUdpPortSelection::Automatic => {}
+            MoshUdpPortSelection::Fixed { port: 0 }
+            | MoshUdpPortSelection::Range { start: 0, .. }
+            | MoshUdpPortSelection::Range { end: 0, .. } => {
+                bail!("Mosh UDP port must be greater than zero")
+            }
+            MoshUdpPortSelection::Range { start, end } if start > end => {
+                bail!("Mosh UDP port range is reversed")
+            }
+            MoshUdpPortSelection::Fixed { .. } | MoshUdpPortSelection::Range { .. } => {}
+        }
+        if self.locale.as_deref().is_some_and(|locale| {
+            locale.trim().is_empty() || locale.contains(['\0', '\r', '\n'])
+        }) {
+            bail!("Mosh locale is invalid");
+        }
+        Ok(())
+    }
+}
+
 impl RemoteDesktopProfile {
     pub fn new(
         name: impl Into<String>,
@@ -837,6 +1066,7 @@ impl RemoteDesktopProfile {
             port,
             username: None,
             domain: None,
+            ssh_gateway_connection_id: None,
             credential_ref: None,
             read_only: false,
             session_options: RemoteDesktopSessionOptions::default(),
@@ -858,6 +1088,13 @@ impl RemoteDesktopProfile {
         }
         if self.port == 0 {
             bail!("Remote desktop port must be greater than zero");
+        }
+        if self
+            .ssh_gateway_connection_id
+            .as_deref()
+            .is_some_and(|connection_id| connection_id.trim().is_empty())
+        {
+            bail!("Remote desktop SSH gateway connection id cannot be empty");
         }
         if self
             .credential_ref
@@ -885,10 +1122,12 @@ pub struct SaveConnectionRequest {
     pub auth: SavedAuth,
     pub proxy_chain: Vec<SavedProxyHop>,
     pub upstream_proxy: SavedUpstreamProxyPolicy,
+    pub proxy_command: Option<SavedProxyCommand>,
     pub color: Option<String>,
     pub icon_background_color: Option<String>,
     pub icon: Option<String>,
     pub tags: Vec<String>,
+    pub connect_timeout_seconds: u64,
     pub agent_forwarding: bool,
     pub identity_agent: Option<String>,
     pub agent_forwarding_socket: Option<String>,
@@ -906,6 +1145,15 @@ pub struct SavedConnectionRuntimeSecrets {
     pub auth: Option<SecretString>,
     pub proxy_chain: Vec<Option<SecretString>>,
     pub upstream_proxy: Option<SecretString>,
+    pub proxy_command: Option<SecretString>,
+}
+
+/// Identifies one typed secret-bearing slot without exposing its protected-store key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectionCredentialSlot {
+    Primary,
+    ProxyHop { index: usize },
+    UpstreamProxy,
 }
 
 impl fmt::Debug for SavedConnectionRuntimeSecrets {
@@ -925,6 +1173,13 @@ impl fmt::Debug for SavedConnectionRuntimeSecrets {
                 "upstream_proxy",
                 &self
                     .upstream_proxy
+                    .as_ref()
+                    .map(|_| "[redacted secret]"),
+            )
+            .field(
+                "proxy_command",
+                &self
+                    .proxy_command
                     .as_ref()
                     .map(|_| "[redacted secret]"),
             )
@@ -951,6 +1206,8 @@ pub struct ConnectionStoreData {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub telnet_profiles: Vec<TelnetProfile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mosh_profiles: Vec<MoshProfile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remote_desktop_profiles: Vec<RemoteDesktopProfile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_privilege_credentials: Vec<SavedPrivilegeCredential>,
@@ -971,6 +1228,7 @@ impl Default for ConnectionStoreData {
             managed_ssh_keys: Vec::new(),
             serial_profiles: Vec::new(),
             telnet_profiles: Vec::new(),
+            mosh_profiles: Vec::new(),
             remote_desktop_profiles: Vec::new(),
             local_privilege_credentials: Vec::new(),
             pending_keychain_cleanup: Vec::new(),
@@ -986,6 +1244,24 @@ pub struct SerialProfilesSyncSnapshot {
     pub exported_at: String,
     #[serde(default)]
     pub records: Vec<SerialProfile>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelnetProfilesSyncSnapshot {
+    pub revision: String,
+    pub exported_at: String,
+    #[serde(default)]
+    pub records: Vec<TelnetProfile>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoshProfilesSyncSnapshot {
+    pub revision: String,
+    pub exported_at: String,
+    #[serde(default)]
+    pub records: Vec<MoshProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

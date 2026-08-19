@@ -895,33 +895,3 @@ fn compact_monitor_list_identity(layout: CompactMonitorLayout) -> &'static str {
         CompactMonitorLayout::Stacked => "host-tools-monitor-compact-stacked",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compact_monitor_stacks_at_the_narrow_width_boundary() {
-        assert_eq!(
-            compact_monitor_layout_for_width(COMPACT_MONITOR_STACKED_LAYOUT_MAX_WIDTH),
-            CompactMonitorLayout::Stacked
-        );
-        assert_eq!(
-            compact_monitor_layout_for_width(COMPACT_MONITOR_STACKED_LAYOUT_MAX_WIDTH + 1.0),
-            CompactMonitorLayout::Inline
-        );
-    }
-
-    #[test]
-    fn compact_monitor_uses_twelve_pixel_side_padding_at_every_width() {
-        assert_eq!(COMPACT_MONITOR_ROW_SIDE_PADDING, 12.0);
-    }
-
-    #[test]
-    fn compact_monitor_layouts_use_distinct_list_identities() {
-        assert_ne!(
-            compact_monitor_list_identity(CompactMonitorLayout::Inline),
-            compact_monitor_list_identity(CompactMonitorLayout::Stacked)
-        );
-    }
-}

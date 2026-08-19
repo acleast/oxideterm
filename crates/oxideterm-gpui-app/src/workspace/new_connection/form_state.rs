@@ -2,7 +2,9 @@ use std::fmt;
 
 use oxideterm_connections::{
     AuthType, ConnectionInfo, ConnectionTerminalOptions, ConnectionX11ForwardingOptions,
-    RemoteDesktopProfile, SavedUpstreamProxyProtocol, TransportUsernameTransition,
+    DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS, MoshIpFamily, MoshPredictionMode, MoshProfile,
+    MoshUdpPortSelection, RemoteDesktopProfile, SavedAuth, SavedConnection,
+    SavedUpstreamProxyProtocol, SerialProfile, TelnetProfile, TransportUsernameTransition,
     transport_port_replacement, transport_username_transition,
 };
 pub(in crate::workspace) use oxideterm_connections::{
@@ -136,14 +138,7 @@ pub(in crate::workspace) fn connection_icon_field_visible(
     // Only persisted session assets expose custom icons in this shared form.
     mode != NewConnectionFormMode::SavedConnectionPrompt
         && !drill_down_mode
-        && matches!(
-            transport,
-            NewConnectionTransport::Ssh
-                | NewConnectionTransport::Serial
-                | NewConnectionTransport::Telnet
-                | NewConnectionTransport::Rdp
-                | NewConnectionTransport::Vnc
-        )
+        && oxideterm_connections::transport_is_persistable(transport)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,6 +152,7 @@ pub(in crate::workspace) enum NewConnectionSelect {
     UpstreamProxyPolicy,
     UpstreamProxyProtocol,
     UpstreamProxyAuth,
+    RemoteDesktopSshGateway,
     SerialPort,
     SerialDataBits,
     SerialStopBits,
@@ -165,6 +161,8 @@ pub(in crate::workspace) enum NewConnectionSelect {
     TerminalEncoding,
     TerminalBackspaceSequence,
     TerminalDeleteSequence,
+    TerminalSemanticScheme,
+    TerminalHighlightRuleSet,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -194,6 +192,7 @@ pub(in crate::workspace) enum NewConnectionField {
     IdentityAgent,
     Group,
     PostConnectCommand,
+    ProxyCommand,
     Color,
     IconBackgroundColor,
     JumpHost,
@@ -214,6 +213,10 @@ pub(in crate::workspace) enum NewConnectionField {
     SerialBaudRate,
     SerialProfileName,
     TelnetProfileName,
+    MoshServerExecutable,
+    MoshUdpHost,
+    MoshUdpPort,
+    MoshLocale,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,6 +313,7 @@ pub(in crate::workspace) fn toggle_remote_desktop_feature(
 
 pub(in crate::workspace) struct NewConnectionProxyHop {
     pub(in crate::workspace) saved_connection_id: String,
+    pub(in crate::workspace) persisted_proxy_hop_index: Option<usize>,
     pub(in crate::workspace) host: String,
     pub(in crate::workspace) port: String,
     pub(in crate::workspace) username: String,
@@ -330,6 +334,7 @@ impl fmt::Debug for NewConnectionProxyHop {
         formatter
             .debug_struct("NewConnectionProxyHop")
             .field("saved_connection_id", &self.saved_connection_id)
+            .field("persisted_proxy_hop_index", &self.persisted_proxy_hop_index)
             .field("host", &self.host)
             .field("port", &self.port)
             .field("username", &self.username)
@@ -357,6 +362,7 @@ impl NewConnectionProxyHop {
     pub(in crate::workspace) fn new() -> Self {
         Self {
             saved_connection_id: String::new(),
+            persisted_proxy_hop_index: None,
             host: String::new(),
             port: SSH_DEFAULT_PORT_TEXT.to_string(),
             username: String::new(),
@@ -377,6 +383,33 @@ impl NewConnectionProxyHop {
         !self.host.trim().is_empty() && !self.username.trim().is_empty()
     }
 
+    pub(in crate::workspace) fn has_explicit_secret_draft(&self) -> bool {
+        match self.auth_tab {
+            SshAuthTab::Password => !self.password.is_empty(),
+            SshAuthTab::DefaultKey
+            | SshAuthTab::SshKey
+            | SshAuthTab::ManagedKey
+            | SshAuthTab::Certificate => !self.passphrase.is_empty(),
+            SshAuthTab::Agent | SshAuthTab::TwoFactor => false,
+        }
+    }
+
+    pub(in crate::workspace) fn matches_saved_connection(
+        &self,
+        connection: &SavedConnection,
+    ) -> bool {
+        // A saved secret is reusable only while every authentication endpoint field still
+        // matches the selected connection, preventing credentials from reaching an edited host.
+        self.saved_connection_id == connection.id
+            && self.host.trim() == connection.host
+            && self.port.trim().parse::<u16>().ok() == Some(connection.port)
+            && self.username.trim() == connection.username
+            && self.auth_tab == ssh_auth_tab_from_saved_auth(&connection.auth)
+            && self.key_path.trim() == connection.auth.key_path().unwrap_or_default()
+            && self.cert_path.trim() == connection.auth.cert_path().unwrap_or_default()
+            && self.managed_key_id.trim() == connection.auth.managed_key_id().unwrap_or_default()
+    }
+
     fn zeroize_secret_drafts(&mut self) {
         self.password.zeroize();
         self.passphrase.zeroize();
@@ -384,11 +417,21 @@ impl NewConnectionProxyHop {
 
     pub(in crate::workspace) fn apply_saved_connection(&mut self, connection: &ConnectionInfo) {
         self.saved_connection_id = connection.id.clone();
+        self.persisted_proxy_hop_index = None;
         self.host = connection.host.clone();
         self.port = connection.port.to_string();
         self.username = connection.username.clone();
         self.auth_tab = match connection.auth_type {
             AuthType::Password => SshAuthTab::Password,
+            AuthType::Key
+                if connection
+                    .key_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .is_empty() =>
+            {
+                SshAuthTab::DefaultKey
+            }
             AuthType::Key => SshAuthTab::SshKey,
             AuthType::ManagedKey => SshAuthTab::ManagedKey,
             AuthType::Certificate => SshAuthTab::Certificate,
@@ -409,6 +452,18 @@ impl NewConnectionProxyHop {
     }
 }
 
+pub(in crate::workspace) fn ssh_auth_tab_from_saved_auth(auth: &SavedAuth) -> SshAuthTab {
+    match auth {
+        SavedAuth::Password { .. } => SshAuthTab::Password,
+        SavedAuth::Key { key_path, .. } if key_path.is_empty() => SshAuthTab::DefaultKey,
+        SavedAuth::Key { .. } => SshAuthTab::SshKey,
+        SavedAuth::ManagedKey { .. } => SshAuthTab::ManagedKey,
+        SavedAuth::Certificate { .. } => SshAuthTab::Certificate,
+        SavedAuth::KeyboardInteractive => SshAuthTab::TwoFactor,
+        SavedAuth::Agent => SshAuthTab::Agent,
+    }
+}
+
 impl Drop for NewConnectionProxyHop {
     fn drop(&mut self) {
         // Proxy credentials remain in one form owner and are scrubbed on removal.
@@ -418,6 +473,8 @@ impl Drop for NewConnectionProxyHop {
 
 pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) transport: NewConnectionTransport,
+    /// Selects one discovered shell for this one-shot local terminal launch.
+    pub(in crate::workspace) local_shell_id: Option<String>,
     pub(in crate::workspace) name: String,
     pub(in crate::workspace) host: String,
     pub(in crate::workspace) port: String,
@@ -427,6 +484,14 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) remote_desktop_session_options: RemoteDesktopSessionOptions,
     /// Identifies an existing RDP/VNC asset without overloading SSH edit state.
     pub(in crate::workspace) remote_desktop_profile_id: Option<String>,
+    /// References saved SSH metadata only; credentials remain in the protected store.
+    pub(in crate::workspace) remote_desktop_ssh_gateway_connection_id: Option<String>,
+    /// Identifies an existing Mosh asset without creating an SSH node edit owner.
+    pub(in crate::workspace) mosh_profile_id: Option<String>,
+    /// Identifies an existing serial asset without changing a live serial session.
+    pub(in crate::workspace) serial_profile_id: Option<String>,
+    /// Identifies an existing Telnet asset without changing a live Telnet session.
+    pub(in crate::workspace) telnet_profile_id: Option<String>,
     pub(in crate::workspace) saved_password_keychain_id: Option<String>,
     pub(in crate::workspace) password_loaded: bool,
     pub(in crate::workspace) password_visible: bool,
@@ -440,10 +505,26 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) save_password: bool,
     pub(in crate::workspace) group: String,
     pub(in crate::workspace) post_connect_command: String,
+    pub(in crate::workspace) proxy_command_enabled: bool,
+    pub(in crate::workspace) proxy_command: String,
+    pub(in crate::workspace) proxy_command_keychain_id: Option<String>,
     pub(in crate::workspace) color: String,
     pub(in crate::workspace) icon_background_color: String,
     pub(in crate::workspace) icon: String,
     pub(in crate::workspace) icon_picker_expanded: bool,
+    // None uses the default expanded state; user toggles remain transient UI state.
+    pub(in crate::workspace) basic_section_expanded: Option<bool>,
+    pub(in crate::workspace) authentication_section_expanded: Option<bool>,
+    pub(in crate::workspace) route_section_expanded: Option<bool>,
+    pub(in crate::workspace) ssh_options_section_expanded: Option<bool>,
+    pub(in crate::workspace) terminal_section_expanded: Option<bool>,
+    pub(in crate::workspace) appearance_section_expanded: Option<bool>,
+    pub(in crate::workspace) remote_gateway_section_expanded: Option<bool>,
+    pub(in crate::workspace) vnc_preferences_section_expanded: Option<bool>,
+    pub(in crate::workspace) remote_features_section_expanded: Option<bool>,
+    pub(in crate::workspace) serial_parameters_section_expanded: Option<bool>,
+    pub(in crate::workspace) mosh_options_section_expanded: Option<bool>,
+    pub(in crate::workspace) local_shell_section_expanded: Option<bool>,
     pub(in crate::workspace) tags: Vec<String>,
     pub(in crate::workspace) proxy_hops: Vec<NewConnectionProxyHop>,
     pub(in crate::workspace) proxy_chain_expanded: bool,
@@ -462,6 +543,7 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) identity_agent: String,
     pub(in crate::workspace) agent_forwarding_socket: Option<String>,
     pub(in crate::workspace) legacy_ssh_compatibility: bool,
+    pub(in crate::workspace) connect_timeout_seconds: u64,
     pub(in crate::workspace) dedicated_new_terminal_connection: bool,
     pub(in crate::workspace) x11_forwarding: ConnectionX11ForwardingOptions,
     pub(in crate::workspace) terminal: ConnectionTerminalOptions,
@@ -471,6 +553,8 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) focused_field: NewConnectionField,
     pub(in crate::workspace) selected_field: Option<NewConnectionField>,
     pub(in crate::workspace) error: Option<String>,
+    // Success styling remains bound to the exact feedback message that produced it.
+    pub(in crate::workspace) success_feedback_message: Option<String>,
     pub(in crate::workspace) pending: bool,
     pub(in crate::workspace) serial_ports: Vec<oxideterm_terminal::SerialPortInfo>,
     pub(in crate::workspace) serial_ports_loading: bool,
@@ -482,6 +566,12 @@ pub(in crate::workspace) struct NewConnectionForm {
     pub(in crate::workspace) serial_flow_control: oxideterm_terminal::SerialFlowControl,
     pub(in crate::workspace) serial_profile_name: String,
     pub(in crate::workspace) telnet_profile_name: String,
+    pub(in crate::workspace) mosh_server_executable: String,
+    pub(in crate::workspace) mosh_udp_host: String,
+    pub(in crate::workspace) mosh_udp_port: String,
+    pub(in crate::workspace) mosh_locale: String,
+    pub(in crate::workspace) mosh_ip_family: MoshIpFamily,
+    pub(in crate::workspace) mosh_prediction: MoshPredictionMode,
 }
 
 impl fmt::Debug for NewConnectionForm {
@@ -489,6 +579,7 @@ impl fmt::Debug for NewConnectionForm {
         formatter
             .debug_struct("NewConnectionForm")
             .field("transport", &self.transport)
+            .field("local_shell_id", &self.local_shell_id)
             .field("name", &self.name)
             .field("host", &self.host)
             .field("port", &self.port)
@@ -500,6 +591,13 @@ impl fmt::Debug for NewConnectionForm {
                 &self.remote_desktop_session_options,
             )
             .field("remote_desktop_profile_id", &self.remote_desktop_profile_id)
+            .field(
+                "remote_desktop_ssh_gateway_connection_id",
+                &self.remote_desktop_ssh_gateway_connection_id,
+            )
+            .field("mosh_profile_id", &self.mosh_profile_id)
+            .field("serial_profile_id", &self.serial_profile_id)
+            .field("telnet_profile_id", &self.telnet_profile_id)
             .field(
                 "saved_password_keychain_id",
                 &self.saved_password_keychain_id,
@@ -516,10 +614,52 @@ impl fmt::Debug for NewConnectionForm {
             .field("save_password", &self.save_password)
             .field("group", &self.group)
             .field("post_connect_command", &self.post_connect_command)
+            .field("proxy_command_enabled", &self.proxy_command_enabled)
+            .field("proxy_command", &"[redacted secret]")
+            .field("proxy_command_keychain_id", &self.proxy_command_keychain_id)
             .field("color", &self.color)
             .field("icon_background_color", &self.icon_background_color)
             .field("icon", &self.icon)
             .field("icon_picker_expanded", &self.icon_picker_expanded)
+            .field("basic_section_expanded", &self.basic_section_expanded)
+            .field(
+                "authentication_section_expanded",
+                &self.authentication_section_expanded,
+            )
+            .field("route_section_expanded", &self.route_section_expanded)
+            .field(
+                "ssh_options_section_expanded",
+                &self.ssh_options_section_expanded,
+            )
+            .field("terminal_section_expanded", &self.terminal_section_expanded)
+            .field(
+                "appearance_section_expanded",
+                &self.appearance_section_expanded,
+            )
+            .field(
+                "remote_gateway_section_expanded",
+                &self.remote_gateway_section_expanded,
+            )
+            .field(
+                "vnc_preferences_section_expanded",
+                &self.vnc_preferences_section_expanded,
+            )
+            .field(
+                "remote_features_section_expanded",
+                &self.remote_features_section_expanded,
+            )
+            .field(
+                "serial_parameters_section_expanded",
+                &self.serial_parameters_section_expanded,
+            )
+            .field(
+                "mosh_options_section_expanded",
+                &self.mosh_options_section_expanded,
+            )
+            .field(
+                "local_shell_section_expanded",
+                &self.local_shell_section_expanded,
+            )
             .field("tags", &self.tags)
             .field("proxy_hops", &self.proxy_hops)
             .field("proxy_chain_expanded", &self.proxy_chain_expanded)
@@ -547,6 +687,7 @@ impl fmt::Debug for NewConnectionForm {
                 &self.agent_forwarding_socket.is_some(),
             )
             .field("legacy_ssh_compatibility", &self.legacy_ssh_compatibility)
+            .field("connect_timeout_seconds", &self.connect_timeout_seconds)
             .field(
                 "dedicated_new_terminal_connection",
                 &self.dedicated_new_terminal_connection,
@@ -570,6 +711,12 @@ impl fmt::Debug for NewConnectionForm {
             .field("serial_flow_control", &self.serial_flow_control)
             .field("serial_profile_name", &self.serial_profile_name)
             .field("telnet_profile_name", &self.telnet_profile_name)
+            .field("mosh_server_executable", &self.mosh_server_executable)
+            .field("mosh_udp_host", &self.mosh_udp_host)
+            .field("mosh_udp_port", &self.mosh_udp_port)
+            .field("mosh_locale", &self.mosh_locale)
+            .field("mosh_ip_family", &self.mosh_ip_family)
+            .field("mosh_prediction", &self.mosh_prediction)
             .finish()
     }
 }
@@ -578,6 +725,7 @@ impl Default for NewConnectionForm {
     fn default() -> Self {
         Self {
             transport: NewConnectionTransport::Ssh,
+            local_shell_id: None,
             name: String::new(),
             host: String::new(),
             port: SSH_DEFAULT_PORT_TEXT.to_string(),
@@ -586,6 +734,10 @@ impl Default for NewConnectionForm {
             password: String::new(),
             remote_desktop_session_options: RemoteDesktopSessionOptions::default(),
             remote_desktop_profile_id: None,
+            remote_desktop_ssh_gateway_connection_id: None,
+            mosh_profile_id: None,
+            serial_profile_id: None,
+            telnet_profile_id: None,
             saved_password_keychain_id: None,
             password_loaded: true,
             password_visible: false,
@@ -599,10 +751,25 @@ impl Default for NewConnectionForm {
             save_password: false,
             group: String::new(),
             post_connect_command: String::new(),
+            proxy_command_enabled: false,
+            proxy_command: String::new(),
+            proxy_command_keychain_id: None,
             color: String::new(),
             icon_background_color: String::new(),
             icon: String::new(),
             icon_picker_expanded: false,
+            basic_section_expanded: None,
+            authentication_section_expanded: None,
+            route_section_expanded: None,
+            ssh_options_section_expanded: None,
+            terminal_section_expanded: None,
+            appearance_section_expanded: None,
+            remote_gateway_section_expanded: None,
+            vnc_preferences_section_expanded: None,
+            remote_features_section_expanded: None,
+            serial_parameters_section_expanded: None,
+            mosh_options_section_expanded: None,
+            local_shell_section_expanded: None,
             tags: Vec::new(),
             proxy_hops: Vec::new(),
             proxy_chain_expanded: false,
@@ -621,6 +788,7 @@ impl Default for NewConnectionForm {
             identity_agent: String::new(),
             agent_forwarding_socket: None,
             legacy_ssh_compatibility: false,
+            connect_timeout_seconds: DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS,
             dedicated_new_terminal_connection: false,
             x11_forwarding: ConnectionX11ForwardingOptions::default(),
             terminal: ConnectionTerminalOptions::default(),
@@ -630,6 +798,7 @@ impl Default for NewConnectionForm {
             focused_field: NewConnectionField::Name,
             selected_field: None,
             error: None,
+            success_feedback_message: None,
             pending: false,
             serial_ports: Vec::new(),
             serial_ports_loading: false,
@@ -641,15 +810,28 @@ impl Default for NewConnectionForm {
             serial_flow_control: oxideterm_terminal::SerialFlowControl::None,
             serial_profile_name: String::new(),
             telnet_profile_name: String::new(),
+            mosh_server_executable: "mosh-server".to_string(),
+            mosh_udp_host: String::new(),
+            mosh_udp_port: String::new(),
+            mosh_locale: String::new(),
+            mosh_ip_family: MoshIpFamily::Auto,
+            mosh_prediction: MoshPredictionMode::Adaptive,
         }
     }
 }
 
 impl NewConnectionForm {
+    pub(in crate::workspace) fn feedback_is_success(&self) -> bool {
+        self.error
+            .as_ref()
+            .is_some_and(|message| self.success_feedback_message.as_ref() == Some(message))
+    }
+
     fn zeroize_secret_drafts(&mut self) {
         self.password.zeroize();
         self.passphrase.zeroize();
         self.upstream_proxy_password.zeroize();
+        self.proxy_command.zeroize();
     }
 }
 
@@ -676,6 +858,7 @@ pub(in crate::workspace) fn form_from_remote_desktop_profile(
     form.username = profile.username.clone().unwrap_or_default();
     form.remote_desktop_session_options = profile.session_options;
     form.remote_desktop_profile_id = Some(profile.id.clone());
+    form.remote_desktop_ssh_gateway_connection_id = profile.ssh_gateway_connection_id.clone();
     form.saved_password_keychain_id = profile.credential_ref.clone();
     form.save_password = profile.credential_ref.is_some();
     form.group = profile.group.clone().unwrap_or(ungrouped_label);
@@ -683,6 +866,124 @@ pub(in crate::workspace) fn form_from_remote_desktop_profile(
     form.color = profile.color.clone().unwrap_or_default();
     form.icon_background_color = profile.icon_background_color.clone().unwrap_or_default();
     form.focused_field = NewConnectionField::Name;
+    form
+}
+
+pub(in crate::workspace) fn form_from_mosh_profile(
+    profile: &MoshProfile,
+    ungrouped_label: String,
+) -> NewConnectionForm {
+    // Editing retains only protected-store references and never loads the secret value.
+    let mut form = NewConnectionForm::default();
+    form.transport = NewConnectionTransport::Mosh;
+    form.mosh_profile_id = Some(profile.id.clone());
+    form.name = profile.name.clone();
+    form.host = profile.host.clone();
+    form.port = profile.ssh_port.to_string();
+    form.username = profile.username.clone();
+    form.auth_tab = ssh_auth_tab_from_saved_auth(&profile.auth);
+    form.saved_password_keychain_id = match &profile.auth {
+        SavedAuth::Password { keychain_id, .. } => keychain_id.clone(),
+        _ => None,
+    };
+    // Password-profile editors default to persisting a replacement credential.
+    form.save_password = matches!(profile.auth, SavedAuth::Password { .. });
+    form.password_loaded = true;
+    form.key_path = profile.auth.key_path().unwrap_or_default().to_string();
+    form.managed_key_id = profile
+        .auth
+        .managed_key_id()
+        .unwrap_or_default()
+        .to_string();
+    form.cert_path = profile.auth.cert_path().unwrap_or_default().to_string();
+    form.group = profile.group.clone().unwrap_or(ungrouped_label);
+    form.icon = profile.icon.clone().unwrap_or_default();
+    form.color = profile.color.clone().unwrap_or_default();
+    form.icon_background_color = profile.icon_background_color.clone().unwrap_or_default();
+    form.identity_agent = profile.identity_agent.clone().unwrap_or_default();
+    form.agent_available =
+        oxideterm_ssh::ssh_agent_available(identity_agent_selector(&form.identity_agent));
+    form.legacy_ssh_compatibility = profile.legacy_ssh_compatibility;
+    form.mosh_server_executable = profile.server_executable.clone();
+    form.mosh_udp_host = profile.udp_host_override.clone().unwrap_or_default();
+    form.mosh_udp_port = match profile.udp_port {
+        MoshUdpPortSelection::Automatic => String::new(),
+        MoshUdpPortSelection::Fixed { port } => port.to_string(),
+        MoshUdpPortSelection::Range { start, end } => format!("{start}:{end}"),
+    };
+    form.mosh_locale = profile.locale.clone().unwrap_or_default();
+    form.mosh_ip_family = profile.ip_family;
+    form.mosh_prediction = profile.prediction;
+    form.focused_field = NewConnectionField::Name;
+    form
+}
+
+pub(in crate::workspace) fn terminal_serial_parity_from_profile(
+    parity: &oxideterm_connections::SerialParity,
+) -> oxideterm_terminal::SerialParity {
+    match parity {
+        oxideterm_connections::SerialParity::None => oxideterm_terminal::SerialParity::None,
+        oxideterm_connections::SerialParity::Odd => oxideterm_terminal::SerialParity::Odd,
+        oxideterm_connections::SerialParity::Even => oxideterm_terminal::SerialParity::Even,
+    }
+}
+
+pub(in crate::workspace) fn terminal_serial_flow_from_profile(
+    flow: &oxideterm_connections::SerialFlowControl,
+) -> oxideterm_terminal::SerialFlowControl {
+    match flow {
+        oxideterm_connections::SerialFlowControl::None => {
+            oxideterm_terminal::SerialFlowControl::None
+        }
+        oxideterm_connections::SerialFlowControl::Software => {
+            oxideterm_terminal::SerialFlowControl::Software
+        }
+        oxideterm_connections::SerialFlowControl::Hardware => {
+            oxideterm_terminal::SerialFlowControl::Hardware
+        }
+    }
+}
+
+pub(in crate::workspace) fn form_from_serial_profile(
+    profile: &SerialProfile,
+    ungrouped_label: String,
+) -> NewConnectionForm {
+    // The edit form owns only persisted settings; live serial sessions keep their current port.
+    let mut form = NewConnectionForm::default();
+    form.transport = NewConnectionTransport::Serial;
+    form.serial_profile_id = Some(profile.id.clone());
+    form.serial_profile_name = profile.name.clone();
+    form.group = profile.group.clone().unwrap_or(ungrouped_label);
+    form.icon = profile.icon.clone().unwrap_or_default();
+    form.color = profile.color.clone().unwrap_or_default();
+    form.icon_background_color = profile.icon_background_color.clone().unwrap_or_default();
+    form.serial_port_path = profile.port_path.clone();
+    form.serial_baud_rate = profile.baud_rate.to_string();
+    form.serial_data_bits = profile.data_bits;
+    form.serial_stop_bits = profile.stop_bits;
+    form.serial_parity = terminal_serial_parity_from_profile(&profile.parity);
+    form.serial_flow_control = terminal_serial_flow_from_profile(&profile.flow_control);
+    form.focused_field = NewConnectionField::SerialProfileName;
+    form
+}
+
+pub(in crate::workspace) fn form_from_telnet_profile(
+    profile: &TelnetProfile,
+    ungrouped_label: String,
+) -> NewConnectionForm {
+    // The edit form owns only persisted settings; live Telnet sessions keep their current socket.
+    let mut form = NewConnectionForm::default();
+    form.transport = NewConnectionTransport::Telnet;
+    form.telnet_profile_id = Some(profile.id.clone());
+    form.telnet_profile_name = profile.name.clone();
+    form.group = profile.group.clone().unwrap_or(ungrouped_label);
+    form.icon = profile.icon.clone().unwrap_or_default();
+    form.color = profile.color.clone().unwrap_or_default();
+    form.icon_background_color = profile.icon_background_color.clone().unwrap_or_default();
+    form.host = profile.host.clone();
+    form.port = profile.port.to_string();
+    form.terminal = profile.terminal.clone();
+    form.focused_field = NewConnectionField::TelnetProfileName;
     form
 }
 
@@ -771,14 +1072,18 @@ pub(in crate::workspace) fn next_connection_field(
     upstream_proxy_auth: NewConnectionUpstreamProxyAuth,
     forward: bool,
 ) -> NewConnectionField {
+    if transport == NewConnectionTransport::LocalTerminal {
+        // A one-shot local terminal has no editable or persistable form fields.
+        return field;
+    }
     if transport == NewConnectionTransport::WslGraphics {
         return NewConnectionField::Name;
     }
     if transport == NewConnectionTransport::Serial {
         let fields = [
+            NewConnectionField::SerialProfileName,
             NewConnectionField::SerialPortPath,
             NewConnectionField::SerialBaudRate,
-            NewConnectionField::SerialProfileName,
         ];
         let index = fields
             .iter()
@@ -795,9 +1100,9 @@ pub(in crate::workspace) fn next_connection_field(
     }
     if transport == NewConnectionTransport::Telnet {
         let fields = [
+            NewConnectionField::TelnetProfileName,
             NewConnectionField::Host,
             NewConnectionField::Port,
-            NewConnectionField::TelnetProfileName,
         ];
         let index = fields
             .iter()
@@ -819,6 +1124,7 @@ pub(in crate::workspace) fn next_connection_field(
         let fields = if transport == NewConnectionTransport::Rdp {
             vec![
                 NewConnectionField::Name,
+                NewConnectionField::Group,
                 NewConnectionField::Host,
                 NewConnectionField::Port,
                 NewConnectionField::Username,
@@ -827,6 +1133,7 @@ pub(in crate::workspace) fn next_connection_field(
         } else {
             vec![
                 NewConnectionField::Name,
+                NewConnectionField::Group,
                 NewConnectionField::Host,
                 NewConnectionField::Port,
                 NewConnectionField::Password,
@@ -849,72 +1156,80 @@ pub(in crate::workspace) fn next_connection_field(
     let mut fields: Vec<NewConnectionField> = match auth_tab {
         SshAuthTab::Password => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
             NewConnectionField::Password,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
         SshAuthTab::DefaultKey => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
             NewConnectionField::Passphrase,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
         SshAuthTab::SshKey => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
             NewConnectionField::KeyPath,
             NewConnectionField::Passphrase,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
         SshAuthTab::ManagedKey => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
             NewConnectionField::ManagedKeyId,
             NewConnectionField::Passphrase,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
         SshAuthTab::Certificate => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
             NewConnectionField::KeyPath,
             NewConnectionField::CertPath,
             NewConnectionField::Passphrase,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
         SshAuthTab::Agent => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
             NewConnectionField::IdentityAgent,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
         SshAuthTab::TwoFactor => vec![
             NewConnectionField::Name,
+            NewConnectionField::Group,
             NewConnectionField::Host,
             NewConnectionField::Port,
             NewConnectionField::Username,
-            NewConnectionField::Group,
             NewConnectionField::PostConnectCommand,
         ],
     };
-    if upstream_proxy_policy == NewConnectionUpstreamProxyPolicy::Custom {
+    if transport == NewConnectionTransport::Mosh {
+        fields.retain(|field| *field != NewConnectionField::PostConnectCommand);
+        fields.extend([
+            NewConnectionField::MoshServerExecutable,
+            NewConnectionField::MoshUdpHost,
+            NewConnectionField::MoshUdpPort,
+            NewConnectionField::MoshLocale,
+        ]);
+    } else if upstream_proxy_policy == NewConnectionUpstreamProxyPolicy::Custom {
         fields.extend([
             NewConnectionField::UpstreamProxyHost,
             NewConnectionField::UpstreamProxyPort,
@@ -1022,6 +1337,7 @@ pub(in crate::workspace) fn current_connection_field_mut(
         NewConnectionField::IdentityAgent => &mut form.identity_agent,
         NewConnectionField::Group => &mut form.group,
         NewConnectionField::PostConnectCommand => &mut form.post_connect_command,
+        NewConnectionField::ProxyCommand => &mut form.proxy_command,
         NewConnectionField::UpstreamProxyHost => &mut form.upstream_proxy_host,
         NewConnectionField::UpstreamProxyPort => &mut form.upstream_proxy_port,
         NewConnectionField::UpstreamProxyNoProxy => &mut form.upstream_proxy_no_proxy,
@@ -1096,6 +1412,10 @@ pub(in crate::workspace) fn current_connection_field_mut(
         NewConnectionField::SerialBaudRate => &mut form.serial_baud_rate,
         NewConnectionField::SerialProfileName => &mut form.serial_profile_name,
         NewConnectionField::TelnetProfileName => &mut form.telnet_profile_name,
+        NewConnectionField::MoshServerExecutable => &mut form.mosh_server_executable,
+        NewConnectionField::MoshUdpHost => &mut form.mosh_udp_host,
+        NewConnectionField::MoshUdpPort => &mut form.mosh_udp_port,
+        NewConnectionField::MoshLocale => &mut form.mosh_locale,
     }
 }
 
@@ -1113,6 +1433,7 @@ pub(in crate::workspace) fn current_connection_field(form: &NewConnectionForm) -
         NewConnectionField::IdentityAgent => &form.identity_agent,
         NewConnectionField::Group => &form.group,
         NewConnectionField::PostConnectCommand => &form.post_connect_command,
+        NewConnectionField::ProxyCommand => &form.proxy_command,
         NewConnectionField::UpstreamProxyHost => &form.upstream_proxy_host,
         NewConnectionField::UpstreamProxyPort => &form.upstream_proxy_port,
         NewConnectionField::UpstreamProxyNoProxy => &form.upstream_proxy_no_proxy,
@@ -1187,6 +1508,10 @@ pub(in crate::workspace) fn current_connection_field(form: &NewConnectionForm) -
         NewConnectionField::SerialBaudRate => &form.serial_baud_rate,
         NewConnectionField::SerialProfileName => &form.serial_profile_name,
         NewConnectionField::TelnetProfileName => &form.telnet_profile_name,
+        NewConnectionField::MoshServerExecutable => &form.mosh_server_executable,
+        NewConnectionField::MoshUdpHost => &form.mosh_udp_host,
+        NewConnectionField::MoshUdpPort => &form.mosh_udp_port,
+        NewConnectionField::MoshLocale => &form.mosh_locale,
     }
 }
 
@@ -1269,7 +1594,9 @@ mod tests {
     use chrono::Utc;
     use gpui::{Keystroke, Modifiers};
     use oxideterm_connections::{
-        AuthType, ConnectionInfo, RemoteDesktopProfile, SavedUpstreamProxyPolicy,
+        AuthType, ConnectionInfo, MoshIpFamily, MoshPredictionMode, MoshProfile,
+        MoshUdpPortSelection, RemoteDesktopProfile, SavedAuth, SavedUpstreamProxyPolicy,
+        SerialFlowControl, SerialParity, SerialProfile, TelnetProfile,
     };
     use oxideterm_remote_desktop::{
         RemoteDesktopAudioOptions, RemoteDesktopClipboardOptions, RemoteDesktopDisplayOptions,
@@ -1287,8 +1614,9 @@ mod tests {
         apply_remote_desktop_vnc_preference, apply_transport_default_port,
         apply_transport_default_username, auth_family_from_tab, auth_tab_from_key_source,
         backspace_current_connection_field, connection_icon_field_visible,
-        connection_secret_field_visible, default_auth_tab_for_family,
-        form_from_remote_desktop_profile, identity_agent_from_form, identity_agent_selector,
+        connection_secret_field_visible, default_auth_tab_for_family, form_from_mosh_profile,
+        form_from_remote_desktop_profile, form_from_serial_profile, form_from_telnet_profile,
+        identity_agent_from_form, identity_agent_selector,
         insert_text_into_current_connection_field, key_source_from_tab, new_connection_form_mode,
         next_connection_field, next_jump_connection_field, remote_desktop_feature_supported,
         remote_desktop_vnc_preference_selected, select_current_connection_field,
@@ -1413,6 +1741,7 @@ mod tests {
             username: Some("operator".to_string()),
             domain: Some("EXAMPLE".to_string()),
             credential_ref: Some("remote-desktop:remote-1".to_string()),
+            ssh_gateway_connection_id: Some("gateway-1".to_string()),
             read_only: true,
             session_options,
             created_at: now,
@@ -1432,6 +1761,10 @@ mod tests {
         assert_eq!(form.icon, "cloud");
         assert_eq!(form.color, "#7dd3fc");
         assert_eq!(form.icon_background_color, "#082f49");
+        assert_eq!(
+            form.remote_desktop_ssh_gateway_connection_id.as_deref(),
+            Some("gateway-1")
+        );
         assert_eq!(form.remote_desktop_session_options, session_options);
         assert_eq!(
             form.saved_password_keychain_id.as_deref(),
@@ -1442,9 +1775,122 @@ mod tests {
     }
 
     #[test]
-    fn custom_icon_field_is_available_for_all_five_session_assets() {
+    fn mosh_profile_form_preserves_edit_metadata_without_loading_credentials() {
+        let mut profile = MoshProfile::new(
+            "Roaming shell",
+            "mosh.example.com",
+            2222,
+            "operator",
+            SavedAuth::Password {
+                keychain_id: Some("mosh-password-owner".to_string()),
+                plaintext_password: None,
+            },
+        );
+        profile.id = "mosh-1".to_string();
+        profile.group = Some("Mobile".to_string());
+        profile.icon = Some("wifi".to_string());
+        profile.color = Some("#93c5fd".to_string());
+        profile.server_executable = "/opt/mosh/bin/mosh-server".to_string();
+        profile.udp_host_override = Some("udp.example.com".to_string());
+        profile.udp_port = MoshUdpPortSelection::Range {
+            start: 60_000,
+            end: 60_010,
+        };
+        profile.ip_family = MoshIpFamily::Ipv4;
+        profile.prediction = MoshPredictionMode::Always;
+        profile.locale = Some("en_US.UTF-8".to_string());
+
+        let form = form_from_mosh_profile(&profile, "Ungrouped".to_string());
+
+        assert_eq!(form.mosh_profile_id.as_deref(), Some("mosh-1"));
+        assert_eq!(form.transport, NewConnectionTransport::Mosh);
+        assert_eq!(form.name, "Roaming shell");
+        assert_eq!(form.host, "mosh.example.com");
+        assert_eq!(form.port, "2222");
+        assert_eq!(form.username, "operator");
+        assert_eq!(form.group, "Mobile");
+        assert_eq!(form.icon, "wifi");
+        assert_eq!(form.color, "#93c5fd");
+        assert_eq!(form.mosh_server_executable, "/opt/mosh/bin/mosh-server");
+        assert_eq!(form.mosh_udp_host, "udp.example.com");
+        assert_eq!(form.mosh_udp_port, "60000:60010");
+        assert_eq!(form.mosh_ip_family, MoshIpFamily::Ipv4);
+        assert_eq!(form.mosh_prediction, MoshPredictionMode::Always);
+        assert_eq!(form.mosh_locale, "en_US.UTF-8");
+        assert_eq!(form.auth_tab, SshAuthTab::Password);
+        assert_eq!(
+            form.saved_password_keychain_id.as_deref(),
+            Some("mosh-password-owner")
+        );
+        assert!(form.save_password);
+        assert!(form.password.is_empty());
+    }
+
+    #[test]
+    fn serial_profile_form_restores_saved_line_settings_for_editing() {
+        let mut profile = SerialProfile::new("Console cable", "/dev/cu.usbserial-10");
+        profile.id = "serial-1".to_string();
+        profile.group = Some("Lab".to_string());
+        profile.icon = Some("radio".to_string());
+        profile.color = Some("#fbbf24".to_string());
+        profile.icon_background_color = Some("#451a03".to_string());
+        profile.baud_rate = 57_600;
+        profile.data_bits = 7;
+        profile.stop_bits = 2;
+        profile.parity = SerialParity::Even;
+        profile.flow_control = SerialFlowControl::Hardware;
+
+        let form = form_from_serial_profile(&profile, "Ungrouped".to_string());
+
+        assert_eq!(form.serial_profile_id.as_deref(), Some("serial-1"));
+        assert_eq!(form.transport, NewConnectionTransport::Serial);
+        assert_eq!(form.serial_profile_name, "Console cable");
+        assert_eq!(form.group, "Lab");
+        assert_eq!(form.icon, "radio");
+        assert_eq!(form.color, "#fbbf24");
+        assert_eq!(form.icon_background_color, "#451a03");
+        assert_eq!(form.serial_port_path, "/dev/cu.usbserial-10");
+        assert_eq!(form.serial_baud_rate, "57600");
+        assert_eq!(form.serial_data_bits, 7);
+        assert_eq!(form.serial_stop_bits, 2);
+        assert_eq!(form.serial_parity, oxideterm_terminal::SerialParity::Even);
+        assert_eq!(
+            form.serial_flow_control,
+            oxideterm_terminal::SerialFlowControl::Hardware
+        );
+    }
+
+    #[test]
+    fn telnet_profile_form_restores_endpoint_and_terminal_settings_for_editing() {
+        let mut profile = TelnetProfile::new("Router console", "router.example.com", 2323);
+        profile.id = "telnet-1".to_string();
+        profile.group = Some("Lab".to_string());
+        profile.icon = Some("network".to_string());
+        profile.color = Some("#86efac".to_string());
+        profile.icon_background_color = Some("#052e16".to_string());
+        profile.terminal.encoding = Some(oxideterm_connections::ConnectionTerminalEncoding::Big5);
+        profile.terminal.backspace_sequence =
+            Some(oxideterm_connections::ConnectionTerminalBackspaceSequence::Delete);
+
+        let form = form_from_telnet_profile(&profile, "Ungrouped".to_string());
+
+        assert_eq!(form.telnet_profile_id.as_deref(), Some("telnet-1"));
+        assert_eq!(form.transport, NewConnectionTransport::Telnet);
+        assert_eq!(form.telnet_profile_name, "Router console");
+        assert_eq!(form.group, "Lab");
+        assert_eq!(form.icon, "network");
+        assert_eq!(form.color, "#86efac");
+        assert_eq!(form.icon_background_color, "#052e16");
+        assert_eq!(form.host, "router.example.com");
+        assert_eq!(form.port, "2323");
+        assert_eq!(form.terminal, profile.terminal);
+    }
+
+    #[test]
+    fn custom_icon_field_is_available_for_all_six_session_assets() {
         for transport in [
             NewConnectionTransport::Ssh,
+            NewConnectionTransport::Mosh,
             NewConnectionTransport::Serial,
             NewConnectionTransport::Telnet,
             NewConnectionTransport::Rdp,
@@ -1461,6 +1907,11 @@ mod tests {
             NewConnectionFormMode::NewConnection,
             false,
             NewConnectionTransport::WslGraphics
+        ));
+        assert!(!connection_icon_field_visible(
+            NewConnectionFormMode::NewConnection,
+            false,
+            NewConnectionTransport::LocalTerminal
         ));
         assert!(!connection_icon_field_visible(
             NewConnectionFormMode::SavedConnectionPrompt,
@@ -1533,6 +1984,7 @@ mod tests {
 
     #[test]
     fn telnet_transport_tabs_between_endpoint_and_profile_name() {
+        // Keyboard traversal follows the same profile-first order as the form.
         assert_eq!(
             next_connection_field(
                 NewConnectionField::Host,
@@ -1569,10 +2021,48 @@ mod tests {
     }
 
     #[test]
+    fn serial_transport_tabs_from_profile_to_device_parameters() {
+        // Keyboard traversal follows the same profile-first order as the form.
+        assert_eq!(
+            next_connection_field(
+                NewConnectionField::SerialProfileName,
+                super::SshAuthTab::Password,
+                NewConnectionTransport::Serial,
+                super::NewConnectionUpstreamProxyPolicy::UseGlobal,
+                super::NewConnectionUpstreamProxyAuth::None,
+                true,
+            ),
+            NewConnectionField::SerialPortPath
+        );
+        assert_eq!(
+            next_connection_field(
+                NewConnectionField::SerialBaudRate,
+                super::SshAuthTab::Password,
+                NewConnectionTransport::Serial,
+                super::NewConnectionUpstreamProxyPolicy::UseGlobal,
+                super::NewConnectionUpstreamProxyAuth::None,
+                true,
+            ),
+            NewConnectionField::SerialProfileName
+        );
+    }
+
+    #[test]
     fn remote_desktop_transport_tabs_through_rdp_login_fields() {
         assert_eq!(
             next_connection_field(
                 NewConnectionField::Name,
+                super::SshAuthTab::Password,
+                NewConnectionTransport::Rdp,
+                super::NewConnectionUpstreamProxyPolicy::UseGlobal,
+                super::NewConnectionUpstreamProxyAuth::None,
+                true,
+            ),
+            NewConnectionField::Group
+        );
+        assert_eq!(
+            next_connection_field(
+                NewConnectionField::Group,
                 super::SshAuthTab::Password,
                 NewConnectionTransport::Rdp,
                 super::NewConnectionUpstreamProxyPolicy::UseGlobal,
@@ -1874,6 +2364,35 @@ mod tests {
     }
 
     #[test]
+    fn ssh_and_mosh_tab_navigation_follow_basic_information_order() {
+        // Both forms render name and group before endpoint and authentication fields.
+        for transport in [NewConnectionTransport::Ssh, NewConnectionTransport::Mosh] {
+            assert_eq!(
+                next_connection_field(
+                    NewConnectionField::Name,
+                    SshAuthTab::Password,
+                    transport,
+                    NewConnectionUpstreamProxyPolicy::UseGlobal,
+                    NewConnectionUpstreamProxyAuth::None,
+                    true,
+                ),
+                NewConnectionField::Group
+            );
+            assert_eq!(
+                next_connection_field(
+                    NewConnectionField::Group,
+                    SshAuthTab::Password,
+                    transport,
+                    NewConnectionUpstreamProxyPolicy::UseGlobal,
+                    NewConnectionUpstreamProxyAuth::None,
+                    true,
+                ),
+                NewConnectionField::Host
+            );
+        }
+    }
+
+    #[test]
     fn form_mode_keeps_prompt_edit_and_new_submission_paths_distinct() {
         assert_eq!(
             new_connection_form_mode(None, None, None),
@@ -1925,10 +2444,6 @@ mod tests {
             auth_family_from_tab(SshAuthTab::TwoFactor),
             SshAuthFamily::TwoFactor
         );
-    }
-
-    #[test]
-    fn default_key_family_selection_uses_file_key_tab() {
         assert_eq!(
             default_auth_tab_for_family(SshAuthFamily::Key),
             SshAuthTab::SshKey

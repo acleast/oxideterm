@@ -1,5 +1,12 @@
 [workspace]
 members = [
+  "crates/fernomade/crypto",
+  "crates/fernomade/predict",
+  "crates/fernomade/runtime",
+  "crates/fernomade/session",
+  "crates/fernomade/state",
+  "crates/fernomade/wire",
+  "crates/oxideterm-mosh",
   "crates/oxideterm-atomic-file",
   "crates/oxideterm-app-lock",
   "crates/oxideterm-gpui-markdown",
@@ -17,13 +24,13 @@ members = [
   "crates/oxideterm-plugin-manifest",
   "crates/oxideterm-plugin-protocol",
   "crates/oxideterm-plugin-registry",
-  "crates/oxideterm-plugin-runtime-install",
   "crates/oxideterm-plugin-wasm-runtime",
   "crates/oxideterm-ai",
   "crates/oxideterm-ai-tasks",
   "crates/oxideterm-skills",
   "crates/oxideterm-acp-adapter",
   "crates/oxideterm-acp-host-tools",
+  "crates/oxideterm-public-mcp",
   "crates/oxideterm-editor-core",
   "crates/oxideterm-editor-syntax",
   "crates/oxideterm-gpui-editor",
@@ -64,6 +71,7 @@ members = [
   "crates/oxideterm-terminal-encoding",
   "crates/oxideterm-terminal-graphics",
   "crates/oxideterm-terminal-model",
+  "crates/oxideterm-terminal-semantic",
   "crates/oxideterm-terminal-unicode",
   "crates/oxideterm-theme",
   "crates/oxideterm-trzsz",
@@ -100,7 +108,7 @@ russh-sftp = { path = "crates/russh-sftp" }
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
-version = "2.0.16"
+version = "2.0.21"
 
 [workspace.dependencies]
 accesskit = "0.24.0"
@@ -113,6 +121,7 @@ anyhow = "1.0"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "notification", "open_uri", "file_chooser", "settings", "trash"] }
 async-channel = "2.5.0"
 async-trait = "0.1"
+aes = { version = "0.8.4", features = ["zeroize"] }
 async-process = "2.5"
 argon2 = { version = "0.5", default-features = false, features = ["std"] }
 base64 = "0.22"
@@ -141,6 +150,7 @@ futures-util = "0.3"
 futures = "0.3"
 futures-concurrency = "7.7.1"
 fs2 = "0.4"
+flate2 = { version = "1.1.9", default-features = false, features = ["rust_backend"] }
 gpui = { path = "crates/gpui-ce/gpui", version = "=0.2.2" }
 gpui_linux = { path = "crates/gpui-ce/gpui_linux", version = "0.1.0" }
 gpui_macos = { path = "crates/gpui-ce/gpui_macos", version = "0.1.0" }
@@ -170,6 +180,7 @@ metal = "0.33"
 minisign-verify = "0.2"
 objc = "0.2"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSGraphics"] }
+ocb3 = { version = "0.1.0", default-features = false, features = ["alloc"] }
 parking_lot = "0.12"
 polling = "3.11"
 pollster = "0.4.0"
@@ -177,6 +188,7 @@ postage = { version = "0.5", features = ["futures-traits"] }
 proc-macro2 = "1.0.93"
 profiling = "1"
 proptest = { version = "1.10", features = ["attr-macro"] }
+prost = "0.14.4"
 quote = "1.0.9"
 quick-xml = "0.39"
 raw-window-handle = "0.6"
@@ -187,6 +199,7 @@ rand10 = { package = "rand", version = "0.10" }
 # `system-proxy` lets the updater's explicit System proxy mode read OS proxy
 # settings instead of only inheriting environment variables.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks", "stream", "system-proxy"] }
+rmcp = { version = "3.1.2", default-features = false, features = ["server", "transport-streamable-http-server"] }
 rmp-serde = "1"
 scap = { version = "0.0.8-zed", package = "zed-scap", default-features = false }
 scheduler = { path = "crates/gpui-ce/gpui_scheduler", version = "0.2.2", package = "gpui_scheduler" }
@@ -210,6 +223,8 @@ syn = { version = "2.0.101", features = ["full", "extra-traits", "visit-mut"] }
 sysinfo = { version = "0.33", default-features = false, features = ["disk", "system"] }
 thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt-multi-thread", "sync", "time", "io-util", "net", "fs", "process", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower-service = "0.3"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -255,6 +270,8 @@ unicode-segmentation = "1.12"
 unicode-width = "0.2.2"
 url = "2.2"
 util = { path = "crates/gpui-ce/gpui_zed_util", version = "0.2.2", package = "gpui_zed_util" }
+vt100 = "0.16.2"
+vte = "0.15.0"
 uuid = { version = "1.23", features = ["v4", "v5", "v7", "serde"] }
 wasm-bindgen = "0.2.120"
 wasmtime = { version = "46.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }

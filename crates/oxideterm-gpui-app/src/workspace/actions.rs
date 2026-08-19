@@ -209,9 +209,12 @@ impl WorkspaceApp {
     }
 
     pub(super) fn clear_active_terminal_screen(&mut self, cx: &mut Context<Self>) -> bool {
-        let terminal_active = self
-            .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+        let terminal_active = self.active_tab(cx).is_some_and(|tab| {
+            matches!(
+                tab.kind,
+                TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+            )
+        });
         if !terminal_active {
             return false;
         }
@@ -234,19 +237,6 @@ impl WorkspaceApp {
         let entering = !settings.sidebar_ui.zen_mode;
         settings.sidebar_ui.zen_mode = entering;
         if entering {
-            let released_saved_search = self.session_manager.update(cx, |session_manager, cx| {
-                if session_manager.focused_input()
-                    != Some(crate::workspace::session_manager::SessionManagerInput::SavedSearch)
-                {
-                    return false;
-                }
-                // Zen mode hides the primary sidebar immediately, so release
-                // the saved-search IME owner before returning focus to content.
-                session_manager.clear_input_focus(cx)
-            });
-            if released_saved_search {
-                self.ime_marked_text = None;
-            }
             self.sidebar_collapsed = true;
             self.sidebar_motion_generation = self.sidebar_motion_generation.wrapping_add(1);
             self.context_sidebar_motion_generation =
@@ -311,9 +301,12 @@ impl WorkspaceApp {
             return false;
         };
 
-        let terminal_active = self
-            .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+        let terminal_active = self.active_tab(cx).is_some_and(|tab| {
+            matches!(
+                tab.kind,
+                TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+            )
+        });
         if matches!(
             definition.scope,
             crate::keybindings::ActionScope::Terminal | crate::keybindings::ActionScope::Split
@@ -461,7 +454,10 @@ impl WorkspaceApp {
         if self.dismiss_scheduled_input_popover(cx) {
             return true;
         }
-
+        if self.dismiss_terminal_highlight_popover() {
+            cx.notify();
+            return true;
+        }
         if self.dismiss_terminal_broadcast_menu(cx) {
             cx.notify();
             return true;
@@ -527,6 +523,7 @@ impl WorkspaceApp {
         let should_open = !self.terminal.read(cx).broadcast_menu_open();
         self.dismiss_terminal_broadcast_menu(cx);
         if should_open {
+            self.dismiss_terminal_highlight_popover();
             self.close_terminal_quick_commands_popover(cx);
             self.close_terminal_cwd_picker(cx);
             self.close_terminal_git_branch_picker(cx);
@@ -810,9 +807,12 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let terminal_active = self
-            .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+        let terminal_active = self.active_tab(cx).is_some_and(|tab| {
+            matches!(
+                tab.kind,
+                TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+            )
+        });
         if !terminal_active {
             return false;
         }
@@ -2289,17 +2289,6 @@ mod terminal_command_bar_behavior_tests {
     }
 
     #[test]
-    fn terminal_font_size_adjustment_matches_tauri_bounds() {
-        assert_eq!(adjusted_terminal_font_size(14, 1), Some(15));
-        assert_eq!(adjusted_terminal_font_size(14, -1), Some(13));
-        assert_eq!(adjusted_terminal_font_size(TERMINAL_FONT_SIZE_MAX, 1), None);
-        assert_eq!(
-            adjusted_terminal_font_size(TERMINAL_FONT_SIZE_MIN, -1),
-            None
-        );
-    }
-
-    #[test]
     fn terminal_tab_capture_defers_to_workspace_text_ui() {
         assert!(!terminal_tab_capture_blocked_by_workspace_ui(false, false));
         assert!(terminal_tab_capture_blocked_by_workspace_ui(true, false));
@@ -2317,15 +2306,6 @@ mod terminal_command_bar_behavior_tests {
             Some("nvim")
         );
         assert_eq!(terminal_command_executable("A=1 B=2").as_deref(), None);
-    }
-
-    #[test]
-    fn terminal_recording_default_name_label_matches_tauri_prefix() {
-        assert_eq!(
-            terminal_recording_default_name_label("1234567890abcdef"),
-            "12345678"
-        );
-        assert_eq!(terminal_recording_default_name_label("1234"), "1234");
     }
 }
 

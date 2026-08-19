@@ -109,6 +109,13 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session_id) = self.tabs(cx)[active_index]
+            .root_pane
+            .as_ref()
+            .and_then(|root| root.session_id_for_pane(active_pane_id))
+        {
+            self.release_public_mcp_terminal_for_closed_session(session_id, cx);
+        }
         self.remove_terminal_pane(&active_pane_id, cx);
 
         let tab_id = self.tabs(cx)[active_index].id;
@@ -138,17 +145,25 @@ impl WorkspaceApp {
         };
         self.apply_tab_mount_cleanup(mount_cleanup, Some(window), cx);
         let mut pane_ids = Vec::new();
+        let mut session_ids = Vec::new();
         if let Some(root_pane) = &tab.root_pane {
             root_pane.collect_pane_ids(&mut pane_ids);
+            root_pane.collect_session_ids(&mut session_ids);
+        }
+        for session_id in session_ids {
+            self.release_public_mcp_terminal_for_closed_session(session_id, cx);
         }
         for pane_id in pane_ids {
             self.remove_terminal_pane(&pane_id, cx);
         }
         self.apply_main_window_active_tab_change(previous_active_tab_id, next_active_tab_id, cx);
         self.sync_active_tab_surface(cx);
-        self.needs_active_pane_focus = self
-            .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+        self.needs_active_pane_focus = self.active_tab(cx).is_some_and(|tab| {
+            matches!(
+                tab.kind,
+                TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+            )
+        });
         self.focus_active_pane(window, cx);
         self.reveal_active_tab(window, cx);
     }

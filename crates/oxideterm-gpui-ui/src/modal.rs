@@ -352,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn backdrop_colors_match_tauri_overlay_classes() {
+    fn backdrop_roles_use_the_expected_color_and_blur() {
         // These values mirror Tauri bg-black/{60,40,80} and the transparent
         // outside-hit-test layer used for popovers.
         assert_eq!(
@@ -371,10 +371,6 @@ mod tests {
             rgba_hex(backdrop_color(TauriBackdropRole::Popover)),
             0x00000000
         );
-    }
-
-    #[test]
-    fn backdrop_blur_sources_match_tauri_classes() {
         // Dialog, CommandPalette, and QuickLook all keep
         // linuxBackdropBlurClass("backdrop-blur-sm") in the Tauri source.
         assert_eq!(
@@ -412,15 +408,6 @@ mod tests {
             backdrop_effect_with_blur_allowed(TauriBackdropRole::CommandPalette, true).blur_px,
             Some(TAILWIND_BACKDROP_BLUR_SM_PX)
         );
-    }
-
-    #[test]
-    fn rounded_shell_child_radius_overdraws_rectangular_gpui_masks() {
-        // The source web UI relies on border-radius clipping. GPUI child
-        // backgrounds are independent, so the shared child radius intentionally
-        // leaves a small painted overdraw inside the shell.
-        assert_eq!(rounded_shell_child_radius(12.0), 10.0);
-        assert_eq!(rounded_shell_child_radius(1.0), 0.0);
     }
 
     #[test]

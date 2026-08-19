@@ -6,6 +6,9 @@
 use super::*;
 
 const MICROSOFT_GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
+const MICROSOFT_GRAPH_CONFLICT_BEHAVIOR: &str = "@microsoft.graph.conflictBehavior";
+const MICROSOFT_GRAPH_REQUEST_ID_HEADER: &str = "request-id";
+const ONEDRIVE_CREATE_CONFLICT_BEHAVIOR: &str = "fail";
 
 impl CloudSyncBackend {
     pub(super) async fn fetch_onedrive_metadata(
@@ -79,6 +82,7 @@ impl CloudSyncBackend {
             return Ok(None);
         }
         let status = metadata_response.status();
+        let request_id = onedrive_response_request_id(metadata_response.headers());
         let metadata = metadata_response
             .json::<Value>()
             .await
@@ -89,6 +93,7 @@ impl CloudSyncBackend {
                 &metadata,
                 "onedrive_download",
                 "Failed to fetch OneDrive item metadata",
+                request_id.as_deref(),
             ));
         }
         let response = execute_cloud_request(
@@ -102,12 +107,14 @@ impl CloudSyncBackend {
         }
         if !response.status().is_success() {
             let status = response.status();
+            let request_id = onedrive_response_request_id(response.headers());
             let value = response.json::<Value>().await.unwrap_or(Value::Null);
             return Err(onedrive_value_error(
                 status,
                 &value,
                 "onedrive_download",
                 "Failed to download OneDrive content",
+                request_id.as_deref(),
             ));
         }
         let mut object =
@@ -148,21 +155,27 @@ impl CloudSyncBackend {
             CONTENT_TYPE.as_str(),
             content_type.unwrap_or("application/octet-stream"),
         )?;
+        let metadata_path = onedrive_paths(config).metadata_path;
+        let create_metadata = expected_etag.is_none() && relative_path == metadata_path;
         if let Some(expected_etag) = expected_etag {
             insert_header(&mut headers, "If-Match", expected_etag)?;
-        } else if relative_path == onedrive_paths(config).metadata_path {
-            headers.insert("If-None-Match", HeaderValue::from_static("*"));
         }
+        let operation = if relative_path == metadata_path {
+            "onedrive_metadata_upload"
+        } else {
+            "onedrive_object_upload"
+        };
         let response = execute_cloud_request(
             self.client
-                .put(onedrive_content_url(config, relative_path))
+                .put(onedrive_upload_url(config, relative_path, create_metadata)?)
                 .headers(headers)
                 .body(bytes),
         )
         .await?;
         let status = response.status();
+        let request_id = onedrive_response_request_id(response.headers());
         let value = response.json::<Value>().await.unwrap_or(Value::Null);
-        if status == StatusCode::PRECONDITION_FAILED {
+        if onedrive_conflict_error(status, &value) {
             let message = onedrive_error_message(&value)
                 .unwrap_or("OneDrive object changed before upload completed");
             bail!("etag_conflict_detected: {message}");
@@ -171,8 +184,9 @@ impl CloudSyncBackend {
             return Err(onedrive_value_error(
                 status,
                 &value,
-                "onedrive_write",
+                operation,
                 "Failed to upload OneDrive content",
+                request_id.as_deref(),
             ));
         }
         Ok(RemoteWriteResult {
@@ -204,6 +218,7 @@ impl CloudSyncBackend {
             return Ok(());
         }
         let status = response.status();
+        let request_id = onedrive_response_request_id(response.headers());
         let value = response.json::<Value>().await.unwrap_or(Value::Null);
         if !status.is_success() {
             return Err(onedrive_value_error(
@@ -211,6 +226,7 @@ impl CloudSyncBackend {
                 &value,
                 "onedrive_cleanup",
                 "Failed to list old OneDrive objects",
+                request_id.as_deref(),
             ));
         }
         let keep = onedrive_keep_object_paths(metadata);
@@ -239,12 +255,14 @@ impl CloudSyncBackend {
                 continue;
             }
             if !status.is_success() {
+                let request_id = onedrive_response_request_id(response.headers());
                 let value = response.json::<Value>().await.unwrap_or(Value::Null);
                 return Err(onedrive_value_error(
                     status,
                     &value,
                     "onedrive_cleanup",
                     "Failed to remove old OneDrive object",
+                    request_id.as_deref(),
                 ));
             }
         }
@@ -253,7 +271,7 @@ impl CloudSyncBackend {
 
     async fn ensure_onedrive_parent(
         &self,
-        _config: &CloudSyncSettings,
+        config: &CloudSyncSettings,
         secrets: &CloudSyncSecrets,
         relative_path: &str,
     ) -> Result<()> {
@@ -262,47 +280,117 @@ impl CloudSyncBackend {
             .split('/')
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>();
-        if parts.len() <= 1 {
+        if parts.is_empty() {
             return Ok(());
         }
+        // Resolve App Root first so Graph provisions the special folder before
+        // any child lookup or upload targets it.
+        let mut parent_id = self.onedrive_app_root_id(secrets).await?;
         let mut parent = Vec::<String>::new();
         for segment in parts.iter().take(parts.len() - 1) {
-            let children_url = if parent.is_empty() {
-                format!("{MICROSOFT_GRAPH_BASE}/me/drive/special/approot/children")
-            } else {
-                format!(
-                    "{MICROSOFT_GRAPH_BASE}/me/drive/special/approot:/{}:/children",
-                    encode_path_segments(&parent.join("/"))
-                )
-            };
+            parent.push((*segment).to_string());
+            if let Some(folder_id) = self
+                .find_onedrive_folder_id(config, secrets, &parent)
+                .await?
+            {
+                parent_id = folder_id;
+                continue;
+            }
             let response = execute_cloud_request(
                 self.client
-                    .post(children_url)
+                    .post(onedrive_folder_children_url(&parent_id))
                     .headers(onedrive_headers(secrets)?)
                     .header(CONTENT_TYPE, "application/json")
                     .body(serde_json::to_vec(&json!({
                         "name": segment,
                         "folder": {},
-                        "@microsoft.graph.conflictBehavior": "fail",
                     }))?),
             )
             .await?;
             let status = response.status();
+            let request_id = onedrive_response_request_id(response.headers());
             let value = response.json::<Value>().await.unwrap_or(Value::Null);
-            if !status.is_success()
-                && !(status == StatusCode::CONFLICT
-                    && onedrive_error_code(&value).as_deref() == Some("nameAlreadyExists"))
+            if status.is_success() {
+                parent_id = onedrive_folder_id(&value, "created OneDrive folder")?;
+                continue;
+            }
+            if status == StatusCode::CONFLICT
+                && onedrive_error_code(&value).as_deref() == Some("nameAlreadyExists")
             {
+                // Another client can create the same parent between lookup and
+                // creation. Resolve its ID and continue with the shared folder.
+                parent_id = self
+                    .find_onedrive_folder_id(config, secrets, &parent)
+                    .await?
+                    .context(
+                        "onedrive_bad_request: OneDrive reported an existing folder but did not return it",
+                    )?;
+            } else {
                 return Err(onedrive_value_error(
                     status,
                     &value,
-                    "onedrive_folder",
+                    "onedrive_folder_create",
                     "Failed to create OneDrive folder",
+                    request_id.as_deref(),
                 ));
             }
-            parent.push((*segment).to_string());
         }
         Ok(())
+    }
+
+    async fn onedrive_app_root_id(&self, secrets: &CloudSyncSecrets) -> Result<String> {
+        let response = execute_cloud_request(
+            self.client
+                .get(onedrive_app_root_url())
+                .headers(onedrive_headers(secrets)?),
+        )
+        .await?;
+        let status = response.status();
+        let request_id = onedrive_response_request_id(response.headers());
+        let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Err(onedrive_value_error(
+                status,
+                &value,
+                "onedrive_approot",
+                "Failed to initialize the OneDrive app folder",
+                request_id.as_deref(),
+            ));
+        }
+        onedrive_folder_id(&value, "OneDrive app folder")
+    }
+
+    async fn find_onedrive_folder_id(
+        &self,
+        config: &CloudSyncSettings,
+        secrets: &CloudSyncSecrets,
+        path: &[String],
+    ) -> Result<Option<String>> {
+        let response = execute_cloud_request(
+            self.client
+                .get(onedrive_item_url(config, &path.join("/")))
+                .headers(onedrive_headers(secrets)?),
+        )
+        .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let status = response.status();
+        let request_id = onedrive_response_request_id(response.headers());
+        let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Err(onedrive_value_error(
+                status,
+                &value,
+                "onedrive_folder_lookup",
+                "Failed to look up a OneDrive folder",
+                request_id.as_deref(),
+            ));
+        }
+        Ok(Some(onedrive_folder_id(
+            &value,
+            "existing OneDrive folder",
+        )?))
     }
 
     pub(super) async fn write_onedrive_metadata(
@@ -373,6 +461,48 @@ fn onedrive_content_url(config: &CloudSyncSettings, relative_path: &str) -> Stri
     format!("{}:/content", onedrive_item_url(config, relative_path))
 }
 
+fn onedrive_upload_url(
+    config: &CloudSyncSettings,
+    relative_path: &str,
+    fail_on_conflict: bool,
+) -> Result<Url> {
+    let mut url = Url::parse(&onedrive_content_url(config, relative_path))
+        .context("failed to construct OneDrive upload URL")?;
+    if fail_on_conflict {
+        // Graph documents conflictBehavior on create operations; using it
+        // preserves create-only metadata semantics without an unsupported header.
+        url.query_pairs_mut().append_pair(
+            MICROSOFT_GRAPH_CONFLICT_BEHAVIOR,
+            ONEDRIVE_CREATE_CONFLICT_BEHAVIOR,
+        );
+    }
+    Ok(url)
+}
+
+fn onedrive_app_root_url() -> String {
+    format!("{MICROSOFT_GRAPH_BASE}/me/drive/special/approot")
+}
+
+fn onedrive_folder_children_url(parent_id: &str) -> String {
+    format!(
+        "{MICROSOFT_GRAPH_BASE}/me/drive/items/{}/children",
+        encode_component(parent_id)
+    )
+}
+
+fn onedrive_folder_id(value: &Value, description: &str) -> Result<String> {
+    if !value.get("folder").is_some_and(Value::is_object) {
+        bail!("onedrive_bad_request: {description} is not a folder");
+    }
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .with_context(|| format!("onedrive_bad_request: {description} has no item ID"))
+}
+
 fn onedrive_children_url(config: &CloudSyncSettings, relative_path: &str) -> String {
     format!("{}:/children", onedrive_item_url(config, relative_path))
 }
@@ -407,8 +537,9 @@ fn onedrive_value_error(
     value: &Value,
     code_prefix: &str,
     fallback: &str,
+    response_request_id: Option<&str>,
 ) -> anyhow::Error {
-    if status == StatusCode::PRECONDITION_FAILED {
+    if onedrive_conflict_error(status, value) {
         let message = onedrive_error_message(value).unwrap_or("OneDrive object changed");
         return anyhow::anyhow!("etag_conflict_detected: {message}");
     }
@@ -416,6 +547,9 @@ fn onedrive_value_error(
     let message = onedrive_error_message(value).unwrap_or(fallback);
     let graph_code = onedrive_error_code(value).unwrap_or_default();
     let code = match status {
+        StatusCode::BAD_REQUEST if onedrive_scope_or_permission_error(&graph_code, message) => {
+            "onedrive_missing_scope".to_string()
+        }
         StatusCode::BAD_REQUEST => "onedrive_bad_request".to_string(),
         StatusCode::UNAUTHORIZED => "onedrive_bad_credentials".to_string(),
         StatusCode::FORBIDDEN => {
@@ -433,7 +567,22 @@ fn onedrive_value_error(
         status if status.as_u16() == 507 => "onedrive_quota_exceeded".to_string(),
         _ => format!("{code_prefix}_{status_code}"),
     };
-    anyhow::anyhow!("{code}: {message}")
+    let request_id = response_request_id.or_else(|| onedrive_error_request_id(value));
+    let graph_code = if graph_code.is_empty() {
+        "unknown"
+    } else {
+        graph_code.as_str()
+    };
+    let request_id = request_id.unwrap_or("unavailable");
+    anyhow::anyhow!(
+        "{code}: {message} [operation={code_prefix}, status={status_code}, graph_code={graph_code}, request_id={request_id}]"
+    )
+}
+
+fn onedrive_conflict_error(status: StatusCode, value: &Value) -> bool {
+    status == StatusCode::PRECONDITION_FAILED
+        || (status == StatusCode::CONFLICT
+            && onedrive_error_code(value).as_deref() == Some("nameAlreadyExists"))
 }
 
 fn onedrive_error_message(value: &Value) -> Option<&str> {
@@ -452,16 +601,36 @@ fn onedrive_error_code(value: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+fn onedrive_error_request_id(value: &Value) -> Option<&str> {
+    let error = value.get("error")?;
+    let inner_error = error
+        .get("innerError")
+        .or_else(|| error.get("innererror"))?;
+    inner_error
+        .get("request-id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn onedrive_response_request_id(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(MICROSOFT_GRAPH_REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn onedrive_scope_or_permission_error(graph_code: &str, message: &str) -> bool {
     // Graph does not always use a stable status/code pair for app-folder
     // permission failures, so classify by both machine code and safe text.
     let graph_code = graph_code.to_ascii_lowercase();
     let message = message.to_ascii_lowercase();
-    graph_code.contains("invalidscope")
-        || message.contains("files.readwrite.appfolder")
+    matches!(
+        graph_code.as_str(),
+        "invalidscope" | "authorization_requestdenied"
+    ) || message.contains("files.readwrite.appfolder")
         || message.contains("insufficient privileges")
-        || message.contains("permission")
-        || message.contains("scope")
 }
 
 #[cfg(test)]
@@ -494,12 +663,41 @@ mod tests {
     }
 
     #[test]
+    fn onedrive_metadata_create_uses_graph_conflict_behavior() {
+        let settings = CloudSyncSettings {
+            backend_type: BackendType::OneDrive,
+            ..CloudSyncSettings::default()
+        };
+
+        let create_url = onedrive_upload_url(&settings, "metadata.json", true).unwrap();
+        let replace_url = onedrive_upload_url(&settings, "metadata.json", false).unwrap();
+
+        assert_eq!(
+            create_url
+                .query_pairs()
+                .find(|(key, _)| key == MICROSOFT_GRAPH_CONFLICT_BEHAVIOR)
+                .map(|(_, value)| value.into_owned()),
+            Some(ONEDRIVE_CREATE_CONFLICT_BEHAVIOR.to_string())
+        );
+        assert!(replace_url.query().is_none());
+    }
+
+    #[test]
+    fn onedrive_folder_create_uses_parent_item_id() {
+        assert_eq!(
+            onedrive_folder_children_url("folder!123"),
+            "https://graph.microsoft.com/v1.0/me/drive/items/folder%21123/children"
+        );
+    }
+
+    #[test]
     fn onedrive_error_mapping_distinguishes_scope_rate_and_conflict() {
         let scope_error = onedrive_value_error(
             StatusCode::FORBIDDEN,
             &json!({ "error": { "message": "Missing Files.ReadWrite.AppFolder" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
         let rate_error = onedrive_value_error(
@@ -507,6 +705,7 @@ mod tests {
             &json!({ "error": { "message": "Too many requests" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
         let conflict_error = onedrive_value_error(
@@ -514,6 +713,7 @@ mod tests {
             &json!({ "error": { "message": "ETag changed" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
 
@@ -529,6 +729,7 @@ mod tests {
             &json!({ "error": { "code": "accessDenied", "message": "Tenant policy blocked this app" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
         let bad_request_error = onedrive_value_error(
@@ -536,6 +737,7 @@ mod tests {
             &json!({ "error": { "message": "Invalid app folder request" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
         let locked_error = onedrive_value_error(
@@ -543,6 +745,7 @@ mod tests {
             &json!({ "error": { "message": "Resource is locked" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
         let service_error = onedrive_value_error(
@@ -550,6 +753,7 @@ mod tests {
             &json!({ "error": { "message": "Service unavailable" } }),
             "onedrive",
             "fallback",
+            None,
         )
         .to_string();
 
@@ -557,6 +761,68 @@ mod tests {
         assert!(bad_request_error.starts_with("onedrive_bad_request:"));
         assert!(locked_error.starts_with("onedrive_locked:"));
         assert!(service_error.starts_with("onedrive_service_unavailable:"));
+    }
+
+    #[test]
+    fn onedrive_error_keeps_safe_graph_diagnostics() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            MICROSOFT_GRAPH_REQUEST_ID_HEADER,
+            HeaderValue::from_static("request-123"),
+        );
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer representative-secret"),
+        );
+        let request_id = onedrive_response_request_id(&headers);
+
+        let error = onedrive_value_error(
+            StatusCode::BAD_REQUEST,
+            &json!({ "error": { "code": "badRequest", "message": "Invalid request" } }),
+            "onedrive_metadata_upload",
+            "fallback",
+            request_id.as_deref(),
+        )
+        .to_string();
+
+        assert!(error.contains("operation=onedrive_metadata_upload"));
+        assert!(error.contains("status=400"));
+        assert!(error.contains("graph_code=badRequest"));
+        assert!(error.contains("request_id=request-123"));
+        assert!(!error.contains("representative-secret"));
+    }
+
+    #[test]
+    fn onedrive_scope_mapping_ignores_ambiguous_permission_words() {
+        let ambiguous = onedrive_value_error(
+            StatusCode::FORBIDDEN,
+            &json!({
+                "error": {
+                    "code": "accessDenied",
+                    "message": "The permission state could not be evaluated"
+                }
+            }),
+            "onedrive_object_upload",
+            "fallback",
+            None,
+        )
+        .to_string();
+        let explicit = onedrive_value_error(
+            StatusCode::FORBIDDEN,
+            &json!({
+                "error": {
+                    "code": "Authorization_RequestDenied",
+                    "message": "Request denied"
+                }
+            }),
+            "onedrive_object_upload",
+            "fallback",
+            None,
+        )
+        .to_string();
+
+        assert!(ambiguous.starts_with("onedrive_access_denied:"));
+        assert!(explicit.starts_with("onedrive_missing_scope:"));
     }
 
     #[test]

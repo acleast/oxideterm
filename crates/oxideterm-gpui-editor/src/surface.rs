@@ -205,6 +205,7 @@ struct DisplayRowsCache {
     buffer_version: u64,
     wrap_column: Option<usize>,
     fold_revision: u64,
+    max_width_columns: usize,
     rows: Arc<Vec<DisplayRow>>,
 }
 
@@ -965,13 +966,32 @@ impl TextEditorView {
         } else {
             -f32::from(delta.y)
         };
-        let scrolled =
-            self.viewport
-                .scroll_by(dx, dy, self.document_row_count(), self.metrics.line_height);
+        let max_scroll_x_px = self.max_horizontal_scroll_px();
+        let scrolled = self.viewport.scroll_by(
+            dx,
+            dy,
+            max_scroll_x_px,
+            self.document_row_count(),
+            self.metrics.line_height,
+        );
         cx.stop_propagation();
         if scrolled {
             cx.notify();
         }
+    }
+
+    pub(super) fn horizontal_viewport_width_px(&self) -> f32 {
+        // The gutter remains fixed while only the document content moves horizontally.
+        (self.viewport.width_px - self.visible_gutter_width()).max(0.0)
+    }
+
+    pub(super) fn horizontal_document_width_px(&self) -> f32 {
+        self.document_width_columns() as f32 * self.metrics.char_width
+            + self.visible_content_padding_x() * 2.0
+    }
+
+    pub(super) fn max_horizontal_scroll_px(&self) -> f32 {
+        (self.horizontal_document_width_px() - self.horizontal_viewport_width_px()).max(0.0)
     }
 
     pub(super) fn vertical_scroll_y_px(&self) -> f32 {
@@ -995,7 +1015,11 @@ impl TextEditorView {
         // Bounds are captured during the same frame's prepaint pass so the
         // editor does not render one-frame-stale virtual rows after resizing.
         self.content_bounds = Some(bounds);
-        if self.viewport.set_height(f32::from(bounds.size.height)) {
+        let width_changed = self.viewport.set_width(f32::from(bounds.size.width));
+        let height_changed = self.viewport.set_height(f32::from(bounds.size.height));
+        if width_changed || height_changed {
+            self.viewport
+                .clamp_horizontal(self.max_horizontal_scroll_px());
             self.viewport
                 .clamp(self.document_row_count(), self.metrics.line_height);
             cx.notify();
@@ -1279,8 +1303,7 @@ mod tests {
     use oxideterm_editor_syntax::BracketPair;
 
     use super::{
-        EditorPresentation, HighlightChunkCache, HighlightChunkCacheKey, LineChunkSpec,
-        build_bracket_pair_index, content_padding_x_for_presentation,
+        HighlightChunkCache, HighlightChunkCacheKey, LineChunkSpec, build_bracket_pair_index,
     };
 
     fn cache_key(line: usize) -> HighlightChunkCacheKey {
@@ -1344,17 +1367,5 @@ mod tests {
         let index = build_bracket_pair_index(&[first.clone(), second]);
 
         assert_eq!(index.get(&1), Some(&first));
-    }
-
-    #[test]
-    fn inline_presentation_delegates_horizontal_inset_to_its_owner() {
-        assert_eq!(
-            content_padding_x_for_presentation(EditorPresentation::Document, 8.0),
-            8.0
-        );
-        assert_eq!(
-            content_padding_x_for_presentation(EditorPresentation::Inline, 8.0),
-            0.0
-        );
     }
 }

@@ -35,6 +35,7 @@ impl JumpServerRenderSnapshot {
 }
 
 struct ProxyHopSummarySnapshot {
+    saved_connection_name: Option<String>,
     host: String,
     port: String,
     username: String,
@@ -163,6 +164,57 @@ impl WorkspaceApp {
                                 cx,
                             );
                             cx.stop_propagation();
+                        }),
+                    ));
+                }
+            }
+            NewConnectionSelect::RemoteDesktopSshGateway => {
+                let selected_connection_id = self
+                    .connection_form_state(cx)
+                    .form
+                    .as_ref()
+                    .and_then(|form| form.remote_desktop_ssh_gateway_connection_id.as_deref());
+                popup = popup.child(select_option_action(
+                    select_option(
+                        &self.tokens,
+                        self.i18n
+                            .t("modals.new_connection.remote_desktop_ssh_gateway_direct"),
+                        selected_connection_id.is_none(),
+                    ),
+                    false,
+                    false,
+                    cx.listener(|this, _event, _window, cx| {
+                        this.close_new_connection_select(cx);
+                        this.update_connection_form_state(cx, |state| {
+                            if let Some(form) = state.form.as_mut() {
+                                form.remote_desktop_ssh_gateway_connection_id = None;
+                            }
+                        });
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                ));
+                for connection in self.connection_store.connection_infos() {
+                    let selected = selected_connection_id == Some(connection.id.as_str());
+                    let connection_id = connection.id.clone();
+                    let label = format!(
+                        "{} · {}@{}:{}",
+                        connection.name, connection.username, connection.host, connection.port
+                    );
+                    popup = popup.child(select_option_action(
+                        select_option(&self.tokens, label, selected),
+                        false,
+                        false,
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.close_new_connection_select(cx);
+                            this.update_connection_form_state(cx, |state| {
+                                if let Some(form) = state.form.as_mut() {
+                                    form.remote_desktop_ssh_gateway_connection_id =
+                                        Some(connection_id.clone());
+                                }
+                            });
+                            cx.stop_propagation();
+                            cx.notify();
                         }),
                     ));
                 }
@@ -461,6 +513,117 @@ impl WorkspaceApp {
                         cx.listener(move |this, _event, _window, cx| {
                             this.close_new_connection_select(cx);
                             this.set_new_connection_terminal_delete_sequence(Some(sequence), cx);
+                            cx.stop_propagation();
+                        }),
+                    ));
+                }
+            }
+            NewConnectionSelect::TerminalSemanticScheme => {
+                let selected = self
+                    .connection_form_state(cx)
+                    .form
+                    .as_ref()
+                    .and_then(|form| form.terminal.semantic_scheme.clone());
+                let terminal = &self.settings_store.settings().terminal;
+                let default_name = terminal
+                    .active_custom_semantic_scheme()
+                    .map(|scheme| scheme.name.clone())
+                    .unwrap_or_else(|| match terminal.semantic_scheme {
+                        oxideterm_settings::TerminalSemanticScheme::Balanced => self
+                            .i18n
+                            .t("settings_view.terminal.highlight_rules.semantic_scheme_balanced"),
+                        oxideterm_settings::TerminalSemanticScheme::Conservative => self.i18n.t(
+                            "settings_view.terminal.highlight_rules.semantic_scheme_conservative",
+                        ),
+                    });
+                let default_label = self
+                    .i18n
+                    .t("ssh.form.terminal_use_application_default")
+                    .replace("{{value}}", &default_name);
+                popup = popup.child(select_option_action(
+                    select_option(&self.tokens, default_label, selected.is_none()),
+                    false,
+                    false,
+                    cx.listener(|this, _event, _window, cx| {
+                        this.close_new_connection_select(cx);
+                        this.set_new_connection_terminal_semantic_scheme(None, cx);
+                        cx.stop_propagation();
+                    }),
+                ));
+                let mut schemes = vec![
+                    (
+                        "balanced".to_string(),
+                        self.i18n
+                            .t("settings_view.terminal.highlight_rules.semantic_scheme_balanced"),
+                    ),
+                    (
+                        "conservative".to_string(),
+                        self.i18n.t(
+                            "settings_view.terminal.highlight_rules.semantic_scheme_conservative",
+                        ),
+                    ),
+                ];
+                schemes.extend(
+                    terminal
+                        .custom_semantic_schemes
+                        .iter()
+                        .map(|scheme| (scheme.id.clone(), scheme.name.clone())),
+                );
+                for (id, name) in schemes {
+                    let is_selected = selected.as_deref() == Some(id.as_str());
+                    popup = popup.child(select_option_action(
+                        select_option(&self.tokens, name, is_selected),
+                        false,
+                        false,
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.close_new_connection_select(cx);
+                            this.set_new_connection_terminal_semantic_scheme(Some(id.clone()), cx);
+                            cx.stop_propagation();
+                        }),
+                    ));
+                }
+            }
+            NewConnectionSelect::TerminalHighlightRuleSet => {
+                let selected = self
+                    .connection_form_state(cx)
+                    .form
+                    .as_ref()
+                    .and_then(|form| form.terminal.highlight_rule_set.clone());
+                let terminal = &self.settings_store.settings().terminal;
+                let default_name = terminal
+                    .default_highlight_rule_set_name()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        self.i18n
+                            .t("settings_view.terminal.highlight_rules.rule_set_global_base")
+                    });
+                let default_label = self
+                    .i18n
+                    .t("ssh.form.terminal_use_application_default")
+                    .replace("{{value}}", &default_name);
+                popup = popup.child(select_option_action(
+                    select_option(&self.tokens, default_label, selected.is_none()),
+                    false,
+                    false,
+                    cx.listener(|this, _event, _window, cx| {
+                        this.close_new_connection_select(cx);
+                        this.set_new_connection_terminal_highlight_rule_set(None, cx);
+                        cx.stop_propagation();
+                    }),
+                ));
+                for rule_set in &terminal.highlight_rule_sets {
+                    let id = rule_set.id.clone();
+                    let is_selected = selected.as_deref() == Some(id.as_str());
+                    popup = popup.child(select_option_action(
+                        select_option(&self.tokens, rule_set.name.clone(), is_selected),
+                        false,
+                        false,
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.close_new_connection_select(cx);
+                            this.set_new_connection_terminal_highlight_rule_set(
+                                Some(id.clone()),
+                                cx,
+                            );
                             cx.stop_propagation();
                         }),
                     ));
@@ -938,6 +1101,10 @@ impl WorkspaceApp {
                     form.proxy_hops
                         .iter()
                         .map(|hop| ProxyHopSummarySnapshot {
+                            saved_connection_name: self
+                                .connection_store
+                                .get(&hop.saved_connection_id)
+                                .map(|connection| connection.name.clone()),
                             host: hop.host.clone(),
                             port: hop.port.clone(),
                             username: hop.username.clone(),
@@ -1130,6 +1297,10 @@ impl WorkspaceApp {
         hop: &ProxyHopSummarySnapshot,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let hop_title = hop
+            .saved_connection_name
+            .clone()
+            .unwrap_or_else(|| self.i18n.t("ssh.form.proxy_chain_jump_server"));
         let auth_label = match hop.auth_tab {
             SshAuthTab::DefaultKey => self.i18n.t("ssh.auth.default_key"),
             SshAuthTab::SshKey => self.i18n.t("ssh.auth.ssh_key"),
@@ -1206,11 +1377,7 @@ impl WorkspaceApp {
                                         .text_size(px(self.tokens.metrics.ui_text_sm))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(rgb(self.tokens.ui.text_muted))
-                                        .child(format!(
-                                            "{}. {}",
-                                            index + 1,
-                                            self.i18n.t("ssh.form.proxy_chain_jump_server")
-                                        )),
+                                        .child(format!("{}. {}", index + 1, hop_title)),
                                 )
                                 .child(self.render_remove_jump_button(index, cx)),
                         )

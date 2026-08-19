@@ -6,8 +6,8 @@ use std::{
 use gpui::{AnyElement, IntoElement, ParentElement, Styled, div, prelude::*, px, rgb};
 use oxideterm_i18n::I18n;
 use oxideterm_settings::{
-    HighlightRule, HighlightRuleRenderMode, MAX_HIGHLIGHT_PATTERN_LENGTH,
-    create_default_highlight_rule,
+    HighlightRule, HighlightRuleMatchScope, HighlightRuleRenderMode, MAX_HIGHLIGHT_PATTERN_LENGTH,
+    TerminalSemanticScheme, create_default_highlight_rule,
 };
 use oxideterm_theme::ThemeTokens;
 
@@ -39,7 +39,16 @@ pub fn accepted_highlight_preview_matches<'a>(
         if highlight_rule_validation_error(rule).is_some() {
             continue;
         }
+        let first_rule_match = candidates.len();
         collect_preview_matches(line, rule, &mut candidates);
+        if rule.match_scope == HighlightRuleMatchScope::LogicalLine
+            && candidates.len() > first_rule_match
+        {
+            // The preview mirrors runtime line promotion without exposing regex workarounds.
+            candidates.truncate(first_rule_match + 1);
+            candidates[first_rule_match].start = 0;
+            candidates[first_rule_match].end = line.len();
+        }
     }
     candidates.sort_by(|left, right| {
         right
@@ -132,7 +141,7 @@ pub fn highlight_preview_segment(
         .rounded(px(tokens.radii.xs))
         .text_color(rgb(fg))
         .when(
-            rule.render_mode == HighlightRuleRenderMode::Background,
+            rule.render_mode == HighlightRuleRenderMode::Background && !rule.preserve_background,
             |item| item.bg(rgb(bg)),
         )
         .when(
@@ -238,6 +247,42 @@ pub fn highlight_render_mode_label(mode: HighlightRuleRenderMode, i18n: &I18n) -
         }
         HighlightRuleRenderMode::Outline => {
             i18n.t("settings_view.terminal.highlight_rules.render_mode_outline")
+        }
+    }
+}
+
+pub fn highlight_match_scope_options() -> &'static [HighlightRuleMatchScope] {
+    &[
+        HighlightRuleMatchScope::Match,
+        HighlightRuleMatchScope::LogicalLine,
+    ]
+}
+
+pub fn highlight_match_scope_label(mode: HighlightRuleMatchScope, i18n: &I18n) -> String {
+    match mode {
+        HighlightRuleMatchScope::Match => {
+            i18n.t("settings_view.terminal.highlight_rules.match_scope_match")
+        }
+        HighlightRuleMatchScope::LogicalLine => {
+            i18n.t("settings_view.terminal.highlight_rules.match_scope_logical_line")
+        }
+    }
+}
+
+pub fn terminal_semantic_scheme_options() -> &'static [TerminalSemanticScheme] {
+    &[
+        TerminalSemanticScheme::Balanced,
+        TerminalSemanticScheme::Conservative,
+    ]
+}
+
+pub fn terminal_semantic_scheme_label(scheme: TerminalSemanticScheme, i18n: &I18n) -> String {
+    match scheme {
+        TerminalSemanticScheme::Balanced => {
+            i18n.t("settings_view.terminal.highlight_rules.semantic_scheme_balanced")
+        }
+        TerminalSemanticScheme::Conservative => {
+            i18n.t("settings_view.terminal.highlight_rules.semantic_scheme_conservative")
         }
     }
 }
@@ -404,49 +449,51 @@ fn highlight_rule(
         rule.is_regex = is_regex;
         rule.foreground = Some(foreground.to_string());
         rule.background = Some(background.to_string());
+        // Presets intentionally define a complete color treatment.
+        rule.preserve_background = false;
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{accepted_highlight_preview_matches, highlight_rule_validation_error};
-    use oxideterm_settings::create_default_highlight_rule;
+    use oxideterm_settings::{HighlightRuleMatchScope, create_default_highlight_rule};
 
     #[test]
-    fn regex_preview_and_validation_share_compiled_cache_behavior() {
-        let rule = create_default_highlight_rule(|rule| {
+    fn regex_validation_and_preview_distinguish_valid_patterns() {
+        let valid_rule = create_default_highlight_rule(|rule| {
             rule.pattern = r"\berror\b".to_string();
             rule.is_regex = true;
         });
 
-        // The second validation/preview pass exercises the cached path while
-        // preserving the same public result as Tauri's memoized runtime rules.
-        assert_eq!(highlight_rule_validation_error(&rule), None);
-        assert_eq!(highlight_rule_validation_error(&rule), None);
+        assert_eq!(highlight_rule_validation_error(&valid_rule), None);
         assert_eq!(
-            accepted_highlight_preview_matches("fatal error happened", &[rule.clone()]).len(),
+            accepted_highlight_preview_matches("fatal error happened", &[valid_rule]).len(),
             1
         );
+
+        let invalid_rule = create_default_highlight_rule(|rule| {
+            rule.pattern = "(".to_string();
+            rule.is_regex = true;
+        });
         assert_eq!(
-            accepted_highlight_preview_matches("fatal error happened", &[rule]).len(),
-            1
+            highlight_rule_validation_error(&invalid_rule),
+            Some("invalid-regex")
         );
     }
 
     #[test]
-    fn invalid_regex_is_cached_as_invalid() {
+    fn logical_line_scope_promotes_a_match_to_the_preview_line() {
         let rule = create_default_highlight_rule(|rule| {
-            rule.pattern = "(".to_string();
-            rule.is_regex = true;
+            rule.pattern = "ERROR".to_string();
+            rule.match_scope = HighlightRuleMatchScope::LogicalLine;
         });
 
-        assert_eq!(
-            highlight_rule_validation_error(&rule),
-            Some("invalid-regex")
-        );
-        assert_eq!(
-            highlight_rule_validation_error(&rule),
-            Some("invalid-regex")
-        );
+        let rules = [rule];
+        let matches = accepted_highlight_preview_matches("prefix ERROR suffix", &rules);
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start, 0);
+        assert_eq!(matches[0].end, "prefix ERROR suffix".len());
     }
 }

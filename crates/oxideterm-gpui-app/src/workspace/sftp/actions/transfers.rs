@@ -9,6 +9,7 @@ pub(in crate::workspace::sftp) struct SftpTransferLaunch {
     local_path: String,
     remote_path: String,
     resume_progress: Option<StoredTransferProgress>,
+    download_disposition: LocalDownloadDisposition,
     protocol_override: Option<RemoteTransferProtocol>,
 }
 
@@ -201,6 +202,7 @@ impl SftpWorkspaceEntity {
             local_path,
             remote_path,
             resume_progress: Some(progress),
+            download_disposition: LocalDownloadDisposition::ResumeVerified,
             protocol_override: None,
         }
     }
@@ -336,10 +338,7 @@ impl WorkspaceApp {
             self.start_sftp_path_edit(SftpPane::Remote, cx);
             return;
         }
-        let Some(tab_id) = self.active_tab_id(cx) else {
-            return;
-        };
-        let Some(node_id) = self.sftp_tab_nodes.get(&tab_id).cloned() else {
+        let Some(node_id) = self.visible_sftp_node_id(cx) else {
             return;
         };
         let conflict_action = self.settings_store.settings().sftp.conflict_action;
@@ -397,10 +396,7 @@ impl WorkspaceApp {
         transfer_id: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(tab_id) = self.active_tab_id(cx) else {
-            return;
-        };
-        let Some(node_id) = self.sftp_tab_nodes.get(&tab_id).cloned() else {
+        let Some(node_id) = self.visible_sftp_node_id(cx) else {
             return;
         };
         let Some(launch) = self.sftp_view.update(cx, |sftp, cx| {
@@ -465,6 +461,7 @@ impl WorkspaceApp {
             launch.local_path,
             launch.remote_path,
             launch.resume_progress,
+            launch.download_disposition,
             launch.protocol_override,
             tx,
         );
@@ -480,6 +477,7 @@ impl WorkspaceApp {
         local_path: String,
         remote_path: String,
         resume_progress: Option<StoredTransferProgress>,
+        download_disposition: LocalDownloadDisposition,
         protocol_override: Option<RemoteTransferProtocol>,
         cx: &App,
     ) {
@@ -493,6 +491,7 @@ impl WorkspaceApp {
             local_path,
             remote_path,
             resume_progress,
+            download_disposition,
             protocol_override,
             tx,
         );
@@ -508,6 +507,7 @@ impl WorkspaceApp {
         local_path: String,
         remote_path: String,
         resume_progress: Option<StoredTransferProgress>,
+        download_disposition: LocalDownloadDisposition,
         protocol_override: Option<RemoteTransferProtocol>,
         tx: delivery::ActiveDeliverySender<SftpWorkerResult>,
     ) {
@@ -785,6 +785,7 @@ impl WorkspaceApp {
                             &resolved.handle,
                             &remote_path,
                             &local_path,
+                            download_disposition,
                             &transfer_id,
                             Some(progress_tx),
                             Some(manager.clone()),
@@ -1084,6 +1085,7 @@ impl WorkspaceApp {
                         sftp.download_with_resume(
                             &remote_path,
                             &local_path,
+                            download_disposition,
                             progress_store.clone(),
                             Some(progress_tx),
                             Some(manager.clone()),

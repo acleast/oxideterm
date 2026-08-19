@@ -31,6 +31,7 @@ mod plugin_entity;
 mod plugin_lifecycle;
 mod plugin_manager;
 mod plugin_ui;
+mod public_mcp;
 mod quick_commands;
 mod remote_desktop;
 mod runtime_entity;
@@ -44,6 +45,7 @@ mod root {
     pub(super) mod state;
     #[cfg(test)]
     pub(super) mod tests;
+    pub(super) mod window_state;
 }
 mod scheduled_input;
 mod selectable_text;
@@ -161,20 +163,23 @@ use oxideterm_gpui_platform::{
     window_opacity::{apply_window_opacity, normalized_window_opacity},
 };
 use oxideterm_gpui_terminal::{
-    BackgroundImageRenderCache, PrivilegePromptMatch, SharedTerminalSession, TerminalBackgroundFit,
-    TerminalBackgroundPreferences, TerminalCommandSelectionLabels, TerminalContextAction,
+    BackgroundImageRenderCache, PrivilegePromptMatch, SemanticShellDialect, SharedTerminalSession,
+    TerminalBackgroundFit, TerminalBackgroundPreferences, TerminalBroadcastInputKind,
+    TerminalCommandSelectionLabels, TerminalContextAction, TerminalHighlightMatchScope,
     TerminalHighlightRenderMode, TerminalHighlightRule as UiHighlightRule,
-    TerminalInputInterceptor, TerminalInputInterceptorResult, TerminalModemLabels, TerminalNotice,
-    TerminalNoticeVariant, TerminalOutputProcessor, TerminalPane, TerminalPaneEvent,
-    TerminalPasteLabels, TerminalRecordingState, TerminalRecordingStatus, TerminalSearchStatus,
+    TerminalHighlightRuleSetOverride, TerminalInputBroadcaster, TerminalInputInterceptor,
+    TerminalInputInterceptorResult, TerminalModemLabels, TerminalNotice, TerminalNoticeVariant,
+    TerminalOutputProcessor, TerminalPane, TerminalPaneEvent, TerminalPasteLabels,
+    TerminalRecordingState, TerminalRecordingStatus, TerminalSearchStatus,
     TerminalSerialControlLabels, TerminalTrzszLabels, TerminalUiPreferenceOverrides,
     TerminalUiPreferences, TerminalUiTheme, TerminalWorkingDirectorySource,
-    detect_custom_privilege_prompt,
+    detect_custom_privilege_prompt, resolved_terminal_semantic_scheme,
 };
 use oxideterm_gpui_ui::scroll::ScrollableElement;
 use oxideterm_gpui_ui::{
-    ConfirmDialogAction, ConfirmDialogVariant, ConfirmDialogView,
+    ConfirmDialogAction, ConfirmDialogVariant, ConfirmDialogView, checkbox,
     modal::{popover_backdrop, set_tauri_backdrop_blur_allowed},
+    text_input::{TextInputView, text_input, text_input_anchor_probe},
     toast::{ToastVariant, ToastView, toast_action, toast_close},
     toaster::toaster,
     tooltip::tooltip_content,
@@ -207,8 +212,9 @@ use oxideterm_session_adapter::{
 };
 use oxideterm_settings::{
     AI_SIDEBAR_ABSOLUTE_MAX_WIDTH, AI_SIDEBAR_ABSOLUTE_MIN_WIDTH, BackgroundFit, BackgroundScope,
-    CursorStyle as SettingsCursorStyle, FontFamily, FrostedGlassMode, HighlightRuleRenderMode,
-    Language, MAX_TERMINAL_BACKGROUND_OPACITY, MAX_WINDOW_OPACITY, MIN_TERMINAL_BACKGROUND_OPACITY,
+    CursorStyle as SettingsCursorStyle, FontFamily, FrostedGlassMode, GLOBAL_HIGHLIGHT_RULE_SET_ID,
+    HighlightRule, HighlightRuleMatchScope, HighlightRuleRenderMode, Language,
+    MAX_TERMINAL_BACKGROUND_OPACITY, MAX_WINDOW_OPACITY, MIN_TERMINAL_BACKGROUND_OPACITY,
     MIN_WINDOW_OPACITY, PersistedSettings, SettingsStore, background_images_directory,
     default_settings_path, ensure_bundled_background_image, list_background_images,
 };
@@ -235,9 +241,9 @@ use oxideterm_ssh::{
 };
 use oxideterm_ssh_launch::TemporarySshLaunch;
 use oxideterm_terminal::{
-    LocalPtyConfig, RemoteShellIntegrationStatus, SerialSessionConfig, ShellInfo, SshSessionConfig,
-    TelnetSessionConfig, TerminalCommandMarkDetectionSource, TerminalCursorShape,
-    TerminalLifecycle, scan_shells,
+    LocalPtyConfig, MoshTerminalConfig, RemoteShellIntegrationStatus, SerialSessionConfig,
+    ShellInfo, SshSessionConfig, TelnetSessionConfig, TerminalCommandMarkDetectionSource,
+    TerminalCursorShape, TerminalLifecycle, scan_shells,
 };
 use oxideterm_theme::{
     AppUiColors, TerminalTheme, ThemeTokens, UiDensityProfile, UiMotionProfile, UiRadii,
@@ -298,7 +304,7 @@ use crate::{
     SwitchLocaleEnglish, SwitchLocaleFrench, SwitchLocaleGerman, SwitchLocaleItalian,
     SwitchLocaleJapanese, SwitchLocaleKorean, SwitchLocalePortugueseBrazil, SwitchLocaleSpanish,
     SwitchLocaleTraditionalChinese, SwitchLocaleVietnamese, TerminalAiPanel, TerminalClearScreen,
-    TerminalFreeTypeMode, TerminalRecording, ToggleSidebar, ZenMode,
+    TerminalFreeTypeMode, TerminalRecording, ToggleFullscreen, ToggleSidebar, ZenMode,
 };
 use crate::{assets::LucideIcon, bundled_fonts};
 use oxideterm_gpui_markdown::{
@@ -369,7 +375,7 @@ const DETACHED_LOCAL_TERMINAL_LIST_INITIAL_ITEM_COUNT: usize = 0;
 const DETACHED_LOCAL_TERMINAL_LIST_ESTIMATED_HEIGHT: f32 = 56.0;
 const DETACHED_LOCAL_TERMINAL_LIST_OVERSCAN: usize = 4;
 const ACTIVE_SESSION_SIDEBAR_LIST_INITIAL_ITEM_COUNT: usize = 0;
-const ACTIVE_SESSION_SIDEBAR_LIST_ESTIMATED_HEIGHT: f32 = 48.0;
+const ACTIVE_SESSION_SIDEBAR_LIST_ESTIMATED_HEIGHT: f32 = 40.0;
 const ACTIVE_SESSION_SIDEBAR_LIST_OVERSCAN: usize = 8;
 const ACTIVE_SESSION_FOCUS_LIST_ESTIMATED_HEIGHT: f32 = 76.0;
 const OXIDE_EXPORT_CONNECTION_LIST_INITIAL_ITEM_COUNT: usize = 0;
@@ -610,6 +616,13 @@ struct TabContextMenu {
     y: f32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TabRenameDialog {
+    // The dialog edits display metadata for one canonical terminal tab only.
+    tab_id: TabId,
+    draft: String,
+}
+
 #[derive(Clone, Debug)]
 struct ExitingTabVisual {
     tab_id: TabId,
@@ -715,6 +728,7 @@ pub(super) struct SelectableTextFragmentState {
 pub(crate) struct WorkspaceApp {
     focus_handle: FocusHandle,
     main_window_tabs: WorkspaceWindowTabState,
+    tab_rename_dialog: Option<TabRenameDialog>,
     detached_tab_return_drag: Option<DetachedTabReturnDrag>,
     detached_tab_return_handoff: Option<DetachedTabReturnHandoff>,
     next_tab_window_handoff_generation: u64,
@@ -724,12 +738,15 @@ pub(crate) struct WorkspaceApp {
     tab_host: Entity<tabs::WorkspaceTabHostEntity>,
     _tab_host_subscription: Subscription,
     search: SearchBarState,
+    terminal_highlight_popover_open: bool,
     terminal_command_sender: Entity<terminal_command_sender::TerminalCommandSenderEntity>,
     _terminal_command_sender_observation: Subscription,
     scheduled_input: scheduled_input::ScheduledInputState,
     detached_local_terminals: HashMap<TerminalSessionId, DetachedLocalTerminalSession>,
     detached_local_terminal_order: Vec<TerminalSessionId>,
     serial_terminal_configs: HashMap<TerminalSessionId, SerialSessionConfig>,
+    // A Telnet pane keeps only the stable profile owner needed for toolbar persistence.
+    telnet_terminal_profile_ids: HashMap<TerminalSessionId, String>,
     detached_local_terminals_popover_open: bool,
     command_palette: Entity<command_palette::CommandPaletteEntity>,
     _command_palette_observation: Subscription,
@@ -749,6 +766,7 @@ pub(crate) struct WorkspaceApp {
     _plugin_entity_subscription: Subscription,
     split_drag: Option<SplitDrag>,
     sidebar_resizing: bool,
+    embedded_sftp_sidebar_resizing: bool,
     sidebar_resize_hotzone_hovered: bool,
     sidebar_collapsed: bool,
     sidebar_rendered: bool,
@@ -779,6 +797,7 @@ pub(crate) struct WorkspaceApp {
     settings_section_list_state: ListState,
     settings_section_list_cache: RefCell<VirtualListSignatureCache>,
     standard_confirm_focused_action: Option<ConfirmDialogAction>,
+    skip_future_ssh_close_confirmations: bool,
     select_anchors: HashMap<SelectAnchorId, OverlayAnchor>,
     text_input_anchors: TextInputAnchorStore,
     selectable_text_values: HashMap<u64, String>,
@@ -819,6 +838,7 @@ pub(crate) struct WorkspaceApp {
     _connection_flow_subscription: Subscription,
     workspace_runtime: Entity<runtime_entity::WorkspaceRuntimeEntity>,
     _workspace_runtime_subscription: Subscription,
+    public_mcp: public_mcp::PublicMcpWorkspaceBridge,
     ssh_registry: SshConnectionRegistry,
     forwarding_service: forwards::ForwardingRuntimeService,
     forwarding_runtime: Arc<tokio::runtime::Runtime>,
@@ -840,6 +860,8 @@ pub(crate) struct WorkspaceApp {
     _file_manager_observation: Subscription,
     _file_manager_subscription: Subscription,
     sftp_tab_nodes: HashMap<TabId, NodeId>,
+    embedded_sftp_node_id: Option<NodeId>,
+    sftp_presentation_request: Option<sftp::SftpPresentationRequest>,
     ide_workspace: Entity<ide::IdeWorkspaceEntity>,
     _ide_workspace_subscription: Subscription,
     sftp_view: Entity<sftp::SftpWorkspaceEntity>,
@@ -864,6 +886,8 @@ pub(crate) struct WorkspaceApp {
     vibrancy_support: VibrancySupport,
     app_lock: app_lock::AppLockState,
     settings_store: SettingsStore,
+    pending_window_ui_state: Option<oxideterm_settings::WindowUiState>,
+    window_state_save_task: Option<Task<()>>,
     connection_store: ConnectionStore,
     // The connection-layer worker owns SSH config parsing and persistence.
     ssh_config_sync_service: Option<SshConfigSyncService>,

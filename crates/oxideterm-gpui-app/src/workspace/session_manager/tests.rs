@@ -1,31 +1,4 @@
 use super::*;
-use oxideterm_gpui_ui::TauriTableMetrics;
-
-const MANAGER_COL_CHECKBOX: f32 = 32.0;
-const MANAGER_COL_NAME_BASIS: f32 = 140.0;
-const MANAGER_COL_HOST: f32 = 130.0;
-const MANAGER_COL_PORT: f32 = 50.0;
-const MANAGER_COL_USERNAME: f32 = 90.0;
-const MANAGER_COL_AUTH: f32 = 72.0;
-const MANAGER_COL_GROUP: f32 = 100.0;
-const MANAGER_COL_LAST_USED: f32 = 90.0;
-const MANAGER_COL_ACTIONS: f32 = 84.0;
-
-pub(super) fn manager_table_min_width_for_metrics(metrics: TauriTableMetrics) -> f32 {
-    // Tauri ConnectionTable columns: px-2 wrapper plus w-8, w-[140px],
-    // w-[130px], w-[50px], w-[90px], w-[72px], w-[100px], w-[90px],
-    // and sticky w-[84px] actions.
-    metrics.padding_x * 2.0
-        + MANAGER_COL_CHECKBOX
-        + MANAGER_COL_NAME_BASIS
-        + MANAGER_COL_HOST
-        + MANAGER_COL_PORT
-        + MANAGER_COL_USERNAME
-        + MANAGER_COL_AUTH
-        + MANAGER_COL_GROUP
-        + MANAGER_COL_LAST_USED
-        + MANAGER_COL_ACTIONS
-}
 
 pub(super) fn base_form() -> NewConnectionForm {
     let mut form = NewConnectionForm::default();
@@ -93,6 +66,7 @@ pub(super) fn saved_connection_fixture(auth: SavedAuth) -> SavedConnection {
         auth,
         proxy_chain: Vec::new(),
         upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
+        proxy_command: None,
         options: oxideterm_connections::ConnectionOptions::default(),
         created_at: now,
         last_used_at: None,
@@ -104,16 +78,6 @@ pub(super) fn saved_connection_fixture(auth: SavedAuth) -> SavedConnection {
         post_connect_command: None,
         privilege_credentials: Vec::new(),
     }
-}
-
-#[test]
-pub(super) fn session_manager_table_width_matches_tauri_connection_table_columns() {
-    // This locks the Tauri ConnectionTable min-w-fit contract that keeps
-    // horizontal scrolling, row dividers, and the sticky actions column aligned.
-    assert_eq!(
-        manager_table_min_width_for_metrics(TauriTableMetrics::default()),
-        804.0
-    );
 }
 
 #[test]
@@ -267,187 +231,6 @@ pub(super) fn contextual_group_editors_compose_only_one_path_segment() {
 }
 
 #[test]
-pub(super) fn session_group_tree_exposes_contextual_root_and_group_actions() {
-    let source = include_str!("views.rs");
-    // Tree-level and row-level right clicks must use pointer-positioned menus.
-    assert!(source.contains("SessionManagerRowActionTarget::GroupRoot"));
-    assert!(source.contains("open_session_manager_context_menu"));
-    assert!(source.contains("sessionManager.folder_tree.new_subgroup"));
-    assert!(source.contains("MouseButton::Right"));
-    assert!(source.contains("close_session_row_menus(cx)"));
-}
-
-#[test]
-pub(super) fn session_manager_main_views_keep_independent_empty_list_states() {
-    let state = SessionManagerState::default();
-
-    assert_eq!(state.main_grid_list_state.item_count(), 0);
-    assert_eq!(state.main_list_state.item_count(), 0);
-    assert_eq!(state.main_tree_list_state.item_count(), 0);
-}
-
-#[test]
-pub(super) fn session_manager_main_views_use_virtual_lists_as_scroll_owners() {
-    let source = include_str!("views.rs");
-    for (function_name, next_function_name) in [
-        (
-            "pub(super) fn render_session_manager_grid_view",
-            "pub(super) fn render_session_manager_grid_row",
-        ),
-        (
-            "pub(super) fn render_session_manager_list_view",
-            "pub(super) fn render_session_manager_tree_view",
-        ),
-        (
-            "pub(super) fn render_session_manager_tree_view",
-            "pub(super) fn render_session_manager_view_actions",
-        ),
-    ] {
-        let function_start = source.find(function_name).expect("main view function");
-        let function_tail = &source[function_start + function_name.len()..];
-        let function_end = function_tail
-            .find(next_function_name)
-            .expect("next main view function");
-        let function_source = &function_tail[..function_end];
-        assert!(function_source.contains("tauri_virtual_list("));
-        assert!(!function_source.contains("overflow_y_scrollbar"));
-    }
-}
-
-#[test]
-pub(super) fn session_group_management_action_is_shared_by_every_view_and_empty_state() {
-    let source = include_str!("views.rs");
-    for (function_name, next_function_name) in [
-        (
-            "pub(super) fn render_session_manager_view_content",
-            "pub(super) fn render_session_manager_empty_view",
-        ),
-        (
-            "pub(super) fn render_session_manager_grid_view",
-            "pub(super) fn render_session_manager_grid_row",
-        ),
-        (
-            "pub(super) fn render_session_manager_list_view",
-            "pub(super) fn render_session_manager_tree_view",
-        ),
-        (
-            "pub(super) fn render_session_manager_tree_view",
-            "pub(super) fn render_session_manager_view_actions",
-        ),
-    ] {
-        let function_start = source.find(function_name).expect("view function");
-        let function_tail = &source[function_start + function_name.len()..];
-        let function_end = function_tail
-            .find(next_function_name)
-            .expect("next view function");
-        assert!(
-            function_tail[..function_end].contains("render_session_manager_view_actions"),
-            "{function_name} must expose the shared group-management action"
-        );
-    }
-
-    let actions_start = source
-        .find("pub(super) fn render_session_manager_view_actions")
-        .expect("shared view actions");
-    let actions_tail = &source[actions_start..];
-    let actions_end = actions_tail
-        .find("pub(super) fn render_tree_mode_action_button")
-        .expect("next view helper");
-    let actions_source = &actions_tail[..actions_end];
-    assert!(actions_source.contains("sessionManager.folder_tree.manage_groups"));
-    assert!(actions_source.contains("open_session_group_manager"));
-    assert!(!actions_source.contains("sessionManager.folder_tree.new_group"));
-    assert!(!actions_source.contains("open_session_group_creation"));
-
-    let dialogs_source = include_str!("dialogs.rs");
-    assert!(dialogs_source.contains("open_session_group_creation"));
-    assert!(dialogs_source.contains("group_editor.clone()"));
-    assert!(!dialogs_source.contains("render_group_editor_dialog"));
-}
-
-#[test]
-pub(super) fn session_manager_virtual_rows_claim_the_available_list_width() {
-    let source = include_str!("views.rs");
-    // Every top-level virtual row must stretch independently of its content width.
-    for (function_name, next_function_name) in [
-        (
-            "pub(super) fn render_session_manager_section_header",
-            "pub(super) fn render_session_manager_item_card",
-        ),
-        (
-            "pub(super) fn render_session_manager_tree_group_row",
-            "pub(super) fn render_session_manager_display_item_row",
-        ),
-        (
-            "pub(super) fn render_session_manager_display_item_row",
-            "pub(super) fn render_session_manager_item_icon",
-        ),
-    ] {
-        let function_start = source.find(function_name).expect("row function");
-        let function_tail = &source[function_start + function_name.len()..];
-        let function_end = function_tail
-            .find(next_function_name)
-            .expect("next row function");
-        let function_source = &function_tail[..function_end];
-        assert!(function_source.contains(".w_full()"));
-        assert!(function_source.contains(".min_w(px(0.0))"));
-    }
-
-    let grid_row_start = source
-        .find("pub(super) fn render_session_manager_grid_row")
-        .expect("grid row function");
-    let grid_row_tail =
-        &source[grid_row_start + "pub(super) fn render_session_manager_grid_row".len()..];
-    let grid_row_end = grid_row_tail
-        .find("pub(super) fn render_session_manager_recent_item")
-        .expect("next grid function");
-    let grid_row_source = &grid_row_tail[..grid_row_end];
-    assert_eq!(grid_row_source.matches(".w_full()").count(), 2);
-    assert_eq!(grid_row_source.matches(".min_w(px(0.0))").count(), 2);
-}
-
-#[test]
-pub(super) fn session_manager_grid_rows_preserve_symmetric_outer_gutters() {
-    let source = include_str!("views.rs");
-    let grid_view_start = source
-        .find("pub(super) fn render_session_manager_grid_view")
-        .expect("grid view function");
-    let grid_view_tail =
-        &source[grid_view_start + "pub(super) fn render_session_manager_grid_view".len()..];
-    let grid_view_end = grid_view_tail
-        .find("pub(super) fn render_session_manager_grid_row")
-        .expect("grid row function");
-    let grid_view_source = &grid_view_tail[..grid_view_end];
-    assert!(grid_view_source.contains(".pt(px(self.tokens.spacing.three))"));
-    assert!(!grid_view_source.contains(".p(px(self.tokens.spacing.three))"));
-
-    let grid_row_tail = &grid_view_tail[grid_view_end..];
-    let grid_row_end = grid_row_tail
-        .find("pub(super) fn render_session_manager_recent_item")
-        .expect("recent item function");
-    let grid_row_source = &grid_row_tail[..grid_row_end];
-    assert_eq!(
-        grid_row_source
-            .matches(".px(px(self.tokens.spacing.three))")
-            .count(),
-        2
-    );
-
-    let header_start = source
-        .find("pub(super) fn render_session_manager_section_header")
-        .expect("section header function");
-    let header_tail =
-        &source[header_start + "pub(super) fn render_session_manager_section_header".len()..];
-    let header_end = header_tail
-        .find("pub(super) fn render_session_manager_item_card")
-        .expect("item card function");
-    assert!(
-        header_tail[..header_end].contains(".px(px(self.tokens.spacing.three))"),
-        "grid section headers must align with card rows"
-    );
-}
-
-#[test]
 pub(super) fn session_menu_dismissal_closes_all_manager_popovers() {
     let mut state = SessionManagerState {
         show_batch_move: true,
@@ -496,12 +279,27 @@ pub(super) fn ssh_config_display_projection_never_copies_proxy_command_secrets()
 }
 
 #[test]
-pub(super) fn remote_desktop_selection_is_typed_separately_from_ssh_ids() {
+pub(super) fn saved_profile_selection_is_typed_separately_from_ssh_ids() {
     let now = Utc::now();
     let ssh = SessionManagerDisplayItem::Connection(ConnectionInfo {
         id: "shared-id".to_string(),
         ..connection_info_fixture(None)
     });
+    let mut serial = SerialProfile::new("Serial console", "/dev/tty.test");
+    serial.id = "shared-id".to_string();
+    let serial = SessionManagerDisplayItem::Serial(serial);
+    let mut telnet = TelnetProfile::new("Telnet console", "telnet.example.test", 23);
+    telnet.id = "shared-id".to_string();
+    let telnet = SessionManagerDisplayItem::Telnet(telnet);
+    let mut mosh = MoshProfile::new(
+        "Mosh console",
+        "mosh.example.test",
+        22,
+        "operator",
+        SavedAuth::Agent,
+    );
+    mosh.id = "shared-id".to_string();
+    let mosh = SessionManagerDisplayItem::Mosh(mosh);
     let remote = SessionManagerDisplayItem::RemoteDesktop(RemoteDesktopProfile {
         id: "shared-id".to_string(),
         name: "Remote desktop".to_string(),
@@ -515,6 +313,7 @@ pub(super) fn remote_desktop_selection_is_typed_separately_from_ssh_ids() {
         username: Some("operator".to_string()),
         domain: None,
         credential_ref: None,
+        ssh_gateway_connection_id: None,
         read_only: false,
         session_options: oxideterm_remote_desktop::RemoteDesktopSessionOptions::default(),
         created_at: now,
@@ -527,6 +326,22 @@ pub(super) fn remote_desktop_selection_is_typed_separately_from_ssh_ids() {
         Some(SessionManagerSelectionTarget::Connection(
             "shared-id".to_string()
         ))
+    );
+    assert_eq!(
+        serial.selection_target(),
+        Some(SessionManagerSelectionTarget::Serial(
+            "shared-id".to_string()
+        ))
+    );
+    assert_eq!(
+        telnet.selection_target(),
+        Some(SessionManagerSelectionTarget::Telnet(
+            "shared-id".to_string()
+        ))
+    );
+    assert_eq!(
+        mosh.selection_target(),
+        Some(SessionManagerSelectionTarget::Mosh("shared-id".to_string()))
     );
     assert_eq!(
         remote.selection_target(),
@@ -551,6 +366,27 @@ pub(super) fn save_request_from_form_preserves_custom_icon_and_independent_color
 }
 
 #[test]
+pub(super) fn save_request_moves_manual_proxy_command_into_a_redacted_secret_owner() {
+    let mut form = base_form();
+    form.proxy_command_enabled = true;
+    form.proxy_command = "helper --token proxy-command-secret".to_string();
+
+    let request = save_request_from_form(&mut form, None).unwrap();
+    let saved_command = request.proxy_command.unwrap();
+
+    assert!(form.proxy_command.is_empty());
+    assert_eq!(
+        saved_command
+            .plaintext_command
+            .as_ref()
+            .unwrap()
+            .expose_secret(),
+        "helper --token proxy-command-secret"
+    );
+    assert!(!format!("{saved_command:?}").contains("proxy-command-secret"));
+}
+
+#[test]
 pub(super) fn oxide_export_logical_scroll_change_detects_inner_consumption() {
     // GPUI ListState owns measured row heights internally, so scroll-chain
     // decisions must compare actual logical movement instead of estimates.
@@ -558,18 +394,6 @@ pub(super) fn oxide_export_logical_scroll_change_detects_inner_consumption() {
     assert!(!oxide_export_logical_scroll_changed(0, 12.0, 0, 12.004));
     assert!(oxide_export_logical_scroll_changed(0, 0.0, 0, 24.0));
     assert!(oxide_export_logical_scroll_changed(0, 24.0, 1, 0.0));
-}
-
-#[test]
-pub(super) fn oxide_export_selection_count_label_uses_locale_placeholders() {
-    assert_eq!(
-        oxide_export_selection_count_label(
-            "Select Connections to Export ({{selected}}/{{total}})".to_string(),
-            2,
-            5,
-        ),
-        "Select Connections to Export (2/5)"
-    );
 }
 
 #[test]
@@ -598,7 +422,6 @@ pub(super) fn oxide_dialog_inputs_are_active_outside_the_session_manager_tab() {
     assert!(session_manager_input_is_active(
         SessionManagerInput::OxideExportPassword,
         false,
-        false,
         None,
         Some(&export_dialog),
     ));
@@ -608,7 +431,6 @@ pub(super) fn oxide_dialog_inputs_are_active_outside_the_session_manager_tab() {
     assert!(session_manager_input_is_active(
         SessionManagerInput::OxideImportPassword,
         false,
-        false,
         Some(&import_dialog),
         None,
     ));
@@ -616,32 +438,12 @@ pub(super) fn oxide_dialog_inputs_are_active_outside_the_session_manager_tab() {
     assert!(!session_manager_input_is_active(
         SessionManagerInput::Search,
         false,
-        false,
         None,
         None,
     ));
     assert!(session_manager_input_is_active(
         SessionManagerInput::Search,
         true,
-        false,
-        None,
-        None,
-    ));
-}
-
-#[test]
-pub(super) fn saved_sidebar_search_is_active_only_while_its_sidebar_is_visible() {
-    assert!(session_manager_input_is_active(
-        SessionManagerInput::SavedSearch,
-        false,
-        true,
-        None,
-        None,
-    ));
-    assert!(!session_manager_input_is_active(
-        SessionManagerInput::SavedSearch,
-        true,
-        false,
         None,
         None,
     ));
@@ -656,7 +458,6 @@ pub(super) fn busy_oxide_export_does_not_keep_a_stale_text_input_active() {
 
     assert!(!session_manager_input_is_active(
         SessionManagerInput::OxideExportPassword,
-        false,
         false,
         None,
         Some(&export_dialog),
@@ -727,7 +528,9 @@ pub(super) fn edit_properties_unloaded_password_preserves_saved_keychain_id() {
 #[test]
 pub(super) fn edit_properties_switch_from_agent_to_password_submits_new_password() {
     let existing = SavedAuth::Agent;
-    let saved_connection = saved_connection_fixture(existing.clone());
+    let connect_timeout_seconds = 120;
+    let mut saved_connection = saved_connection_fixture(existing.clone());
+    saved_connection.options.connect_timeout_seconds = Some(connect_timeout_seconds);
     let mut form = form_from_saved_connection(&saved_connection, None);
     form.auth_tab = SshAuthTab::Password;
     form.password = "new-secret".to_string();
@@ -738,6 +541,7 @@ pub(super) fn edit_properties_switch_from_agent_to_password_submits_new_password
         Some(&existing),
     )
     .unwrap();
+    assert_eq!(request.connect_timeout_seconds, connect_timeout_seconds);
 
     match request.auth {
         SavedAuth::Password {
@@ -765,6 +569,72 @@ pub(super) fn edit_properties_saved_keychain_password_starts_unloaded() {
 }
 
 #[test]
+pub(super) fn edit_properties_restores_proxy_chain_without_loading_secrets() {
+    let mut saved_connection = saved_connection_fixture(SavedAuth::Agent);
+    saved_connection.proxy_chain = vec![SavedProxyHop {
+        host: "jump.example.com".to_string(),
+        port: 2222,
+        username: "ops".to_string(),
+        auth: SavedAuth::Password {
+            keychain_id: Some("proxy-password-keychain-id".to_string()),
+            plaintext_password: None,
+        },
+        agent_forwarding: true,
+        identity_agent: Some("/tmp/proxy-agent.sock".to_string()),
+        agent_forwarding_socket: Some("/tmp/proxy-forward.sock".to_string()),
+        legacy_ssh_compatibility: true,
+    }];
+    let mut form = form_from_saved_connection(&saved_connection, None);
+
+    restore_saved_proxy_chain_in_form(&mut form, &saved_connection);
+
+    assert!(form.proxy_chain_expanded);
+    assert_eq!(form.proxy_hops.len(), 1);
+    let hop = &form.proxy_hops[0];
+    assert_eq!(hop.persisted_proxy_hop_index, Some(0));
+    assert_eq!(hop.host, "jump.example.com");
+    assert_eq!(hop.port, "2222");
+    assert_eq!(hop.username, "ops");
+    assert_eq!(hop.auth_tab, SshAuthTab::Password);
+    assert!(hop.password.is_empty());
+    assert!(hop.passphrase.is_empty());
+    assert!(hop.agent_forwarding);
+    assert_eq!(hop.identity_agent, "/tmp/proxy-agent.sock");
+    assert_eq!(
+        hop.agent_forwarding_socket.as_deref(),
+        Some("/tmp/proxy-forward.sock")
+    );
+    assert!(hop.legacy_ssh_compatibility);
+}
+
+#[test]
+pub(super) fn edit_properties_can_remove_the_entire_proxy_chain() {
+    let mut saved_connection = saved_connection_fixture(SavedAuth::Agent);
+    saved_connection.proxy_chain = vec![SavedProxyHop {
+        host: "jump.example.com".to_string(),
+        port: 22,
+        username: "ops".to_string(),
+        auth: SavedAuth::Agent,
+        agent_forwarding: false,
+        identity_agent: None,
+        agent_forwarding_socket: None,
+        legacy_ssh_compatibility: false,
+    }];
+    let mut form = form_from_saved_connection(&saved_connection, None);
+    restore_saved_proxy_chain_in_form(&mut form, &saved_connection);
+    form.proxy_hops.clear();
+
+    let request = save_request_from_form_with_existing_auth(
+        &mut form,
+        Some(saved_connection.id.clone()),
+        Some(&saved_connection.auth),
+    )
+    .unwrap();
+
+    assert!(request.proxy_chain.is_empty());
+}
+
+#[test]
 pub(super) fn edit_properties_preserves_legacy_ssh_compatibility() {
     let mut saved_connection = saved_connection_fixture(SavedAuth::Agent);
     saved_connection.options.legacy_ssh_compatibility = true;
@@ -789,6 +659,8 @@ pub(super) fn edit_properties_round_trips_host_terminal_overrides() {
             oxideterm_connections::ConnectionTerminalBackspaceSequence::ControlH,
         ),
         delete_sequence: Some(oxideterm_connections::ConnectionTerminalDeleteSequence::Delete),
+        semantic_scheme: Some("conservative".to_string()),
+        highlight_rule_set: Some("network-devices".to_string()),
     };
 
     let mut form = form_from_saved_connection(&saved_connection, None);
@@ -882,6 +754,7 @@ pub(super) fn new_connection_request_carries_proxy_chain() {
     form.proxy_hops
         .push(crate::workspace::new_connection::NewConnectionProxyHop {
             saved_connection_id: String::new(),
+            persisted_proxy_hop_index: None,
             host: "jump.example.com".to_string(),
             port: "2222".to_string(),
             username: "ops".to_string(),
@@ -1059,6 +932,7 @@ pub(super) fn proxy_hop_two_factor_is_saved_as_keyboard_interactive() {
     form.proxy_hops
         .push(crate::workspace::new_connection::NewConnectionProxyHop {
             saved_connection_id: String::new(),
+            persisted_proxy_hop_index: None,
             host: "jump.example.com".to_string(),
             port: "22".to_string(),
             username: "ops".to_string(),
@@ -1104,86 +978,4 @@ pub(super) fn runtime_proxy_hops_are_prepended_without_cloning_the_connection_fo
     assert_eq!(request.proxy_chain.len(), 2);
     assert_eq!(request.proxy_chain[0].host, "runtime-hop.example.com");
     assert_eq!(request.proxy_chain[1].host, "form-hop.example.com");
-}
-
-#[test]
-pub(super) fn basic_dialog_tab_order_wraps_through_text_input_like_radix_dialog() {
-    assert_eq!(
-        browser_behavior::modal_footer_input_key_action(
-            "tab",
-            false,
-            &SESSION_MANAGER_BASIC_DIALOG_FOOTER_ACTIONS,
-            true,
-            true,
-            None,
-            SessionManagerBasicDialogFooterAction::Cancel,
-            None,
-        ),
-        Some(browser_behavior::ModalFooterInputKeyAction::FocusFooter(
-            SessionManagerBasicDialogFooterAction::Cancel
-        ))
-    );
-
-    assert_eq!(
-        browser_behavior::modal_footer_input_key_action(
-            "tab",
-            false,
-            &SESSION_MANAGER_BASIC_DIALOG_FOOTER_ACTIONS,
-            true,
-            false,
-            Some(SessionManagerBasicDialogFooterAction::Primary),
-            SessionManagerBasicDialogFooterAction::Cancel,
-            None,
-        ),
-        Some(browser_behavior::ModalFooterInputKeyAction::FocusInput)
-    );
-
-    assert_eq!(
-        browser_behavior::modal_footer_input_key_action(
-            "tab",
-            true,
-            &SESSION_MANAGER_BASIC_DIALOG_FOOTER_ACTIONS,
-            true,
-            false,
-            Some(SessionManagerBasicDialogFooterAction::Cancel),
-            SessionManagerBasicDialogFooterAction::Cancel,
-            None,
-        ),
-        Some(browser_behavior::ModalFooterInputKeyAction::FocusInput)
-    );
-}
-
-#[test]
-pub(super) fn basic_dialog_footer_arrows_stay_inside_footer_actions() {
-    assert_eq!(
-        browser_behavior::modal_footer_input_key_action(
-            "arrowleft",
-            false,
-            &SESSION_MANAGER_BASIC_DIALOG_FOOTER_ACTIONS,
-            false,
-            false,
-            Some(SessionManagerBasicDialogFooterAction::Cancel),
-            SessionManagerBasicDialogFooterAction::Cancel,
-            None,
-        ),
-        Some(browser_behavior::ModalFooterInputKeyAction::FocusFooter(
-            SessionManagerBasicDialogFooterAction::Primary
-        ))
-    );
-
-    assert_eq!(
-        browser_behavior::modal_footer_input_key_action(
-            "arrowright",
-            false,
-            &SESSION_MANAGER_BASIC_DIALOG_FOOTER_ACTIONS,
-            false,
-            false,
-            Some(SessionManagerBasicDialogFooterAction::Primary),
-            SessionManagerBasicDialogFooterAction::Cancel,
-            None,
-        ),
-        Some(browser_behavior::ModalFooterInputKeyAction::FocusFooter(
-            SessionManagerBasicDialogFooterAction::Cancel
-        ))
-    );
 }

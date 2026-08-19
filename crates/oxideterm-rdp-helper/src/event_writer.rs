@@ -3,13 +3,10 @@ use std::{
     io,
     sync::{Arc, Condvar, Mutex},
     thread,
-    time::{Duration, Instant},
 };
 
+use oxideterm_remote_desktop::REMOTE_DESKTOP_MAX_FRAME_UPDATE_BATCH_REGIONS;
 use oxideterm_remote_desktop::{RemoteDesktopHelperEvent, write_event_line};
-
-const FRAME_QUIET_COALESCE_WINDOW: Duration = Duration::from_millis(2);
-const FRAME_MAX_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 
 #[derive(Clone)]
 pub(crate) struct SharedEventWriter {
@@ -98,26 +95,6 @@ fn next_frame_for_stdout(
             continue;
         }
 
-        // Sparse updates should not wait a whole refresh tick, but a burst can
-        // still use the full coalescing window to collapse dirty rectangles.
-        let start = Instant::now();
-        let max_deadline = start + FRAME_MAX_COALESCE_WINDOW;
-        let mut quiet_deadline = start + FRAME_QUIET_COALESCE_WINDOW;
-        loop {
-            let now = Instant::now();
-            if now >= quiet_deadline || now >= max_deadline {
-                break;
-            }
-            let remaining = quiet_deadline
-                .min(max_deadline)
-                .saturating_duration_since(now);
-            let (next_queue, timeout) = wake.wait_timeout(queue, remaining).ok()?;
-            queue = next_queue;
-            if timeout.timed_out() {
-                break;
-            }
-            quiet_deadline = Instant::now() + FRAME_QUIET_COALESCE_WINDOW;
-        }
         if let Some(frame) = queue.frames.pop_front() {
             return Some(frame);
         }
@@ -127,7 +104,9 @@ fn next_frame_for_stdout(
 fn is_frame_event(event: &RemoteDesktopHelperEvent) -> bool {
     matches!(
         event,
-        RemoteDesktopHelperEvent::Frame { .. } | RemoteDesktopHelperEvent::FrameUpdate { .. }
+        RemoteDesktopHelperEvent::Frame { .. }
+            | RemoteDesktopHelperEvent::FrameUpdate { .. }
+            | RemoteDesktopHelperEvent::FrameUpdateBatch { .. }
     )
 }
 
@@ -158,6 +137,11 @@ fn try_merge_frame_event(
                     return Err(RemoteDesktopHelperEvent::FrameUpdate { update });
                 }
             }
+            RemoteDesktopHelperEvent::FrameUpdateBatch { batch } => {
+                if !frame.apply_update_batch(&batch) {
+                    return Err(RemoteDesktopHelperEvent::FrameUpdateBatch { batch });
+                }
+            }
             incoming => {
                 *existing = incoming;
             }
@@ -172,9 +156,27 @@ fn try_merge_frame_event(
                     });
                 }
             }
+            incoming @ RemoteDesktopHelperEvent::FrameUpdateBatch { .. } => {
+                return Err(incoming);
+            }
             incoming => {
                 *existing = incoming;
             }
+        },
+        RemoteDesktopHelperEvent::FrameUpdateBatch { batch } => match incoming {
+            RemoteDesktopHelperEvent::FrameUpdateBatch {
+                batch: incoming_batch,
+            } => {
+                if let Err(incoming_batch) = batch.merge(
+                    incoming_batch,
+                    REMOTE_DESKTOP_MAX_FRAME_UPDATE_BATCH_REGIONS,
+                ) {
+                    return Err(RemoteDesktopHelperEvent::FrameUpdateBatch {
+                        batch: incoming_batch,
+                    });
+                }
+            }
+            incoming => return Err(incoming),
         },
         slot => {
             *slot = incoming;

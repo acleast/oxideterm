@@ -195,7 +195,7 @@ dependencies = [
  "aead 0.6.0-rc.10",
  "aes 0.9.1",
  "cipher 0.5.2",
- "ctr",
+ "ctr 0.10.1",
  "ghash",
  "subtle",
  "zeroize",
@@ -959,6 +959,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -2062,7 +2068,7 @@ dependencies = [
  "mach2 0.4.3",
  "ndk",
  "ndk-context",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "objc2-audio-toolbox",
  "objc2-core-audio",
@@ -2575,6 +2581,15 @@ dependencies = [
 
 [[package]]
 name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
+name = "ctr"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baaca1c4b237092596f64d571e9db6ce4109c4ef9742e27590f1709594461f21"
@@ -2742,9 +2757,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid 0.9.6",
- "der_derive",
- "flagset",
- "pem-rfc7468 0.7.0",
  "zeroize",
 ]
 
@@ -2755,7 +2767,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71fd89660b2dc699704064e59e9dba0147b903e85319429e131620d022be411b"
 dependencies = [
  "const-oid 0.10.2",
- "pem-rfc7468 1.0.0",
+ "der_derive",
+ "flagset",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -2774,9 +2788,9 @@ dependencies = [
 
 [[package]]
 name = "der_derive"
-version = "0.7.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8034092389675178f570469e6c3b0465d3d30b4505c294a6550db47f3c17ad18"
+checksum = "59600e2c2d636fde9b65e99cc6445ac770c63d3628195ff39932b8d6d7409903"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3037,7 +3051,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
- "pkcs8",
+ "pkcs8 0.11.0",
  "signature",
 ]
 
@@ -3083,8 +3097,8 @@ dependencies = [
  "group",
  "hkdf 0.13.0",
  "hybrid-array",
- "pem-rfc7468 1.0.0",
- "pkcs8",
+ "pem-rfc7468",
+ "pkcs8 0.11.0",
  "rand_core 0.10.1",
  "sec1",
  "subtle",
@@ -3362,6 +3376,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "fernomade-crypto"
+version = "0.0.0"
+dependencies = [
+ "aes 0.8.4",
+ "base64 0.22.1",
+ "ocb3",
+ "zeroize",
+]
+
+[[package]]
+name = "fernomade-predict"
+version = "0.0.0"
+
+[[package]]
+name = "fernomade-runtime"
+version = "0.0.0"
+dependencies = [
+ "fernomade-crypto",
+ "fernomade-session",
+ "fernomade-wire",
+]
+
+[[package]]
+name = "fernomade-session"
+version = "0.0.0"
+dependencies = [
+ "fernomade-crypto",
+ "fernomade-state",
+ "fernomade-wire",
+]
+
+[[package]]
+name = "fernomade-state"
+version = "0.0.0"
+dependencies = [
+ "fernomade-wire",
+ "vt100",
+ "vte",
+]
+
+[[package]]
+name = "fernomade-wire"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "prost",
 ]
 
 [[package]]
@@ -5271,8 +5334,8 @@ checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
 name = "ironrdp"
-version = "0.16.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.17.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-cliprdr",
  "ironrdp-connector",
@@ -5289,8 +5352,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-async"
-version = "0.9.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.10.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bytes",
  "ironrdp-connector",
@@ -5302,12 +5365,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-bulk"
 version = "0.1.1"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 
 [[package]]
 name = "ironrdp-cliprdr"
-version = "0.6.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.7.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bitflags 2.11.1",
  "ironrdp-core",
@@ -5319,7 +5382,7 @@ dependencies = [
 [[package]]
 name = "ironrdp-cliprdr-format"
 version = "0.2.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-core",
  "png 0.18.1",
@@ -5327,8 +5390,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-connector"
-version = "0.9.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.10.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-core",
  "ironrdp-error",
@@ -5345,16 +5408,16 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-core"
-version = "0.2.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.2.1"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-error",
 ]
 
 [[package]]
 name = "ironrdp-displaycontrol"
-version = "0.7.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.8.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-core",
  "ironrdp-dvc",
@@ -5365,8 +5428,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-dvc"
-version = "0.7.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.8.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-core",
  "ironrdp-pdu",
@@ -5376,8 +5439,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-egfx"
-version = "0.2.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.3.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bit_field",
  "bitflags 2.11.1",
@@ -5392,12 +5455,12 @@ dependencies = [
 [[package]]
 name = "ironrdp-error"
 version = "0.2.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 
 [[package]]
 name = "ironrdp-graphics"
-version = "0.8.2"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.9.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bit_field",
  "bitflags 2.11.1",
@@ -5405,15 +5468,16 @@ dependencies = [
  "byteorder",
  "ironrdp-core",
  "ironrdp-pdu",
- "num-derive",
+ "num-derive 0.5.1",
  "num-traits",
+ "wide 0.7.33",
  "yuv",
 ]
 
 [[package]]
 name = "ironrdp-input"
-version = "0.6.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.7.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bitvec",
  "ironrdp-pdu",
@@ -5422,30 +5486,31 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-pdu"
-version = "0.8.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.9.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bit_field",
  "bitflags 2.11.1",
  "byteorder",
  "der-parser",
+ "hmac 0.12.1",
  "ironrdp-core",
  "ironrdp-error",
  "md-5 0.10.6",
  "num-bigint 0.4.6",
- "num-derive",
+ "num-derive 0.5.1",
  "num-integer",
  "num-traits",
  "pkcs1 0.7.5",
- "sha1 0.10.6",
+ "sha1",
  "tap",
  "x509-cert",
 ]
 
 [[package]]
 name = "ironrdp-rdpsnd"
-version = "0.8.1"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.9.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bitflags 2.11.1",
  "ironrdp-core",
@@ -5456,11 +5521,10 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-session"
-version = "0.10.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.11.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-bulk",
- "ironrdp-connector",
  "ironrdp-core",
  "ironrdp-displaycontrol",
  "ironrdp-dvc",
@@ -5473,8 +5537,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-svc"
-version = "0.7.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.8.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "bitflags 2.11.1",
  "ironrdp-core",
@@ -5483,8 +5547,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-tls"
-version = "0.2.1"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.2.2"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "tokio",
  "tokio-native-tls",
@@ -5493,8 +5557,8 @@ dependencies = [
 
 [[package]]
 name = "ironrdp-tokio"
-version = "0.9.0"
-source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=78b5ad91711f830cf20c842c1c0062e81c51db07#78b5ad91711f830cf20c842c1c0062e81c51db07"
+version = "0.10.0"
+source = "git+https://github.com/AnalyseDeCircuit/IronRDP?rev=5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5#5c6bd6dc41175ac3a34d17dac9f0a918d4a8f5e5"
 dependencies = [
  "ironrdp-async",
  "ironrdp-connector",
@@ -6310,7 +6374,7 @@ dependencies = [
  "hybrid-array",
  "kem",
  "module-lattice",
- "pkcs8",
+ "pkcs8 0.11.0",
  "rand_core 0.10.1",
  "sha3 0.11.0",
 ]
@@ -6593,6 +6657,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "num-derive"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4e98dc3b890f6c23a0f9d3d491a2823d0dea0fa656302a13dd225fa924112a8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -7151,6 +7226,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocb3"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c196e0276c471c843dd5777e7543a36a298a4be942a2a688d8111cd43390dedb"
+dependencies = [
+ "aead 0.5.2",
+ "cipher 0.4.4",
+ "ctr 0.9.2",
+ "subtle",
+]
+
+[[package]]
 name = "oid"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7387,18 +7474,20 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-acp-adapter"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "agent-client-protocol",
  "clap",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
 name = "oxideterm-acp-host-tools"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "agent-client-protocol",
  "bytes",
@@ -7418,7 +7507,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-ai"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -7455,7 +7544,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-ai-tasks"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "async-trait",
  "chrono",
@@ -7471,7 +7560,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-app-lock"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "argon2 0.5.3",
@@ -7494,18 +7583,18 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-atomic-file"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "oxideterm-backend-classification"
-version = "2.0.16"
+version = "2.0.21"
 
 [[package]]
 name = "oxideterm-cli"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chrono",
  "clap",
@@ -7519,6 +7608,7 @@ dependencies = [
  "oxideterm-settings",
  "oxideterm-ssh",
  "oxideterm-ssh-launch",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -7527,7 +7617,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-cloud-sync"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7555,7 +7645,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-connection-monitor"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chrono",
  "serde",
@@ -7566,7 +7656,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-connections"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "argon2 0.5.3",
@@ -7596,7 +7686,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-desktop-presence"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7609,7 +7699,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-editor-core"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "thiserror 2.0.18",
  "unicode-segmentation",
@@ -7617,7 +7707,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-editor-syntax"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-editor-core",
  "thiserror 2.0.18",
@@ -7661,14 +7751,14 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-environment"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "oxideterm-forwarding"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chrono",
  "dashmap",
@@ -7690,7 +7780,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-app"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7732,17 +7822,19 @@ dependencies = [
  "oxideterm-gpui-terminal",
  "oxideterm-gpui-ui",
  "oxideterm-i18n",
+ "oxideterm-ide-core",
  "oxideterm-ide-fs",
  "oxideterm-launcher",
  "oxideterm-local-files",
+ "oxideterm-mosh",
  "oxideterm-network-proxy",
  "oxideterm-notification-center",
  "oxideterm-plugin-host-api",
  "oxideterm-plugin-protocol",
  "oxideterm-plugin-registry",
- "oxideterm-plugin-runtime-install",
  "oxideterm-portable-runtime",
  "oxideterm-preview",
+ "oxideterm-public-mcp",
  "oxideterm-quick-commands",
  "oxideterm-remote-desktop",
  "oxideterm-render-policy",
@@ -7767,7 +7859,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -7784,7 +7878,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-cloud-sync"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7801,13 +7895,14 @@ dependencies = [
  "oxideterm-theme",
  "serde_json",
  "tokio",
+ "url",
  "uuid",
  "zeroize",
 ]
 
 [[package]]
 name = "oxideterm-gpui-editor"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "gpui",
  "oxideterm-editor-core",
@@ -7819,7 +7914,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-ide"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "gpui",
  "oxideterm-editor-syntax",
@@ -7835,7 +7930,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-markdown"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "ego-tree",
  "gpui",
@@ -7851,7 +7946,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-platform"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "gpui",
  "gpui_platform",
@@ -7866,7 +7961,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-remote-desktop"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "gpui",
  "image",
@@ -7877,7 +7972,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-settings-view"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "gpui",
  "oxideterm-ai",
@@ -7893,7 +7988,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-terminal"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7906,6 +8001,7 @@ dependencies = [
  "oxideterm-ssh",
  "oxideterm-terminal",
  "oxideterm-terminal-recording",
+ "oxideterm-terminal-semantic",
  "oxideterm-terminal-unicode",
  "oxideterm-theme",
  "oxideterm-trzsz",
@@ -7920,7 +8016,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-gpui-ui"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "gpui",
  "oxideterm-theme",
@@ -7928,14 +8024,14 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-i18n"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "oxideterm-ide-core"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -7944,7 +8040,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-ide-fs"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "base64 0.22.1",
  "dashmap",
@@ -7964,7 +8060,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-launcher"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-settings",
  "oxideterm-wsl-graphics",
@@ -7972,7 +8068,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-local-files"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -7986,14 +8082,26 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-modem-transfer"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
+name = "oxideterm-mosh"
+version = "2.0.21"
+dependencies = [
+ "fernomade-crypto",
+ "fernomade-runtime",
+ "oxideterm-ssh",
+ "thiserror 2.0.18",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "oxideterm-network-proxy"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-connections",
  "oxideterm-settings",
@@ -8005,18 +8113,18 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-notification-center"
-version = "2.0.16"
+version = "2.0.21"
 
 [[package]]
 name = "oxideterm-pcm-audio"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "cpal",
 ]
 
 [[package]]
 name = "oxideterm-plugin-host-api"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8047,7 +8155,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-plugin-manifest"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde",
  "serde_json",
@@ -8055,7 +8163,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-plugin-protocol"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-plugin-manifest",
  "serde",
@@ -8065,37 +8173,22 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-plugin-registry"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-ai",
  "oxideterm-network-proxy",
  "oxideterm-plugin-manifest",
  "oxideterm-plugin-protocol",
  "reqwest",
+ "semver",
  "serde_json",
  "sha2 0.10.9",
- "zip",
-]
-
-[[package]]
-name = "oxideterm-plugin-runtime-install"
-version = "2.0.16"
-dependencies = [
- "flate2",
- "futures-util",
- "oxideterm-network-proxy",
- "oxideterm-plugin-protocol",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
  "zip",
 ]
 
 [[package]]
 name = "oxideterm-plugin-wasm-runtime"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-plugin-manifest",
  "oxideterm-plugin-protocol",
@@ -8109,7 +8202,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-portable-runtime"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.22.1",
@@ -8128,7 +8221,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-preview"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -8145,8 +8238,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxideterm-public-mcp"
+version = "2.0.21"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "oxideterm-atomic-file",
+ "parking_lot",
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower-service",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "oxideterm-quick-commands"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-atomic-file",
  "regex",
@@ -8156,7 +8276,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-rdp-helper"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "cpal",
  "ironrdp",
@@ -8182,7 +8302,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-remote-desktop"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "base64 0.22.1",
  "oxideterm-atomic-file",
@@ -8196,14 +8316,14 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-render-policy"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "oxideterm-secret-store"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -8216,7 +8336,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-session-adapter"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chrono",
  "oxideterm-connections",
@@ -8228,12 +8348,13 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-settings"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "oxideterm-atomic-file",
  "oxideterm-portable-runtime",
  "oxideterm-render-policy",
+ "oxideterm-terminal-semantic",
  "serde",
  "serde_json",
  "tempfile",
@@ -8241,11 +8362,12 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-settings-model"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-ai",
  "oxideterm-cloud-sync",
  "oxideterm-settings",
+ "oxideterm-terminal-semantic",
  "oxideterm-theme",
  "serde_json",
  "zeroize",
@@ -8253,7 +8375,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-sftp"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -8273,16 +8395,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
+ "zeroize",
  "zstd",
 ]
 
 [[package]]
 name = "oxideterm-skills"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "dirs 5.0.1",
  "serde",
@@ -8293,7 +8417,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-ssh"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "base64 0.22.1",
  "dashmap",
@@ -8321,23 +8445,26 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-ssh-launch"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde",
+ "serde_json",
  "zeroize",
 ]
 
 [[package]]
 name = "oxideterm-terminal"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
  "async-channel",
  "criterion 0.5.1",
  "crossbeam-channel",
+ "fernomade-predict",
  "libc",
  "oxideterm-modem-transfer",
+ "oxideterm-mosh",
  "oxideterm-ssh",
  "oxideterm-terminal-encoding",
  "oxideterm-terminal-graphics",
@@ -8355,14 +8482,14 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-terminal-encoding"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "encoding_rs",
 ]
 
 [[package]]
 name = "oxideterm-terminal-graphics"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8373,18 +8500,29 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-terminal-model"
-version = "2.0.16"
+version = "2.0.21"
 
 [[package]]
 name = "oxideterm-terminal-recording"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
+name = "oxideterm-terminal-semantic"
+version = "2.0.21"
+dependencies = [
+ "oxideterm-editor-syntax",
+ "regex",
+ "roxmltree",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "oxideterm-terminal-unicode"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "oxideterm-terminal-model",
  "unicode-bidi",
@@ -8393,14 +8531,14 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-theme"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "oxideterm-topology"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "chrono",
  "serde",
@@ -8408,7 +8546,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-trzsz"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -8426,7 +8564,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-update"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -8453,7 +8591,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-vnc-helper"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "des",
  "flate2",
@@ -8471,11 +8609,11 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-workspace"
-version = "2.0.16"
+version = "2.0.21"
 
 [[package]]
 name = "oxideterm-wsl-graphics"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -8486,7 +8624,7 @@ dependencies = [
 
 [[package]]
 name = "oxideterm-x11-forwarding"
-version = "2.0.16"
+version = "2.0.21"
 dependencies = [
  "rand 0.8.6",
  "serde",
@@ -8705,15 +8843,6 @@ dependencies = [
 
 [[package]]
 name = "pem-rfc7468"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
-dependencies = [
- "base64ct",
-]
-
-[[package]]
-name = "pem-rfc7468"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6305423e0e7738146434843d1694d621cce767262b2a86910beab705e4493d9"
@@ -8898,7 +9027,7 @@ dependencies = [
  "cbc 0.2.1",
  "crypto-bigint",
  "crypto-common 0.2.2",
- "ctr",
+ "ctr 0.10.1",
  "curve25519-dalek",
  "des",
  "digest 0.11.3",
@@ -8927,7 +9056,7 @@ dependencies = [
  "rustcrypto-group",
  "serde",
  "serde_json",
- "sha1 0.11.0",
+ "sha1",
  "sha2 0.11.0",
  "sha3 0.12.0",
  "thiserror 2.0.18",
@@ -8998,7 +9127,7 @@ dependencies = [
  "rand 0.10.1",
  "rand_core 0.10.1",
  "serde",
- "sha1 0.11.0",
+ "sha1",
  "thiserror 2.0.18",
  "uuid",
 ]
@@ -9059,6 +9188,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
 dependencies = [
  "der 0.7.10",
+ "pkcs8 0.10.2",
  "spki 0.7.3",
 ]
 
@@ -9086,6 +9216,16 @@ dependencies = [
  "scrypt",
  "sha2 0.11.0",
  "spki 0.8.0",
+]
+
+[[package]]
+name = "pkcs8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
+dependencies = [
+ "der 0.7.10",
+ "spki 0.7.3",
 ]
 
 [[package]]
@@ -9415,6 +9555,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efaa288b896cb2b345da7b7f2110ab19e51565b83495b56fcec98a62f8b1f33e"
 dependencies = [
  "convert_case 0.11.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "prost"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "528ac67416ff8646872a3c02cad9cc4ee5dc9f9540c9b10771855c95cb2e5ae1"
+dependencies = [
+ "bytes",
+ "prost-derive",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
+dependencies = [
+ "anyhow",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -9951,7 +10114,7 @@ dependencies = [
  "maybe-rayon",
  "new_debug_unreachable",
  "noop_proc_macro",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "paste",
  "profiling",
@@ -10264,6 +10427,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmcp"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8dddc5b1924b9a59fba420166160ca2c4663a4e01803e52eda33070f56d63c8"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "pastey 0.2.2",
+ "pin-project-lite",
+ "rand 0.10.1",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sse-stream",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rmp"
 version = "0.8.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10311,7 +10504,7 @@ dependencies = [
  "crypto-primes",
  "digest 0.11.3",
  "pkcs1 0.8.0-rc.4",
- "pkcs8",
+ "pkcs8 0.11.0",
  "rand_core 0.10.1",
  "sha2 0.11.0",
  "signature",
@@ -10336,7 +10529,7 @@ dependencies = [
  "clap",
  "criterion 0.7.0",
  "crypto-bigint",
- "ctr",
+ "ctr 0.10.1",
  "curve25519-dalek",
  "data-encoding",
  "delegate",
@@ -10370,7 +10563,7 @@ dependencies = [
  "pbkdf2 0.13.0",
  "pkcs1 0.8.0-rc.4",
  "pkcs5",
- "pkcs8",
+ "pkcs8 0.11.0",
  "polyval",
  "rand 0.10.1",
  "rand_core 0.10.1",
@@ -10383,7 +10576,7 @@ dependencies = [
  "salsa20",
  "scrypt",
  "sec1",
- "sha1 0.11.0",
+ "sha1",
  "sha2 0.11.0",
  "sha3 0.11.0",
  "shell-escape",
@@ -10703,6 +10896,15 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "safe_arch"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96b02de82ddbe1b636e6170c21be622223aea188ef2e139be0a5b219ec215323"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "safe_arch"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "629516c85c29fe757770fa03f2074cf1eac43d44c02a3de9fc2ef7b0e207dfdd"
@@ -10765,6 +10967,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "indexmap 2.14.0",
  "ref-cast",
@@ -11168,17 +11371,6 @@ dependencies = [
 
 [[package]]
 name = "sha1"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "sha1"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
@@ -11485,6 +11677,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
+name = "sse-stream"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c123f296ade4ec4b8b0f6162116e6629f5146922ca5ab40ca9d3c2e73ab4761e"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "ssh-cipher"
 version = "0.3.0-rc.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11496,7 +11701,7 @@ dependencies = [
  "cbc 0.2.1",
  "chacha20 0.10.0",
  "cipher 0.5.2",
- "ctr",
+ "ctr 0.10.1",
  "ctutils",
  "des",
  "poly1305 0.9.0",
@@ -11515,7 +11720,7 @@ dependencies = [
  "crypto-bigint",
  "ctutils",
  "digest 0.11.3",
- "pem-rfc7468 1.0.0",
+ "pem-rfc7468",
  "zeroize",
 ]
 
@@ -11539,7 +11744,7 @@ dependencies = [
  "rsa",
  "sec1",
  "serde",
- "sha1 0.11.0",
+ "sha1",
  "sha2 0.11.0",
  "signature",
  "ssh-cipher",
@@ -11569,7 +11774,7 @@ dependencies = [
  "hmac 0.13.0",
  "md-5 0.11.0",
  "md4",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "oid",
  "p256",
@@ -11590,7 +11795,7 @@ dependencies = [
  "rustcrypto-group",
  "rustls",
  "serde",
- "sha1 0.11.0",
+ "sha1",
  "sha2 0.11.0",
  "time",
  "tokio",
@@ -12297,7 +12502,7 @@ dependencies = [
  "log",
  "memmem",
  "nix 0.29.0",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "ordered-float 4.6.0",
  "pest",
@@ -13525,6 +13730,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vt100"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9"
+dependencies = [
+ "itoa",
+ "unicode-width",
+ "vte",
+]
+
+[[package]]
 name = "vte"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14457,6 +14673,16 @@ dependencies = [
 
 [[package]]
 name = "wide"
+version = "0.7.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce5da8ecb62bcd8ec8b7ea19f69a51275e91299be594ea5cc6ef7819e16cd03"
+dependencies = [
+ "bytemuck",
+ "safe_arch 0.7.4",
+]
+
+[[package]]
+name = "wide"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13ca908d26e4786149c48efcf6c0ea09ab0e06d1fe3c17dc1b4b0f1ca4a7e788"
@@ -15201,12 +15427,12 @@ dependencies = [
  "flate2",
  "iso7816",
  "iso7816-tlv",
- "num-derive",
+ "num-derive 0.4.2",
  "num-traits",
  "picky",
  "picky-asn1-x509",
  "rsa",
- "sha1 0.11.0",
+ "sha1",
  "time",
  "tracing",
  "uuid",
@@ -15436,13 +15662,13 @@ dependencies = [
 
 [[package]]
 name = "x509-cert"
-version = "0.2.5"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
+checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
- "const-oid 0.9.6",
- "der 0.7.10",
- "spki 0.7.3",
+ "const-oid 0.10.2",
+ "der 0.8.0",
+ "spki 0.8.0",
  "tls_codec",
 ]
 

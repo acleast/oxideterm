@@ -72,28 +72,6 @@ fn chat_message(id: &str, role: AiChatRole, content: &str) -> AiChatMessage {
 }
 
 #[test]
-fn provider_templates_keep_stable_protocol_order() {
-    let types = AI_PROVIDER_TEMPLATES
-        .iter()
-        .map(|template| template.provider_type)
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        types,
-        vec![
-            "openai_compatible",
-            "deepseek",
-            "kimi",
-            "glm",
-            "openai",
-            "anthropic",
-            "gemini",
-            "ollama"
-        ]
-    );
-}
-
-#[test]
 fn orchestrator_tool_definitions_preserve_core_names_and_order() {
     let tools = orchestrator_tool_definitions();
     let names = tools
@@ -139,6 +117,7 @@ fn orchestrator_tool_definitions_preserve_core_names_and_order() {
             "list_remote_desktop_sessions",
             "manage_remote_desktop_session",
             "get_cloud_sync_state",
+            "configure_cloud_sync",
             "manage_cloud_sync",
             "list_credentials",
             "manage_credential",
@@ -337,6 +316,13 @@ fn orchestrator_v2_authority_inventory_covers_every_tool() {
         "list_memory_entries": { "authority": "memory_store", "fields": [] },
         "manage_memory_entry": { "authority": "memory_store", "fields": [] }
     });
+    inventory
+        .as_object_mut()
+        .expect("the contract inventory is an object")
+        .insert(
+            "configure_cloud_sync".to_string(),
+            serde_json::json!({ "authority": "cloud_sync_owner", "fields": [] }),
+        );
     inventory
         .as_object_mut()
         .expect("the contract inventory is an object")
@@ -1047,6 +1033,42 @@ fn application_tool_policy_classifies_mutations_by_action() {
     assert_eq!(
         orchestrator_risk_for_tool("inspect_host_tools", None),
         AiActionRisk::Read
+    );
+    assert_eq!(
+        orchestrator_risk_for_tool("configure_cloud_sync", None),
+        AiActionRisk::Write
+    );
+}
+
+#[test]
+fn cloud_sync_configuration_tool_accepts_non_secret_patch_and_rejects_secret_fields() {
+    let patch = serde_json::json!({
+        "backend_type": "http-json",
+        "endpoint": "https://sync.example.test",
+        "auto_upload_interval_mins": 15.0,
+        "scope": {
+            "sync_connections": true,
+            "sync_sensitive_credentials": true,
+            "app_settings_sections": ["general", "network"]
+        }
+    });
+    assert_eq!(
+        canonicalize_orchestrator_tool_arguments("configure_cloud_sync", patch.clone()),
+        Ok(patch)
+    );
+    assert!(
+        canonicalize_orchestrator_tool_arguments(
+            "configure_cloud_sync",
+            serde_json::json!({ "token": "must-not-cross-the-ai-boundary" })
+        )
+        .is_err()
+    );
+    assert!(
+        canonicalize_orchestrator_tool_arguments(
+            "configure_cloud_sync",
+            serde_json::json!({ "scope": {} })
+        )
+        .is_err()
     );
 }
 

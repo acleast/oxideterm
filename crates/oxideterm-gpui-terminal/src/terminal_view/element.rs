@@ -13,6 +13,9 @@ use gpui::{
 use oxideterm_terminal::{
     TerminalColor, TerminalCommandMark, TerminalCursorShape, TerminalSearchMatch, TerminalSnapshot,
 };
+use oxideterm_terminal_semantic::{
+    CompiledSemanticScheme, SemanticScheme, SemanticShellDialect, compiled_builtin_scheme,
+};
 use oxideterm_terminal_unicode::{TerminalVisualLine, visual_line_for_row};
 use parking_lot::Mutex;
 use unicode_width::UnicodeWidthChar;
@@ -22,6 +25,9 @@ use crate::terminal_ui::*;
 use crate::terminal_view::highlight::{TerminalHighlightLayout, terminal_highlights_for_rows};
 use crate::terminal_view::links::*;
 use crate::terminal_view::selection::TerminalSelection;
+use crate::terminal_view::semantic::{
+    append_terminal_semantics_for_rows, semantic_line_role_for_rows,
+};
 
 mod layout;
 mod paint;
@@ -57,6 +63,9 @@ pub(crate) struct TerminalElement {
     selected_command_mark_id: Option<String>,
     hovered_command_mark_id: Option<String>,
     highlight_rules: Arc<[TerminalHighlightRule]>,
+    semantic_coloring: bool,
+    semantic_scheme: Arc<CompiledSemanticScheme>,
+    semantic_shell: SemanticShellDialect,
     hovered_link: Option<TerminalLinkRange>,
     detect_file_paths_as_links: bool,
     bidi_enabled: bool,
@@ -405,6 +414,9 @@ impl TerminalElement {
             selected_command_mark_id: None,
             hovered_command_mark_id: None,
             highlight_rules: Arc::from(Vec::<TerminalHighlightRule>::new()),
+            semantic_coloring: false,
+            semantic_scheme: Arc::new(compiled_builtin_scheme(SemanticScheme::Balanced).clone()),
+            semantic_shell: SemanticShellDialect::Auto,
             hovered_link,
             detect_file_paths_as_links: true,
             bidi_enabled,
@@ -425,6 +437,21 @@ impl TerminalElement {
         rules: impl Into<Arc<[TerminalHighlightRule]>>,
     ) -> Self {
         self.highlight_rules = rules.into();
+        self
+    }
+
+    pub(crate) fn semantic_coloring(mut self, enabled: bool) -> Self {
+        self.semantic_coloring = enabled;
+        self
+    }
+
+    pub(crate) fn semantic_scheme(mut self, scheme: Arc<CompiledSemanticScheme>) -> Self {
+        self.semantic_scheme = scheme;
+        self
+    }
+
+    pub(crate) fn semantic_shell(mut self, shell: SemanticShellDialect) -> Self {
+        self.semantic_shell = shell;
         self
     }
 
@@ -532,11 +559,7 @@ impl TerminalElement {
         let highlight_layout = if let Some(cache) = cache.as_deref_mut() {
             self.cached_highlight_layout_for_rows(visible_rows.clone(), cache)
         } else {
-            terminal_highlights_for_rows(
-                &self.snapshot,
-                &self.highlight_rules,
-                visible_rows.clone(),
-            )
+            self.highlight_layout_for_rows(visible_rows.clone())
         };
         let search_matches = map_rects_to_visual(
             &self.snapshot,
@@ -731,16 +754,29 @@ impl TerminalElement {
 
             let key = self.logical_highlight_cache_key(line_range.clone());
             let relative_layout = cache.get_or_insert_highlight_with(key, || {
-                let line_layout = terminal_highlights_for_rows(
-                    &self.snapshot,
-                    &self.highlight_rules,
-                    line_range.clone(),
-                );
+                let line_layout = self.highlight_layout_for_rows(line_range.clone());
                 relative_highlight_layout(line_range.start, line_layout)
             });
             append_relative_highlight_layout(line_range.start, &relative_layout, &mut layout);
         }
 
+        layout
+    }
+
+    fn highlight_layout_for_rows(&self, rows: Range<usize>) -> TerminalHighlightLayout {
+        let mut layout =
+            terminal_highlights_for_rows(&self.snapshot, &self.highlight_rules, rows.clone());
+        if self.semantic_coloring {
+            append_terminal_semantics_for_rows(
+                &self.snapshot,
+                &self.command_marks,
+                rows,
+                &self.theme,
+                &self.semantic_scheme,
+                self.semantic_shell,
+                &mut layout,
+            );
+        }
         layout
     }
 
@@ -957,6 +993,9 @@ impl TerminalElement {
         self.theme.background.hash(&mut hasher);
         self.theme.foreground.hash(&mut hasher);
         self.theme.header_foreground.hash(&mut hasher);
+        let semantic_rows = logical_line_range_for_row(&self.snapshot, row_index)
+            .unwrap_or(row_index..row_index.saturating_add(1));
+        self.hash_semantic_layout(semantic_rows, &mut hasher);
         self.bidi_enabled.hash(&mut hasher);
         hash_selection_for_row(
             self.selection,
@@ -975,6 +1014,7 @@ impl TerminalElement {
         let mut hasher = DefaultHasher::new();
         self.snapshot.cols.hash(&mut hasher);
         hash_highlight_rules(&self.highlight_rules, &mut hasher);
+        self.hash_semantic_layout(rows.clone(), &mut hasher);
         rows.len().hash(&mut hasher);
         for row in self.snapshot.lines.get(rows).unwrap_or(&[]) {
             row.absolute_line.hash(&mut hasher);
@@ -983,6 +1023,26 @@ impl TerminalElement {
         TerminalLogicalHighlightCacheKey {
             signature: hasher.finish(),
         }
+    }
+
+    fn hash_semantic_layout(&self, rows: Range<usize>, hasher: &mut impl Hasher) {
+        self.semantic_coloring.hash(hasher);
+        if !self.semantic_coloring {
+            return;
+        }
+        let terminal = self.theme.tokens.terminal;
+        terminal.yellow.hash(hasher);
+        terminal.cyan.hash(hasher);
+        terminal.bright_red.hash(hasher);
+        terminal.bright_green.hash(hasher);
+        terminal.bright_yellow.hash(hasher);
+        terminal.bright_blue.hash(hasher);
+        terminal.bright_black.hash(hasher);
+        terminal.bright_magenta.hash(hasher);
+        terminal.bright_cyan.hash(hasher);
+        self.semantic_scheme.signature().hash(hasher);
+        self.semantic_shell.hash(hasher);
+        semantic_line_role_for_rows(&self.snapshot, &self.command_marks, rows).hash(hasher);
     }
 
     fn row_link_cache_key(&self, row_index: usize) -> TerminalRowLinkCacheKey {
@@ -1333,6 +1393,12 @@ fn hash_highlight_rules(rules: &[TerminalHighlightRule], hasher: &mut impl Hashe
             TerminalHighlightRenderMode::Outline => 2,
         }
         .hash(hasher);
+        match rule.match_scope {
+            crate::terminal_ui::TerminalHighlightMatchScope::Match => 0u8,
+            crate::terminal_ui::TerminalHighlightMatchScope::LogicalLine => 1,
+        }
+        .hash(hasher);
+        rule.preserve_background.hash(hasher);
         rule.enabled.hash(hasher);
         rule.priority.hash(hasher);
     }
@@ -1832,7 +1898,7 @@ mod cache_tests {
 
     fn test_metrics() -> TerminalMetrics {
         TerminalMetrics {
-            font: terminal_font(),
+            font: terminal_font_with_family_and_cjk(TERMINAL_FONT, None, TERMINAL_FONT_LIGATURES),
             font_size: px(14.0),
             cell_width: px(8.0),
             line_height: px(10.0),
@@ -1848,6 +1914,7 @@ mod cache_tests {
                 wide: false,
                 fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
                 bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+                style_origin: Default::default(),
                 attrs: Default::default(),
                 hyperlink: None,
                 cursor: false,
@@ -1870,6 +1937,7 @@ mod cache_tests {
                 wide: false,
                 fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
                 bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+                style_origin: Default::default(),
                 attrs: Default::default(),
                 hyperlink: None,
                 cursor: col == cursor_col,
@@ -1881,6 +1949,7 @@ mod cache_tests {
             wide: false,
             fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
             bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: Default::default(),
             attrs: Default::default(),
             hyperlink: None,
             cursor: false,

@@ -5,6 +5,7 @@ pub(in crate::workspace) fn tab_background_key(kind: &TabKind) -> &'static str {
     match kind {
         TabKind::LocalTerminal => "local_terminal",
         TabKind::SshTerminal => "terminal",
+        TabKind::MoshTerminal => "terminal",
         TabKind::FileManager => "file_manager",
         TabKind::Launcher => "launcher",
         TabKind::Graphics => "graphics",
@@ -915,6 +916,9 @@ impl WorkspaceApp {
                 cx.notify();
             }
         });
+        // Modal actions may originate from the Cloud Sync form. Return the
+        // active IME-owned value before the modal replaces the focus owner.
+        self.apply_focused_cloud_sync_input_draft(cx);
         self.focused_settings_input = None;
         self.settings_slider_drag = None;
         self.ime_marked_text = None;
@@ -1034,6 +1038,9 @@ impl WorkspaceApp {
             changed = true;
         }
         if self.dismiss_terminal_broadcast_menu(cx) {
+            changed = true;
+        }
+        if self.dismiss_terminal_highlight_popover() {
             changed = true;
         }
         if self.remote_desktop_resize_menu_tab_id.take().is_some() {

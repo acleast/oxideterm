@@ -95,8 +95,11 @@ impl WorkspaceApp {
         let tab_id = self.alloc_tab_id(cx);
         let pane_id = self.alloc_pane_id(cx);
         let session_id = self.alloc_session_id(cx);
-        let preferences =
+        let preference_overrides =
+            self.terminal_preference_overrides_for_local_shell(terminal_config.shell.as_ref());
+        let mut preferences =
             self.prepare_terminal_preferences_for_tab_kind(&TabKind::LocalTerminal, cx);
+        preference_overrides.apply_to(&mut preferences);
         let pane = cx.new(|cx| {
             TerminalPane::new_local_with_config_and_preferences(
                 terminal_config,
@@ -105,6 +108,7 @@ impl WorkspaceApp {
                 cx,
             )
             .expect("failed to initialize terminal pane")
+            .with_preference_overrides(preference_overrides)
         });
         let shared_session = pane.read(cx).shared_session();
 
@@ -138,14 +142,28 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<TerminalSessionId> {
+        let title = format!("Telnet {}", config.endpoint_label());
+        self.create_telnet_terminal_tab_with_title(config, terminal_options, title, window, cx)
+    }
+
+    pub(in crate::workspace) fn create_telnet_terminal_tab_with_title(
+        &mut self,
+        config: TelnetSessionConfig,
+        terminal_options: ConnectionTerminalOptions,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<TerminalSessionId> {
         let tab_id = self.alloc_tab_id(cx);
         let pane_id = self.alloc_pane_id(cx);
         let session_id = self.alloc_session_id(cx);
-        let preference_overrides = terminal_preference_overrides(terminal_options);
+        let preference_overrides = terminal_preference_overrides(
+            terminal_options,
+            &self.settings_store.settings().terminal,
+        );
         let mut preferences =
             self.prepare_terminal_preferences_for_tab_kind(&TabKind::LocalTerminal, cx);
         preference_overrides.apply_to(&mut preferences);
-        let title = format!("Telnet {}", config.endpoint_label());
         let pane_config = config;
         let pane = cx.new(|cx| {
             TerminalPane::new_telnet_with_preferences(pane_config, preferences, window, cx)
@@ -184,12 +202,22 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<TerminalSessionId> {
+        let title = format!("Serial {}", config.port_path);
+        self.create_serial_terminal_tab_with_title(config, title, window, cx)
+    }
+
+    pub(in crate::workspace) fn create_serial_terminal_tab_with_title(
+        &mut self,
+        config: SerialSessionConfig,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<TerminalSessionId> {
         let tab_id = self.alloc_tab_id(cx);
         let pane_id = self.alloc_pane_id(cx);
         let session_id = self.alloc_session_id(cx);
         let preferences =
             self.prepare_terminal_preferences_for_tab_kind(&TabKind::LocalTerminal, cx);
-        let title = format!("Serial {}", config.port_path);
         let pane_config = config.clone();
         let pane = cx.new(|cx| {
             TerminalPane::new_serial_with_preferences(pane_config, preferences, window, cx)
@@ -222,6 +250,49 @@ impl WorkspaceApp {
         Ok(session_id)
     }
 
+    pub(in crate::workspace) fn create_mosh_terminal_tab(
+        &mut self,
+        mut config: MoshTerminalConfig,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<TerminalSessionId> {
+        let tab_id = self.alloc_tab_id(cx);
+        let pane_id = self.alloc_pane_id(cx);
+        let session_id = self.alloc_session_id(cx);
+        // The bootstrap consumer identifier is local runtime metadata, not a remote session name.
+        config.bootstrap.session_id = format!("mosh-{}", session_id.0);
+        let preferences =
+            self.prepare_terminal_preferences_for_tab_kind(&TabKind::MoshTerminal, cx);
+        let pane = cx.new(|cx| {
+            TerminalPane::new_mosh_with_preferences(config, preferences, window, cx)
+                .expect("failed to initialize Mosh terminal pane")
+        });
+
+        // Mosh owns one UDP terminal and deliberately has no SSH node capabilities.
+        self.register_terminal_pane(pane_id, session_id, pane.clone(), window, cx);
+        self.refresh_native_plugin_terminal_hooks(cx);
+        self.insert_tab(
+            Tab {
+                id: tab_id,
+                kind: TabKind::MoshTerminal,
+                title,
+                title_source: TabTitleSource::Static,
+                root_pane: Some(PaneNode::leaf(pane_id, session_id)),
+                active_pane_id: Some(pane_id),
+            },
+            cx,
+        );
+        self.bind_terminal_location(tab_id, pane_id, session_id, cx);
+        self.set_main_window_active_tab(Some(tab_id), cx);
+        self.active_surface = ActiveSurface::Terminal;
+        self.needs_active_pane_focus = true;
+        pane.update(cx, |pane, cx| pane.focus(window, cx));
+        self.reveal_active_tab(window, cx);
+        cx.notify();
+        Ok(session_id)
+    }
+
     pub(in crate::workspace) fn open_or_create_saved_ssh_terminal_tab(
         &mut self,
         saved_connection_id: String,
@@ -235,7 +306,7 @@ impl WorkspaceApp {
             .get(&saved_connection_id)
             .map(|connection| {
                 (
-                    connection.options.terminal,
+                    connection.options.terminal.clone(),
                     connection.options.dedicated_new_terminal_connection,
                 )
             })
@@ -251,7 +322,7 @@ impl WorkspaceApp {
         }) {
             self.associate_existing_node_with_saved_connection(&node_id, &saved_connection_id);
             if let Some(node) = self.ssh_nodes.get_mut(&node_id) {
-                node.terminal_options = saved_terminal_options;
+                node.terminal_options = saved_terminal_options.clone();
                 node.dedicated_new_terminal_connection = saved_dedicated_new_terminal_connection;
             }
             if let Some(session_id) = self
@@ -341,7 +412,7 @@ impl WorkspaceApp {
                     &saved_connection_id,
                 );
                 if let Some(node) = self.ssh_nodes.get_mut(&existing_node_id) {
-                    node.terminal_options = saved_terminal_options;
+                    node.terminal_options = saved_terminal_options.clone();
                     node.dedicated_new_terminal_connection =
                         saved_dedicated_new_terminal_connection;
                 }
@@ -398,7 +469,7 @@ impl WorkspaceApp {
                 Some(saved_connection_id.clone()),
             );
             if let Some(node) = self.ssh_nodes.get_mut(&node_id) {
-                node.terminal_options = saved_terminal_options;
+                node.terminal_options = saved_terminal_options.clone();
                 node.dedicated_new_terminal_connection = saved_dedicated_new_terminal_connection;
             }
             let cleanup_node_id = node_id.clone();
@@ -659,10 +730,11 @@ impl WorkspaceApp {
         target_title: String,
     ) -> Result<NodeTreeExpansion> {
         let proxy_chain = config.proxy_chain.take().unwrap_or_default();
+        let connect_timeout_seconds = config.timeout_secs;
         // Consume the detached chain so runtime authentication material is not cloned.
         let hops = proxy_chain
             .into_iter()
-            .map(ssh_config_from_proxy_hop)
+            .map(|hop| ssh_config_from_proxy_hop(hop, connect_timeout_seconds))
             .collect::<Vec<_>>();
         let expansion = self
             .node_router
@@ -680,10 +752,11 @@ impl WorkspaceApp {
         target_title: String,
     ) -> Result<NodeTreeExpansion> {
         let proxy_chain = config.proxy_chain.take().unwrap_or_default();
+        let connect_timeout_seconds = config.timeout_secs;
         // Consume the detached chain so runtime authentication material is not cloned.
         let hops = proxy_chain
             .into_iter()
-            .map(ssh_config_from_proxy_hop)
+            .map(|hop| ssh_config_from_proxy_hop(hop, connect_timeout_seconds))
             .collect::<Vec<_>>();
         let expansion = self.node_router.expand_manual_preset_under_parent(
             parent_node_id.clone(),
@@ -1065,7 +1138,7 @@ impl WorkspaceApp {
                     let terminal_options = self
                         .ssh_nodes
                         .get(&node_id)
-                        .map(|node| node.terminal_options)
+                        .map(|node| node.terminal_options.clone())
                         .unwrap_or_default();
                     SshConnectionIntent::Connect(SshTerminalConnectionOptions {
                         terminal: terminal_options,
@@ -1223,7 +1296,7 @@ impl WorkspaceApp {
     }
 }
 
-fn ssh_config_from_proxy_hop(hop: ProxyHopConfig) -> SshConfig {
+fn ssh_config_from_proxy_hop(hop: ProxyHopConfig, connect_timeout_seconds: u64) -> SshConfig {
     let ProxyHopConfig {
         host,
         port,
@@ -1242,6 +1315,7 @@ fn ssh_config_from_proxy_hop(hop: ProxyHopConfig) -> SshConfig {
         port,
         username,
         auth,
+        timeout_secs: connect_timeout_seconds,
         proxy_chain: None,
         agent_forwarding,
         identity_agent,
@@ -1260,23 +1334,28 @@ mod create_tests {
 
     #[test]
     fn proxy_hop_conversion_moves_auth_and_preserves_transport_options() {
-        let config = ssh_config_from_proxy_hop(ProxyHopConfig {
-            host: "jump.example.com".to_string(),
-            port: 2202,
-            username: "operator".to_string(),
-            auth: AuthMethod::password("runtime-secret"),
-            agent_forwarding: true,
-            identity_agent: Some("/tmp/identity-agent.sock".to_string()),
-            agent_forwarding_socket: Some("/tmp/forward-agent.sock".to_string()),
-            legacy_ssh_compatibility: true,
-            strict_host_key_checking: true,
-            trust_host_key: Some(false),
-            expected_host_key_fingerprint: Some("SHA256:test".to_string()),
-        });
+        let connect_timeout_seconds = 180;
+        let config = ssh_config_from_proxy_hop(
+            ProxyHopConfig {
+                host: "jump.example.com".to_string(),
+                port: 2202,
+                username: "operator".to_string(),
+                auth: AuthMethod::password("runtime-secret"),
+                agent_forwarding: true,
+                identity_agent: Some("/tmp/identity-agent.sock".to_string()),
+                agent_forwarding_socket: Some("/tmp/forward-agent.sock".to_string()),
+                legacy_ssh_compatibility: true,
+                strict_host_key_checking: true,
+                trust_host_key: Some(false),
+                expected_host_key_fingerprint: Some("SHA256:test".to_string()),
+            },
+            connect_timeout_seconds,
+        );
 
         assert_eq!(config.host, "jump.example.com");
         assert_eq!(config.port, 2202);
         assert_eq!(config.username, "operator");
+        assert_eq!(config.timeout_secs, connect_timeout_seconds);
         assert!(config.agent_forwarding);
         assert_eq!(
             config.identity_agent.as_deref(),

@@ -24,6 +24,7 @@ use super::new_connection::{NewConnectionField, refresh_identity_agent_availabil
 use super::quick_commands::QuickCommandInput;
 use super::session_manager::{SessionManagerInput, SessionManagerState};
 use super::sftp::SftpInput;
+use super::terminal_git::TerminalGitPanelSection;
 use oxideterm_gpui_settings_view::SettingsInput;
 use oxideterm_gpui_ui::{
     tauri_ui_font_family,
@@ -115,6 +116,7 @@ pub(super) enum WorkspaceImeTarget {
     ScheduledInputDelay,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
+    TerminalGitCommitMessage,
     TerminalProjectSearch,
     TerminalCastSearch,
     HostProcessSearch,
@@ -135,6 +137,7 @@ pub(super) enum WorkspaceImeTarget {
     FileManager(FileManagerInput),
     Launcher(LauncherInput),
     Graphics(GraphicsInput),
+    TabRename,
     AiModelSelectorSearch,
     AiInlinePrompt,
     AiChatInput,
@@ -476,6 +479,7 @@ impl WorkspaceImeTarget {
             Self::ScheduledInputDelay => 4_502,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
+            Self::TerminalGitCommitMessage => 20,
             Self::TerminalProjectSearch => 19,
             Self::TerminalCastSearch => 3,
             Self::HostProcessSearch => 6,
@@ -496,6 +500,7 @@ impl WorkspaceImeTarget {
             Self::FileManager(input) => 1_800 + input.anchor_key(),
             Self::Launcher(input) => 1_850 + input.anchor_key(),
             Self::Graphics(input) => 1_875 + input.anchor_key(),
+            Self::TabRename => 1_890,
             Self::AiModelSelectorSearch => 1_895,
             Self::AiInlinePrompt => 1_896,
             Self::AiChatInput => 1_897,
@@ -591,11 +596,6 @@ impl Element for WorkspaceImeElement {
 pub(super) struct WorkspaceInputHandler {
     view: Entity<WorkspaceApp>,
     fallback_bounds: Bounds<Pixels>,
-}
-
-#[cfg(test)]
-fn keystroke_commits_platform_text(keystroke: &Keystroke) -> bool {
-    keystroke_platform_text(keystroke).is_some()
 }
 
 pub(super) fn active_ime_should_defer_input_key(
@@ -890,6 +890,10 @@ impl WorkspaceApp {
         {
             return Some(WorkspaceImeTarget::Settings(input));
         }
+        if self.tab_rename_dialog.is_some() {
+            // The blocking rename dialog owns text input ahead of background surfaces.
+            return Some(WorkspaceImeTarget::TabRename);
+        }
         if let Some(focused_prompt) = self
             .connection_flow
             .read(cx)
@@ -990,7 +994,15 @@ impl WorkspaceApp {
             }
 
             if self.terminal.read(cx).git_panel_open() {
-                return Some(WorkspaceImeTarget::TerminalGitBranchSearch);
+                return match self.terminal.read(cx).git_panel_active_section() {
+                    TerminalGitPanelSection::Branches => {
+                        Some(WorkspaceImeTarget::TerminalGitBranchSearch)
+                    }
+                    TerminalGitPanelSection::Changes => {
+                        Some(WorkspaceImeTarget::TerminalGitCommitMessage)
+                    }
+                    _ => None,
+                };
             }
 
             if self.terminal.read(cx).project_panel_open() {
@@ -1764,6 +1776,12 @@ impl WorkspaceApp {
                     .git_panel_open()
                     .then(|| terminal.git_panel_query().to_string())
             }
+            WorkspaceImeTarget::TerminalGitCommitMessage => {
+                let terminal = self.terminal.read(cx);
+                terminal
+                    .git_panel_open()
+                    .then(|| terminal.git_commit_message().to_string())
+            }
             WorkspaceImeTarget::TerminalProjectSearch => {
                 let terminal = self.terminal.read(cx);
                 terminal
@@ -1900,6 +1918,10 @@ impl WorkspaceApp {
                     None
                 }
             }
+            WorkspaceImeTarget::TabRename => self
+                .tab_rename_dialog
+                .as_ref()
+                .map(|dialog| dialog.draft.clone()),
             WorkspaceImeTarget::AiModelSelectorSearch => self
                 .ai_entity
                 .read(cx)
@@ -2587,6 +2609,14 @@ impl WorkspaceApp {
                     cx.notify();
                 }
             }
+            WorkspaceImeTarget::TerminalGitCommitMessage => {
+                if self.terminal.update(cx, |terminal, _cx| {
+                    terminal.replace_git_commit_message(replacement_range, text)
+                }) {
+                    self.show_active_input_caret(cx);
+                    cx.notify();
+                }
+            }
             WorkspaceImeTarget::TerminalProjectSearch => {
                 if self.terminal.read(cx).project_panel_open()
                     && let Some(key) = self.active_terminal_project_key(cx)
@@ -2775,6 +2805,13 @@ impl WorkspaceApp {
                     cx.notify();
                 }
             }
+            WorkspaceImeTarget::TabRename => {
+                if let Some(dialog) = self.tab_rename_dialog.as_mut() {
+                    replace_utf16(&mut dialog.draft, replacement_range, text);
+                    self.show_active_input_caret(cx);
+                    cx.notify();
+                }
+            }
             WorkspaceImeTarget::AiModelSelectorSearch => {
                 if self.ai_entity.read(cx).model_selector_search_focused() {
                     self.ai_entity.update(cx, |ai, _cx| {
@@ -2901,7 +2938,9 @@ impl WorkspaceApp {
 fn is_terminal_tab(tab: &oxideterm_workspace::Tab) -> bool {
     matches!(
         tab.kind,
-        oxideterm_workspace::TabKind::LocalTerminal | oxideterm_workspace::TabKind::SshTerminal
+        oxideterm_workspace::TabKind::LocalTerminal
+            | oxideterm_workspace::TabKind::SshTerminal
+            | oxideterm_workspace::TabKind::MoshTerminal
     )
 }
 
@@ -2922,6 +2961,7 @@ fn new_connection_field_value(
         NewConnectionField::IdentityAgent => &form.identity_agent,
         NewConnectionField::Group => &form.group,
         NewConnectionField::PostConnectCommand => &form.post_connect_command,
+        NewConnectionField::ProxyCommand => &form.proxy_command,
         NewConnectionField::UpstreamProxyHost => &form.upstream_proxy_host,
         NewConnectionField::UpstreamProxyPort => &form.upstream_proxy_port,
         NewConnectionField::UpstreamProxyNoProxy => &form.upstream_proxy_no_proxy,
@@ -2933,6 +2973,10 @@ fn new_connection_field_value(
         NewConnectionField::SerialBaudRate => &form.serial_baud_rate,
         NewConnectionField::SerialProfileName => &form.serial_profile_name,
         NewConnectionField::TelnetProfileName => &form.telnet_profile_name,
+        NewConnectionField::MoshServerExecutable => &form.mosh_server_executable,
+        NewConnectionField::MoshUdpHost => &form.mosh_udp_host,
+        NewConnectionField::MoshUdpPort => &form.mosh_udp_port,
+        NewConnectionField::MoshLocale => &form.mosh_locale,
         NewConnectionField::JumpHost => &form.jump_server_form.as_ref()?.host,
         NewConnectionField::JumpPort => &form.jump_server_form.as_ref()?.port,
         NewConnectionField::JumpUsername => &form.jump_server_form.as_ref()?.username,
@@ -2962,6 +3006,7 @@ fn connection_field_value_mut(
         NewConnectionField::IdentityAgent => &mut form.identity_agent,
         NewConnectionField::Group => &mut form.group,
         NewConnectionField::PostConnectCommand => &mut form.post_connect_command,
+        NewConnectionField::ProxyCommand => &mut form.proxy_command,
         NewConnectionField::UpstreamProxyHost => &mut form.upstream_proxy_host,
         NewConnectionField::UpstreamProxyPort => &mut form.upstream_proxy_port,
         NewConnectionField::UpstreamProxyNoProxy => &mut form.upstream_proxy_no_proxy,
@@ -2973,6 +3018,10 @@ fn connection_field_value_mut(
         NewConnectionField::SerialBaudRate => &mut form.serial_baud_rate,
         NewConnectionField::SerialProfileName => &mut form.serial_profile_name,
         NewConnectionField::TelnetProfileName => &mut form.telnet_profile_name,
+        NewConnectionField::MoshServerExecutable => &mut form.mosh_server_executable,
+        NewConnectionField::MoshUdpHost => &mut form.mosh_udp_host,
+        NewConnectionField::MoshUdpPort => &mut form.mosh_udp_port,
+        NewConnectionField::MoshLocale => &mut form.mosh_locale,
         NewConnectionField::JumpHost => {
             &mut form
                 .jump_server_form
@@ -3329,13 +3378,13 @@ mod tests {
         WorkspaceCaretState, WorkspaceCaretVisibility, WorkspaceImeMarkedText, WorkspaceImeTarget,
         active_ime_should_defer_input_key, collapsed_copy_shortcut_is_owned_by_target,
         control_k_delete_end, copy_shortcut_owner_for_target,
-        effective_platform_text_replacement_range, ime_target_is_secret,
-        ime_target_should_blink_caret, ime_text_snapshot, keystroke_commits_platform_text,
-        keystroke_uses_text_edit_modifier, line_end_for_utf16_offset, line_range_for_utf16_offset,
-        line_start_for_utf16_offset, next_utf16_boundary, next_word_boundary,
-        normalize_clipboard_text_for_ime_target, path_completion_owns_vertical_navigation,
-        platform_text_commit_is_duplicate, previous_utf16_boundary, previous_word_boundary,
-        secret_ime_proxy, soft_wrapped_line_ranges_utf16, transpose_text_at_utf16_offset,
+        effective_platform_text_replacement_range, ime_target_is_secret, ime_text_snapshot,
+        keystroke_platform_text, keystroke_uses_text_edit_modifier, line_end_for_utf16_offset,
+        line_range_for_utf16_offset, line_start_for_utf16_offset, next_utf16_boundary,
+        next_word_boundary, normalize_clipboard_text_for_ime_target,
+        path_completion_owns_vertical_navigation, platform_text_commit_is_duplicate,
+        previous_utf16_boundary, previous_word_boundary, secret_ime_proxy,
+        soft_wrapped_line_ranges_utf16, transpose_text_at_utf16_offset,
         utf16_offset_for_char_index, vertical_line_navigation_destination,
         word_range_for_utf16_offset, workspace_ime_target_for_plain_host_tools_input,
     };
@@ -3389,49 +3438,46 @@ mod tests {
 
     #[test]
     fn printable_keystrokes_are_platform_text_input() {
-        assert!(keystroke_commits_platform_text(&key(
-            "a",
-            Some("a"),
-            Modifiers::default()
-        )));
-        assert!(keystroke_commits_platform_text(&key(
-            "space",
-            Some(" "),
-            Modifiers::default()
-        )));
-        assert!(keystroke_commits_platform_text(&key(
-            "s",
-            Some("ß"),
-            Modifiers {
-                alt: true,
-                ..Modifiers::default()
-            }
-        )));
+        assert!(keystroke_platform_text(&key("a", Some("a"), Modifiers::default())).is_some());
+        assert!(keystroke_platform_text(&key("space", Some(" "), Modifiers::default())).is_some());
+        assert!(
+            keystroke_platform_text(&key(
+                "s",
+                Some("ß"),
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                }
+            ))
+            .is_some()
+        );
     }
 
     #[test]
     fn shortcuts_and_control_keys_stay_on_manual_key_path() {
-        assert!(!keystroke_commits_platform_text(&key(
-            "backspace",
-            None,
-            Modifiers::default()
-        )));
-        assert!(!keystroke_commits_platform_text(&key(
-            "v",
-            None,
-            Modifiers {
-                platform: true,
-                ..Modifiers::default()
-            }
-        )));
-        assert!(!keystroke_commits_platform_text(&key(
-            "a",
-            Some("\u{1}"),
-            Modifiers {
-                control: true,
-                ..Modifiers::default()
-            }
-        )));
+        assert!(keystroke_platform_text(&key("backspace", None, Modifiers::default())).is_none());
+        assert!(
+            keystroke_platform_text(&key(
+                "v",
+                None,
+                Modifiers {
+                    platform: true,
+                    ..Modifiers::default()
+                }
+            ))
+            .is_none()
+        );
+        assert!(
+            keystroke_platform_text(&key(
+                "a",
+                Some("\u{1}"),
+                Modifiers {
+                    control: true,
+                    ..Modifiers::default()
+                }
+            ))
+            .is_none()
+        );
     }
 
     #[test]
@@ -3498,22 +3544,6 @@ mod tests {
             true,
             true,
             &modified_space
-        ));
-    }
-
-    #[test]
-    fn editable_ime_targets_drive_the_shared_caret_blink_timer() {
-        assert!(ime_target_should_blink_caret(
-            WorkspaceImeTarget::AiChatInput
-        ));
-        assert!(ime_target_should_blink_caret(
-            WorkspaceImeTarget::AiModelSelectorSearch
-        ));
-        assert!(ime_target_should_blink_caret(
-            WorkspaceImeTarget::AiConversationRename
-        ));
-        assert!(!ime_target_should_blink_caret(
-            WorkspaceImeTarget::ReadOnlyText(1)
         ));
     }
 

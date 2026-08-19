@@ -515,20 +515,6 @@ impl ReconnectOrchestratorStore {
         })
     }
 
-    pub fn pipeline() -> [ReconnectPhase; 9] {
-        [
-            ReconnectPhase::Snapshot,
-            ReconnectPhase::GracePeriod,
-            ReconnectPhase::SshConnect,
-            ReconnectPhase::AwaitTerminal,
-            ReconnectPhase::RestoreForwards,
-            ReconnectPhase::ResumeTransfers,
-            ReconnectPhase::RestoreIde,
-            ReconnectPhase::Verify,
-            ReconnectPhase::Done,
-        ]
-    }
-
     fn push_phase(
         job: &mut ReconnectJob,
         phase: ReconnectPhase,
@@ -582,24 +568,6 @@ impl Default for ReconnectOrchestratorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exposes_tauri_reconnect_pipeline_order() {
-        assert_eq!(
-            ReconnectOrchestratorStore::pipeline(),
-            [
-                ReconnectPhase::Snapshot,
-                ReconnectPhase::GracePeriod,
-                ReconnectPhase::SshConnect,
-                ReconnectPhase::AwaitTerminal,
-                ReconnectPhase::RestoreForwards,
-                ReconnectPhase::ResumeTransfers,
-                ReconnectPhase::RestoreIde,
-                ReconnectPhase::Verify,
-                ReconnectPhase::Done,
-            ]
-        );
-    }
 
     #[test]
     fn schedule_is_idempotent_per_node() {
@@ -772,29 +740,5 @@ mod tests {
             ide_snapshot.dirty_contents.get("/home/demo/main.rs"),
             Some(&"representative-unsaved-content".to_string())
         );
-    }
-
-    #[test]
-    fn reconnect_snapshot_carries_forward_rules_like_tauri() {
-        let snapshot = ReconnectSnapshot {
-            forward_rules: vec![ReconnectForwardRuleSnapshot {
-                node_id: "node-a".to_string(),
-                rules: vec![ReconnectForwardRule {
-                    id: "forward-1".to_string(),
-                    forward_type: "local".to_string(),
-                    bind_address: "localhost".to_string(),
-                    bind_port: 8080,
-                    target_host: "localhost".to_string(),
-                    target_port: 8080,
-                    status: "active".to_string(),
-                    description: "web".to_string(),
-                }],
-            }],
-            ..ReconnectSnapshot::default()
-        };
-
-        assert_eq!(snapshot.forward_rules[0].node_id, "node-a");
-        assert_eq!(snapshot.forward_rules[0].rules[0].forward_type, "local");
-        assert_eq!(snapshot.forward_rules[0].rules[0].status, "active");
     }
 }

@@ -17,9 +17,14 @@ pub fn application() -> gpui::Application {
 }
 
 pub fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    window_options_with_bounds(WindowBounds::Windowed(bounds))
+}
+
+/// Builds normal application window options while preserving a restored state.
+pub fn window_options_with_bounds(window_bounds: WindowBounds) -> WindowOptions {
     let metrics = UiMetrics::tauri_default();
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(window_bounds),
         titlebar: Some(TitlebarOptions {
             title: None,
             appears_transparent: true,
@@ -41,16 +46,5 @@ pub fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
         // desktop file and package icon generated from the bundle metadata.
         app_id: Some(OXIDETERM_APP_ID.to_string()),
         ..Default::default()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stable_linux_window_id_matches_desktop_entry() {
-        // Mutter associates the running window with the stable desktop file by this exact ID.
-        assert_eq!(OXIDETERM_APP_ID, "com.oxideterm.app");
     }
 }

@@ -25,10 +25,12 @@ mod tests {
             auth,
             proxy_chain: Vec::new(),
             upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
+            proxy_command: None,
             color: None,
             icon_background_color: None,
             icon: None,
             tags: Vec::new(),
+            connect_timeout_seconds: DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS,
             agent_forwarding: false,
             identity_agent: None,
             agent_forwarding_socket: None,
@@ -37,6 +39,29 @@ mod tests {
             dedicated_new_terminal_connection: false,
             post_connect_command: None,
             terminal: ConnectionTerminalOptions::default(),
+        }
+    }
+
+    fn mosh_request(id: &str, auth: SavedAuth) -> SaveMoshProfileRequest {
+        SaveMoshProfileRequest {
+            id: Some(id.to_string()),
+            name: "Mobile shell".to_string(),
+            group: None,
+            icon: None,
+            color: None,
+            icon_background_color: None,
+            host: "mosh.example.test".to_string(),
+            ssh_port: 22,
+            username: "me".to_string(),
+            auth,
+            server_executable: "mosh-server".to_string(),
+            udp_host_override: None,
+            udp_port: MoshUdpPortSelection::Automatic,
+            ip_family: MoshIpFamily::Auto,
+            prediction: MoshPredictionMode::Adaptive,
+            locale: None,
+            identity_agent: None,
+            legacy_ssh_compatibility: false,
         }
     }
 
@@ -49,6 +74,7 @@ mod tests {
         let default_options = serde_json::to_value(ConnectionOptions::default()).unwrap();
         assert!(default_options.get("terminal").is_none());
         assert!(default_options.get("x11_forwarding").is_none());
+        assert!(default_options.get("connect_timeout_seconds").is_none());
         assert!(
             default_options
                 .get("dedicated_new_terminal_connection")
@@ -61,6 +87,8 @@ mod tests {
                 encoding: Some(ConnectionTerminalEncoding::Utf8),
                 backspace_sequence: Some(ConnectionTerminalBackspaceSequence::ControlH),
                 delete_sequence: Some(ConnectionTerminalDeleteSequence::Delete),
+                semantic_scheme: Some("conservative".to_string()),
+                highlight_rule_set: Some("network-devices".to_string()),
             },
             ..ConnectionOptions::default()
         };
@@ -68,6 +96,11 @@ mod tests {
         assert_eq!(serialized["terminal"]["encoding"], "utf-8");
         assert_eq!(serialized["terminal"]["backspaceSequence"], "controlH");
         assert_eq!(serialized["terminal"]["deleteSequence"], "delete");
+        assert_eq!(serialized["terminal"]["semanticScheme"], "conservative");
+        assert_eq!(
+            serialized["terminal"]["highlightRuleSet"],
+            "network-devices"
+        );
         assert_eq!(serialized["dedicated_new_terminal_connection"], true);
         assert_eq!(
             serde_json::to_value(ConnectionTerminalEncoding::EucJp).unwrap(),
@@ -83,12 +116,55 @@ mod tests {
         assert!(decoded.dedicated_new_terminal_connection);
 
         let legacy: ConnectionOptions = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(
+            legacy.effective_connect_timeout_seconds(),
+            DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS
+        );
         assert!(legacy.terminal.inherits_application_defaults());
         assert!(!legacy.dedicated_new_terminal_connection);
         assert_eq!(
             legacy.x11_forwarding,
             ConnectionX11ForwardingOptions::default()
         );
+
+        let custom_timeout: ConnectionOptions = serde_json::from_value(serde_json::json!({
+            "connect_timeout_seconds": 120
+        }))
+        .unwrap();
+        assert_eq!(custom_timeout.effective_connect_timeout_seconds(), 120);
+    }
+
+    #[test]
+    fn terminal_highlight_rule_set_update_persists_without_touching_connection_identity() {
+        let path = temp_store_path("highlight-rule-set");
+        let mut store = ConnectionStore::load(&path).unwrap();
+        store
+            .upsert(request("conn-1", SavedAuth::Agent))
+            .expect("connection saved");
+
+        assert!(
+            store
+                .set_terminal_highlight_rule_set(
+                    "conn-1",
+                    Some(" network-devices ".to_string())
+                )
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .get("conn-1")
+                .and_then(|connection| connection.options.terminal.highlight_rule_set.as_deref()),
+            Some("network-devices")
+        );
+
+        let reloaded = ConnectionStore::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .get("conn-1")
+                .and_then(|connection| connection.options.terminal.highlight_rule_set.as_deref()),
+            Some("network-devices")
+        );
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -315,36 +391,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn connection_info_search_uses_the_same_non_secret_fields_on_every_surface() {
-        let mut request = request("conn-search", SavedAuth::Agent);
-        request.name = "Production".to_string();
-        request.group = Some("Cloud/Europe".to_string());
-        request.host = "db.example.com".to_string();
-        request.port = 2222;
-        request.username = "deploy".to_string();
-        request.tags = vec!["critical".to_string()];
-        let mut store = load_empty_store("connection-info-search");
-        store.upsert(request).unwrap();
-        let info = store
-            .connection_infos()
-            .into_iter()
-            .next()
-            .expect("saved connection info");
-
-        for query in [
-            "production",
-            "DB.EXAMPLE.COM",
-            "2222",
-            "deploy",
-            "europe",
-            "critical",
-        ] {
-            assert!(info.matches_search_query(query), "query should match: {query}");
-        }
-        assert!(!info.matches_search_query("missing"));
-    }
-
     fn generated_private_key_text(passphrase: Option<&str>) -> String {
         let key_path = temp_store_path("managed-key-source").with_extension("key");
         let mut rng = UnwrapErr(SysRng);
@@ -398,6 +444,107 @@ mod tests {
             other => panic!("unexpected auth: {other:?}"),
         }
         assert_eq!(store.get_connection_password("conn-1").unwrap(), "secret");
+
+        store
+            .store_connection_credential(
+                "conn-1",
+                ConnectionCredentialSlot::Primary,
+                &SecretString::from("replacement"),
+            )
+            .unwrap();
+        assert_eq!(
+            store.get_connection_password("conn-1").unwrap(),
+            "replacement"
+        );
+        assert!(store.get("conn-1").unwrap().last_used_at.is_none());
+        assert!(
+            store
+                .forget_connection_credential("conn-1", ConnectionCredentialSlot::Primary)
+                .unwrap()
+        );
+        assert!(store.get_connection_password("conn-1").is_err());
+    }
+
+    #[test]
+    fn proxy_command_is_protected_and_returned_for_one_runtime_handoff() {
+        let mut store = load_empty_store("proxy-command-save");
+        let store_path = store.path().to_path_buf();
+        let mut save_request = request("conn-1", SavedAuth::Agent);
+        save_request.proxy_command = Some(SavedProxyCommand {
+            keychain_id: None,
+            plaintext_command: Some(SecretString::from(
+                "helper --token proxy-command-secret",
+            )),
+        });
+
+        let (_, runtime_secrets) = store
+            .upsert_with_runtime_secrets(save_request)
+            .unwrap();
+        let connection = store.get("conn-1").unwrap();
+        let saved_command = connection.proxy_command.as_ref().unwrap();
+        let keychain_id = saved_command.keychain_id.clone().unwrap();
+
+        assert_eq!(
+            runtime_secrets.proxy_command.as_ref().unwrap(),
+            "helper --token proxy-command-secret"
+        );
+        assert_eq!(
+            store.get_saved_proxy_command(saved_command).unwrap(),
+            "helper --token proxy-command-secret"
+        );
+        let persisted = fs::read_to_string(store_path).unwrap();
+        assert!(persisted.contains(&keychain_id));
+        assert!(!persisted.contains("proxy-command-secret"));
+        assert!(!format!("{saved_command:?}").contains("proxy-command-secret"));
+        let decoded: SavedProxyCommand = serde_json::from_str(
+            r#"{"keychain_id":"reference","command":"proxy-command-secret"}"#,
+        )
+        .unwrap();
+        assert!(decoded.plaintext_command.is_none());
+
+        store.delete("conn-1").unwrap();
+        assert!(store.keychain.get(&keychain_id).is_err());
+    }
+
+    #[test]
+    fn mosh_password_is_saved_to_keychain_reference() {
+        let mut store = load_empty_store("mosh-password-save");
+        let secret = "mosh-secret";
+
+        store
+            .upsert_mosh_profile(mosh_request(
+                "mosh-1",
+                SavedAuth::Password {
+                    keychain_id: None,
+                    plaintext_password: Some(SecretString::from(secret)),
+                },
+            ))
+            .unwrap();
+
+        let profile = store.get_mosh_profile("mosh-1").unwrap();
+        assert!(matches!(
+            profile.auth,
+            SavedAuth::Password {
+                keychain_id: Some(_),
+                plaintext_password: None,
+            }
+        ));
+        assert_eq!(
+            store.get_saved_auth_password(&profile.auth).unwrap(),
+            secret
+        );
+        store
+            .store_mosh_profile_credential("mosh-1", &SecretString::from("replacement"))
+            .unwrap();
+        let profile = store.get_mosh_profile("mosh-1").unwrap();
+        assert_eq!(
+            store.get_saved_auth_password(&profile.auth).unwrap(),
+            "replacement"
+        );
+        assert!(profile.last_used_at.is_none());
+        assert!(store.forget_mosh_profile_credential("mosh-1").unwrap());
+        let saved = fs::read_to_string(store.path()).unwrap();
+        assert!(!saved.contains(secret));
     }
 
     #[test]
@@ -537,6 +684,7 @@ mod tests {
             auth: SavedAuth::Agent,
             proxy_chain: Vec::new(),
             upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
+            proxy_command: None,
             options: ConnectionOptions {
                 post_connect_command: Some("uptime".to_string()),
                 ..ConnectionOptions::default()
@@ -624,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_preserves_tauri_connection_options_and_marks_used() {
+    fn edit_preserves_tauri_connection_options_without_changing_recency() {
         let path = temp_store_path("preserve-options");
         fs::write(
             &path,
@@ -666,7 +814,7 @@ mod tests {
         assert_eq!(conn.options.jump_host.as_deref(), Some("legacy-jump"));
         assert_eq!(conn.options.term_type.as_deref(), Some("vt100"));
         assert!(conn.options.agent_forwarding);
-        assert!(conn.last_used_at.is_some());
+        assert!(conn.last_used_at.is_none());
     }
 
     #[test]
@@ -890,6 +1038,77 @@ mod tests {
             } => assert_eq!(store.keychain.get(keychain_id).unwrap(), "jump-secret"),
             other => panic!("unexpected proxy auth: {other:?}"),
         }
+    }
+
+    #[test]
+    fn copied_saved_password_uses_an_independent_proxy_keychain_owner() {
+        let mut store = load_empty_store("copy-saved-password-for-proxy-hop");
+        store
+            .upsert(request(
+                "source-hop",
+                SavedAuth::Password {
+                    keychain_id: None,
+                    plaintext_password: Some(SecretString::from("source-hop-secret")),
+                },
+            ))
+            .unwrap();
+
+        let source_keychain_id = match &store.get("source-hop").unwrap().auth {
+            SavedAuth::Password {
+                keychain_id: Some(keychain_id),
+                ..
+            } => keychain_id.clone(),
+            other => panic!("unexpected source auth: {other:?}"),
+        };
+        let copied_auth = store
+            .copy_saved_auth_for_new_owner(&store.get("source-hop").unwrap().auth)
+            .unwrap();
+        assert!(matches!(
+            &copied_auth,
+            SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: Some(_),
+            }
+        ));
+
+        let mut destination = request("target-with-hop", SavedAuth::Agent);
+        destination.proxy_chain.push(SavedProxyHop {
+            host: "jump.example.com".to_string(),
+            port: 22,
+            username: "ops".to_string(),
+            auth: copied_auth,
+            agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
+            legacy_ssh_compatibility: false,
+        });
+        let (_connection, runtime_secrets) = store
+            .upsert_with_runtime_secrets(destination)
+            .expect("destination should save");
+
+        assert_eq!(
+            runtime_secrets.proxy_chain[0]
+                .as_ref()
+                .expect("copied proxy runtime secret"),
+            &SecretString::from("source-hop-secret")
+        );
+        let destination_keychain_id = match &store.get("target-with-hop").unwrap().proxy_chain[0].auth
+        {
+            SavedAuth::Password {
+                keychain_id: Some(keychain_id),
+                plaintext_password: None,
+            } => keychain_id.clone(),
+            other => panic!("unexpected destination auth: {other:?}"),
+        };
+        assert_ne!(source_keychain_id, destination_keychain_id);
+
+        assert!(store.delete("source-hop").unwrap());
+        assert_eq!(
+            store.keychain.get(&destination_keychain_id).unwrap(),
+            "source-hop-secret"
+        );
+        let persisted = fs::read_to_string(store.path()).unwrap();
+        assert!(!persisted.contains("source-hop-secret"));
     }
 
     #[test]
@@ -1363,6 +1582,7 @@ mod tests {
             },
             proxy_chain: Vec::new(),
             upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
+            proxy_command: None,
             options: ConnectionOptions::default(),
             created_at: chrono::Utc::now(),
             last_used_at: None,
@@ -1383,6 +1603,51 @@ mod tests {
 
         assert!(result.is_err());
         assert!(store.connections().is_empty());
+    }
+
+    #[test]
+    fn imported_privilege_targets_only_include_secrets_that_will_be_written() {
+        let mut store = load_empty_store("import-privilege-snapshot-scope");
+        store.upsert(request("conn-1", SavedAuth::Agent)).unwrap();
+        let mut imported = store.get("conn-1").unwrap().clone();
+        let now = Utc::now();
+        imported.privilege_credentials = vec![
+            SavedPrivilegeCredential {
+                id: "preserved".to_string(),
+                connection_id: imported.id.clone(),
+                label: "Preserved".to_string(),
+                kind: PrivilegeCredentialKind::SudoPassword,
+                username_hint: None,
+                prompt_patterns: Vec::new(),
+                keychain_id: Some(privilege_keychain_id(&imported.id, "preserved")),
+                plaintext_secret: None,
+                enabled: true,
+                require_click_to_send: true,
+                created_at: now,
+                updated_at: now,
+            },
+            SavedPrivilegeCredential {
+                id: "replaced".to_string(),
+                connection_id: imported.id.clone(),
+                label: "Replaced".to_string(),
+                kind: PrivilegeCredentialKind::SudoPassword,
+                username_hint: None,
+                prompt_patterns: Vec::new(),
+                keychain_id: None,
+                plaintext_secret: Some(SecretString::from("replacement")),
+                enabled: true,
+                require_click_to_send: true,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        let ids = collect_imported_privilege_keychain_ids(&[imported]);
+
+        assert_eq!(
+            ids,
+            HashSet::from([privilege_keychain_id("conn-1", "replaced")])
+        );
     }
 
     #[test]
@@ -1781,6 +2046,7 @@ mod tests {
             },
         };
         source_connection.options = ConnectionOptions {
+            connect_timeout_seconds: Some(180),
             keep_alive_interval: 37,
             compression: true,
             jump_host: Some("legacy-jump".to_string()),
@@ -1801,6 +2067,8 @@ mod tests {
         source.save().unwrap();
 
         let snapshot = source.export_saved_connections_snapshot().unwrap();
+        let snapshot_json = serde_json::to_string(&snapshot).unwrap();
+        assert!(!snapshot_json.contains("proxy-keychain-id"));
         let mut target = load_empty_store("sync-all-fields-target");
         target
             .apply_saved_connections_snapshot(snapshot, SavedConnectionsConflictStrategy::Replace)
@@ -1812,6 +2080,7 @@ mod tests {
         assert_eq!(imported.color.as_deref(), Some("#123456"));
         assert_eq!(imported.icon.as_deref(), Some("server"));
         assert_eq!(imported.tags, vec!["prod", "critical"]);
+        assert_eq!(imported.options.connect_timeout_seconds, Some(180));
         assert_eq!(imported.options.keep_alive_interval, 37);
         assert!(imported.options.compression);
         assert_eq!(imported.options.jump_host.as_deref(), Some("legacy-jump"));
@@ -1848,7 +2117,7 @@ mod tests {
             panic!("proxy password metadata should survive sync");
         };
         assert_eq!(username, "proxy-user");
-        assert_eq!(keychain_id.as_deref(), Some("proxy-keychain-id"));
+        assert!(keychain_id.is_none());
         assert!(plaintext_password.is_none());
     }
 
@@ -1979,6 +2248,8 @@ mod tests {
                 encoding: Some(ConnectionTerminalEncoding::Big5),
                 backspace_sequence: None,
                 delete_sequence: Some(ConnectionTerminalDeleteSequence::ControlH),
+                semantic_scheme: None,
+                highlight_rule_set: None,
             },
             connect_on_open: true,
             created_at: now,
@@ -2380,6 +2651,7 @@ mod tests {
             },
             proxy_chain: Vec::new(),
             upstream_proxy: SavedUpstreamProxyPolicy::UseGlobal,
+            proxy_command: None,
             options: ConnectionOptions::default(),
             created_at: Utc::now(),
             last_used_at: None,
@@ -2567,6 +2839,9 @@ mod tests {
             store
                 .move_session_assets_to_group(
                     &["ssh-move".to_string()],
+                    &[],
+                    &[],
+                    &[],
                     std::slice::from_ref(&cleared.id),
                     Some("Moved"),
                 )
@@ -2580,6 +2855,92 @@ mod tests {
         assert_eq!(
             store
                 .get_remote_desktop_profile(&cleared.id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Moved")
+        );
+    }
+
+    #[test]
+    fn move_session_assets_to_group_includes_every_saved_profile_type() {
+        let mut store = load_empty_store("move-all-session-assets");
+        store
+            .upsert(request("ssh-move", SavedAuth::Agent))
+            .unwrap();
+        let serial = store
+            .upsert_serial_profile(SaveSerialProfileRequest {
+                id: Some("serial-move".to_string()),
+                name: "Serial console".to_string(),
+                port_path: "/dev/tty.test".to_string(),
+                ..SaveSerialProfileRequest::default()
+            })
+            .unwrap();
+        let telnet = store
+            .upsert_telnet_profile(SaveTelnetProfileRequest {
+                id: Some("telnet-move".to_string()),
+                name: "Telnet console".to_string(),
+                host: "telnet.example.test".to_string(),
+                port: 23,
+                ..SaveTelnetProfileRequest::default()
+            })
+            .unwrap();
+        let mosh = store
+            .upsert_mosh_profile(mosh_request("mosh-move", SavedAuth::Agent))
+            .unwrap();
+        let remote = store
+            .upsert_remote_desktop_profile(SaveRemoteDesktopProfileRequest {
+                id: Some("remote-move".to_string()),
+                name: "Remote desktop".to_string(),
+                protocol: RemoteDesktopProtocol::Rdp,
+                host: "remote.example.test".to_string(),
+                port: 3389,
+                ..SaveRemoteDesktopProfileRequest::default()
+            })
+            .unwrap();
+
+        assert_eq!(
+            store
+                .move_session_assets_to_group(
+                    &["ssh-move".to_string()],
+                    std::slice::from_ref(&serial.id),
+                    std::slice::from_ref(&telnet.id),
+                    std::slice::from_ref(&mosh.id),
+                    std::slice::from_ref(&remote.id),
+                    Some("Moved"),
+                )
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            store.get("ssh-move").and_then(|connection| connection.group.as_deref()),
+            Some("Moved")
+        );
+        assert_eq!(
+            store
+                .serial_profiles()
+                .iter()
+                .find(|profile| profile.id == serial.id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Moved")
+        );
+        assert_eq!(
+            store
+                .telnet_profiles()
+                .iter()
+                .find(|profile| profile.id == telnet.id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Moved")
+        );
+        assert_eq!(
+            store
+                .mosh_profiles()
+                .iter()
+                .find(|profile| profile.id == mosh.id)
+                .and_then(|profile| profile.group.as_deref()),
+            Some("Moved")
+        );
+        assert_eq!(
+            store
+                .get_remote_desktop_profile(&remote.id)
                 .and_then(|profile| profile.group.as_deref()),
             Some("Moved")
         );

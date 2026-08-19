@@ -99,6 +99,17 @@ impl WorkspaceApp {
             }
             _ => {}
         }
+        if *tab_kind != TabKind::Sftp
+            && !self.sidebar_collapsed
+            && self.effective_sidebar_panel_section() == SidebarSection::Sessions
+            && self.embedded_sftp_node_id.is_some()
+            && self.sftp_view.read(cx).current_surface_id == Some(sftp::SftpSurfaceId::Sidebar)
+            && let Some(dialog) = self.sftp_view.read(cx).dialog()
+        {
+            // Sidebar-owned dialogs stay at the window root so previews and
+            // confirmations are never clipped by the narrow sidebar region.
+            modals.push(self.render_sftp_dialog(dialog, false, cx));
+        }
         modals
     }
 }
@@ -205,10 +216,14 @@ impl WorkspaceApp {
                     self.render_remote_desktop_surface(*tab_id, window, cx)
                 }
                 (_, Some(root_pane)) => self.render_terminal_surface(root_pane, window, cx),
-                _ => self.render_empty_workspace(cx),
+                _ => {
+                    let available_width = self.welcome_main_content_width(window, cx);
+                    self.render_empty_workspace(available_width, cx)
+                }
             }
         } else {
-            self.render_empty_workspace(cx)
+            let available_width = self.welcome_main_content_width(window, cx);
+            self.render_empty_workspace(available_width, cx)
         };
         let content = self.wrap_content_background(
             window_background,
@@ -255,6 +270,7 @@ impl WorkspaceApp {
             && self.sidebar_resize_hotzone_hovered)
             || self.sidebar_resizing
             || self.ai_entity.read(cx).chat_ui().sidebar_resizing;
+        let embedded_sftp_resize_cursor_active = self.embedded_sftp_sidebar_resizing;
         self.update_main_window_tabbar_drop_bounds(window, titlebar_visible, zen_mode, cx);
 
         div()
@@ -274,6 +290,9 @@ impl WorkspaceApp {
             ))
             .when(sidebar_resize_cursor_active, |root| {
                 root.cursor(CursorStyle::ResizeColumn)
+            })
+            .when(embedded_sftp_resize_cursor_active, |root| {
+                root.cursor(CursorStyle::ResizeRow)
             })
             .track_focus(&self.focus_handle)
             .key_context("Workspace")
@@ -299,6 +318,12 @@ impl WorkspaceApp {
                 if this.capture_active_window_modal_key(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();
+                    return;
+                }
+                if this.active_sftp_editor_owns_key(event.keystroke.key.as_str(), cx) {
+                    // Windows emits committed characters only after an unhandled
+                    // keydown. Do not let pane-level capture override the modal
+                    // route that gives document keys to the focused editor.
                     return;
                 }
                 let active_ime_should_receive_key =
@@ -400,6 +425,13 @@ impl WorkspaceApp {
                     window.prevent_default();
                     cx.stop_propagation();
                 } else if this.handle_ai_inline_panel_key(event, window, cx) {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                } else if this.sftp_presentation_request.is_some() {
+                    if event.keystroke.key.eq_ignore_ascii_case("escape") {
+                        this.sftp_presentation_request = None;
+                        cx.notify();
+                    }
                     window.prevent_default();
                     cx.stop_propagation();
                 } else if this.handle_transient_workspace_overlay_escape(event, window, cx) {
@@ -507,6 +539,7 @@ impl WorkspaceApp {
             ))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.update_sidebar_resize(event, window, cx);
+                this.update_embedded_sftp_sidebar_resize(event, window, cx);
                 this.update_ai_sidebar_resize(event, window, cx);
                 this.update_sftp_pane_resize(event, window, cx);
                 this.update_sftp_queue_resize(event, window, cx);
@@ -595,6 +628,12 @@ impl WorkspaceApp {
             }))
             .on_action(cx.listener(|this, _: &ZenMode, _window, cx| {
                 this.toggle_zen_mode(cx);
+            }))
+            .on_action(cx.listener(|_this, _: &ToggleFullscreen, window, cx| {
+                // Full-screen transitions stay owned by the native window and
+                // must not fall through as terminal input.
+                window.toggle_fullscreen();
+                cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| {
                 this.next_tab(true, window, cx);
@@ -818,7 +857,7 @@ impl WorkspaceApp {
                         layout.child(self.render_activity_bar(cx))
                     })
                     .when(!zen_mode && self.sidebar_rendered, |layout| {
-                        layout.child(self.render_animated_sidebar_region(cx))
+                        layout.child(self.render_animated_sidebar_region(window, cx))
                     })
                     .child(
                         div()
@@ -880,6 +919,19 @@ impl WorkspaceApp {
                     .absolute(),
                 )
             })
+            .when(embedded_sftp_resize_cursor_active, |root| {
+                root.child(
+                    canvas(
+                        |_, _, _| (),
+                        |_, _, window, _| {
+                            // Keep the row-resize cursor stable while the
+                            // pointer crosses either virtualized sidebar list.
+                            window.set_window_cursor_style(CursorStyle::ResizeRow);
+                        },
+                    )
+                    .absolute(),
+                )
+            })
             .when(
                 self.browser_pointer_capture_owner(cx)
                     .is_some_and(browser_behavior::pointer_capture_needs_workspace_overlay),
@@ -887,6 +939,9 @@ impl WorkspaceApp {
             )
             .when(self.connection_form_state(cx).form.is_some(), |root| {
                 root.child(self.render_new_connection_modal(window, cx))
+            })
+            .when_some(self.render_sftp_presentation_dialog(cx), |root, dialog| {
+                root.child(dialog)
             })
             .when(self.local_shell_launcher_open, |root| {
                 root.child(self.render_local_shell_launcher(window, cx))
@@ -1016,6 +1071,10 @@ impl WorkspaceApp {
                 self.render_native_plugin_confirm_dialog(cx),
                 |root, dialog| root.child(dialog),
             )
+            // Tab renaming is a main-window portal and never remounts the terminal tab.
+            .when_some(self.render_tab_rename_dialog(cx), |root, dialog| {
+                root.child(dialog)
+            })
             // Tab-owned dialogs are portaled here so their backdrops cover all window chrome.
             .children(active_tab_window_modals)
             .when_some(
@@ -1141,7 +1200,8 @@ impl WorkspaceApp {
                 CursorStyle::ClosedHand
             }
             Some(
-                browser_behavior::BrowserPointerCaptureOwner::SftpQueueResize
+                browser_behavior::BrowserPointerCaptureOwner::EmbeddedSftpSidebarResize
+                | browser_behavior::BrowserPointerCaptureOwner::SftpQueueResize
                 | browser_behavior::BrowserPointerCaptureOwner::TerminalCommandSenderResize,
             ) => CursorStyle::ResizeRow,
             _ => CursorStyle::ResizeColumn,
@@ -1160,6 +1220,7 @@ impl WorkspaceApp {
             .bg(rgba(0x00000000))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.update_sidebar_resize(event, window, cx);
+                this.update_embedded_sftp_sidebar_resize(event, window, cx);
                 this.update_ai_sidebar_resize(event, window, cx);
                 this.update_sftp_pane_resize(event, window, cx);
                 this.update_sftp_queue_resize(event, window, cx);
@@ -1186,6 +1247,7 @@ impl WorkspaceApp {
         let capture_owner = self.browser_pointer_capture_owner(cx);
         let was_read_only_dragging = self.read_only_selection_drag_active();
         self.finish_sidebar_resize(cx);
+        self.finish_embedded_sftp_sidebar_resize(cx);
         self.finish_ai_sidebar_resize(cx);
         self.finish_sftp_pane_resize(cx);
         self.finish_sftp_queue_resize(cx);
@@ -1347,16 +1409,6 @@ impl WorkspaceApp {
         match event {
             WorkspaceTerminalEvent::GitMetadataChanged => {
                 cx.notify();
-            }
-            WorkspaceTerminalEvent::GitCommitDraftReady(request) => {
-                if let Some(command) = request.take() {
-                    // The Entity owns generation and completion; the root only
-                    // installs the one-shot result into its current input owner.
-                    self.replace_terminal_command_sender_text(command, cx);
-                    self.ime_marked_text = None;
-                    self.clear_ime_selection();
-                    cx.notify();
-                }
             }
             WorkspaceTerminalEvent::ProjectMetadataChanged => {
                 if let Some(key) = self.active_terminal_project_key(cx) {

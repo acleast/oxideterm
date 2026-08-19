@@ -15,18 +15,20 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::store::{ImportedManagedSshKey, ManagedSshKey, ManagedSshKeyOrigin};
 use crate::{
-    AuthType, CONFIG_VERSION, ConnectionOptions, ConnectionStore,
+    AuthType, CONFIG_VERSION, ConnectionOptions, ConnectionStore, MoshProfilesSyncSnapshot,
     RemoteDesktopProfilesSyncSnapshot, SavedAuth, SavedConnection, SavedPrivilegeCredential,
     SavedProxyHop, SavedUpstreamProxyAuth, SavedUpstreamProxyConfig, SavedUpstreamProxyPolicy,
-    SecretString, SerialProfilesSyncSnapshot,
+    SecretString, SerialProfilesSyncSnapshot, TelnetProfilesSyncSnapshot,
 };
 
 use super::{
     EncryptedAuth, EncryptedConnection, EncryptedForward, EncryptedManagedKeyMetadata,
     EncryptedPayload, EncryptedPluginSetting, EncryptedPortableSecret,
     EncryptedPrivilegeCredential, EncryptedProxyHop, EncryptedUpstreamProxyAuth,
-    EncryptedUpstreamProxyConfig, EncryptedUpstreamProxyPolicy, OxideFile, OxideFileError,
-    OxideMetadata, compute_checksum, decrypt_oxide_file_with_progress, encrypt_oxide_file,
+    EncryptedUpstreamProxyConfig, EncryptedUpstreamProxyPolicy, OxideBatchDecryptionContext,
+    OxideBatchEncryptionContext, OxideFile, OxideFileError, OxideMetadata, compute_checksum,
+    decrypt_oxide_file_with_context_and_progress, decrypt_oxide_file_with_progress,
+    encrypt_oxide_file, encrypt_oxide_file_with_context_and_progress,
     encrypt_oxide_file_with_progress,
 };
 
@@ -58,6 +60,8 @@ pub struct OxideExportOptions {
     pub app_settings_json: Option<String>,
     pub quick_commands_json: Option<String>,
     pub serial_profiles_json: Option<String>,
+    pub telnet_profiles_json: Option<String>,
+    pub mosh_profiles_json: Option<String>,
     pub remote_desktop_profiles_json: Option<String>,
     pub plugin_settings: Vec<EncryptedPluginSetting>,
     pub portable_secrets: Vec<EncryptedPortableSecret>,
@@ -76,6 +80,8 @@ impl Default for OxideExportOptions {
             app_settings_json: None,
             quick_commands_json: None,
             serial_profiles_json: None,
+            telnet_profiles_json: None,
+            mosh_profiles_json: None,
             remote_desktop_profiles_json: None,
             plugin_settings: Vec::new(),
             portable_secrets: Vec::new(),
@@ -91,6 +97,8 @@ pub struct OxideImportOptions {
     pub conflict_strategy: ImportConflictStrategy,
     pub import_forwards: bool,
     pub import_serial_profiles: bool,
+    pub import_telnet_profiles: bool,
+    pub import_mosh_profiles: bool,
     pub import_remote_desktop_profiles: bool,
     pub import_portable_secrets: bool,
     /// Restore managed-key metadata instead of extracting managed keys as plain imported key files.
@@ -107,6 +115,8 @@ impl Default for OxideImportOptions {
             conflict_strategy: ImportConflictStrategy::Rename,
             import_forwards: true,
             import_serial_profiles: true,
+            import_telnet_profiles: true,
+            import_mosh_profiles: true,
             import_remote_desktop_profiles: true,
             import_portable_secrets: false,
             restore_managed_keys: true,
@@ -170,6 +180,8 @@ pub struct ImportPreview {
     pub quick_commands_count: usize,
     pub quick_command_categories_count: usize,
     pub serial_profiles_count: usize,
+    pub telnet_profiles_count: usize,
+    pub mosh_profiles_count: usize,
     pub remote_desktop_profiles_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_settings_format: Option<String>,
@@ -253,6 +265,14 @@ pub struct ImportResultEnvelope {
     pub serial_profiles_json: Option<String>,
     pub imported_serial_profiles: usize,
     pub skipped_serial_profiles: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telnet_profiles_json: Option<String>,
+    pub imported_telnet_profiles: usize,
+    pub skipped_telnet_profiles: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mosh_profiles_json: Option<String>,
+    pub imported_mosh_profiles: usize,
+    pub skipped_mosh_profiles: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_desktop_profiles_json: Option<String>,
     pub imported_remote_desktop_profiles: usize,

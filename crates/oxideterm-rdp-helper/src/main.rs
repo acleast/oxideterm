@@ -41,7 +41,7 @@ use ironrdp::{
         synchronize_event as rdp_synchronize_event,
     },
     pdu::{
-        gcc::KeyboardType,
+        gcc::{ConnectionType, KeyboardType},
         geometry::InclusiveRectangle,
         input::fast_path::FastPathInputEvent,
         rdp::{
@@ -53,8 +53,8 @@ use ironrdp::{
         },
     },
     session::{
-        self, ActiveStage, ActiveStageOutput, GracefulDisconnectReason, SessionErrorExt as _,
-        SessionResult, fast_path, image::DecodedImage,
+        self, ActiveStage, ActiveStageBuilder, ActiveStageOutput, GracefulDisconnectReason,
+        SessionErrorExt as _, SessionResult, image::DecodedImage,
     },
     svc::{ChannelFlags, SvcProcessorMessages},
 };
@@ -188,6 +188,7 @@ fn run_real_rdp_stdio(reader: &mut impl BufRead) -> Result<(), String> {
     let RemoteDesktopHelperRequest::StartConnect {
         protocol,
         endpoint,
+        transport_endpoint,
         password_available: _,
         size,
         scale_factor,
@@ -221,6 +222,7 @@ fn run_real_rdp_stdio(reader: &mut impl BufRead) -> Result<(), String> {
     let handle = start_rdp_worker(
         RdpWorkerConfig {
             endpoint,
+            transport_endpoint,
             size,
             scale_factor: rdp_connector_scale_factor(scale_factor),
             graphics_epoch: 0,
@@ -249,6 +251,7 @@ fn run_real_rdp_stdio(reader: &mut impl BufRead) -> Result<(), String> {
 
 struct RdpWorkerConfig {
     endpoint: RemoteDesktopEndpoint,
+    transport_endpoint: Option<RemoteDesktopEndpoint>,
     size: RemoteDesktopSize,
     scale_factor: u32,
     graphics_epoch: u64,
@@ -445,6 +448,10 @@ enum ClientRdpOutput {
     Event(RemoteDesktopHelperEvent),
     ConnectionFailure(connector::ConnectorError),
     ProtocolFailure(String),
+    SessionFailure {
+        message: String,
+        category: RemoteDesktopErrorCategory,
+    },
     Terminated(String),
     OutputEnded,
 }
@@ -464,6 +471,7 @@ type UpgradedRdpFramed = ironrdp_tokio::TokioFramed<Box<dyn AsyncReadWrite + Unp
 #[derive(Clone, Debug)]
 struct ClientRdpConfig {
     destination: ClientRdpDestination,
+    transport_destination: ClientRdpDestination,
     connector: connector::Config,
     graphics_epoch: u64,
     session_options: RemoteDesktopSessionOptions,

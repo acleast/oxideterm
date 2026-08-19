@@ -226,6 +226,15 @@ ownership rules in `crates/gpui-ce/gpui/src/elements/div.rs` and
 Without this patch, one macOS trackpad event can move both a child and its scrollable ancestor,
 which makes the GPUI-CE build feel substantially more sensitive than the previous GPUI build.
 
+### Zero-area SVG paint semantics
+
+`crates/gpui-ce/gpui/src/window.rs` treats SVG bounds that become empty after device-pixel
+snapping as a successful no-op before consulting the sprite atlas or SVG rasterizer. Product
+layout transitions can intentionally collapse a clipping viewport to zero while its content
+remains mounted, so an empty paint has no visible work and is not a renderer failure. Keep the
+lower-level SVG rasterizer's strict positive-size invariant for direct callers; the no-op belongs
+at the window paint boundary, where logical layout bounds have been snapped to device pixels.
+
 ### Bounded text and input lock lifetimes
 
 Preserve the explicit temporary bindings that release internal locks before processing owned
@@ -251,6 +260,9 @@ landed in `zed-industries/zed@89e8a4b9ec7e` after the pinned GPUI-CE baseline:
   measured width through that pointer;
 - DirectWrite glyph arrays are converted with a null-aware helper, so a zero-length null array is
   accepted without constructing an invalid Rust slice and a nonzero null array is rejected;
+- draw-local font-face cache entries retain the DirectWrite callback face whose COM identity
+  supplies the pointer-address key, preventing a released fallback face address from being reused
+  for a different CJK face and resolving glyph IDs through the wrong cached font;
 - color-glyph staging textures are unmapped immediately after their rows are copied.
 
 The mutable-pointer provenance fix prevents optimized Windows builds from treating callback writes
@@ -276,6 +288,8 @@ Core changes:
     upload length;
   - exposes `update_dynamic_texture`, `paint_dynamic_texture`,
     `drop_dynamic_texture`, and `renderer_resource_generation`;
+  - records the atlas generation used by every rendered scene, forces a full
+    repaint after a generation change, and refuses to present a stale scene;
   - creates a blank stable atlas entry when an update precedes first paint;
 - `crates/gpui-ce/gpui/src/platform/test/window.rs`
   - records dynamic texture allocations and uploads in the test atlas;

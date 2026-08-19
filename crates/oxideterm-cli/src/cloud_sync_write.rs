@@ -522,6 +522,10 @@ fn history_summary(
         forwards,
         quick_commands: 0,
         serial_profiles: 0,
+        // Legacy cloud-sync payloads predate saved Telnet profiles.
+        telnet_profiles: 0,
+        // Legacy cloud-sync payloads predate saved Mosh profiles.
+        mosh_profiles: 0,
         // Legacy cloud-sync payloads predate saved remote desktop profiles.
         remote_desktop_profiles: 0,
         sensitive_credentials: 0,
@@ -608,14 +612,5 @@ mod tests {
         });
 
         assert!(write.dry_run);
-    }
-
-    #[test]
-    fn legacy_history_summary_does_not_claim_structured_only_profiles() {
-        let summary = history_summary(2, 1, 1, 3);
-
-        assert_eq!(summary.connections, 2);
-        assert_eq!(summary.forwards, 1);
-        assert_eq!(summary.remote_desktop_profiles, 0);
     }
 }

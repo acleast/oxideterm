@@ -3,6 +3,112 @@
 Stable releases are listed newest first. The release workflow uses each versioned
 section as the detailed changelog attached to the corresponding GitHub Release.
 
+## 2.0.21
+
+OxideTerm 2.0.21 adds controlled external MCP access, expands ACP and plugin interoperability, and improves SFTP, remote-desktop, Cloud Sync, and native window workflows.
+
+### ✨ Highlights
+
+- Added authenticated External MCP Control for editors, command-line agents, and other clients, with loopback HTTP and stdio access to explicitly granted connection, terminal, SFTP, transfer, forwarding, remote-desktop, recording, IDE workspace, Quick Command, addon, Cloud Sync, and Host Tools workflows.
+- Added ACP presets for Gemini CLI and OpenCode, and allowed the built-in Codex and Claude Code adapters to consume session-scoped HTTP MCP servers without placing authorization values in process arguments.
+- Added a searchable native plugin marketplace with compatibility, platform, checksum, installation, and update checks, and moved the complete Host Tools Dashboard example into the official plugin catalog.
+- Added an embedded SFTP sidebar browser with a remembered sidebar, tab, or ask-each-time presentation preference while keeping transfers and shared SSH connections owned independently from the visible surface.
+- Added SSH jump and proxy-chain support to saved RDP and VNC connections, direct CLI opening of saved SSH connections, and complete Telnet profile coverage in `.oxide` import, export, and Cloud Sync.
+
+### 🛠️ Fixes
+
+- Restored the main window's normal bounds, maximized state, and full-screen state across launches, retained valid secondary-display placement, and recentered windows that would otherwise reopen off screen.
+- Initialized the OneDrive application folder before creating nested Cloud Sync objects, reused existing parents, and recovered cleanly when another client created the same folder concurrently.
+- Preserved every saved connection profile type during structured synchronization and kept background MCP mutations, cancellations, revocations, and dependent refreshes aligned with their committed application state.
+- Removed the unintended divider above installed plugins and retired the obsolete downloadable Wasm runtime installer from builds that do not include Wasm plugin support.
+
+### 🔒 Security
+
+- Kept external MCP credentials digest-only and device-local, required explicit tool-group grants, retained in-app approval for elevated access requests, and cancelled active work and released capabilities immediately when access is revoked.
+
+## 2.0.20
+
+OxideTerm 2.0.20 adds native Mosh and local-terminal workflows, refreshes session and start-page management, improves remote-desktop and Cloud Sync reliability, and expands terminal feedback and SSH controls.
+
+### ✨ Highlights
+
+- Added native Mosh sessions with SSH bootstrap, adaptive prediction, saved-profile editing, Session Manager and sidebar integration, `.xoide` import and export, and Cloud Sync support.
+- Redesigned the start page around recent connections, local terminals, imports, Session Manager, and Cloud Sync, with responsive layouts for narrow workspaces and a clearer view of standalone active connections.
+- Expanded Session Manager selection and batch group operations to saved serial, Telnet, Mosh, and remote-desktop profiles, and added complete in-place editing for serial and Telnet settings without disturbing active sessions.
+- Added millisecond terminal timestamps, richer matched-text or logical-line highlight controls, and an optional accent for background tabs with unread terminal output.
+- Added direct local-terminal launch from the connection flow, refined the terminal Git workflow with inline commit messages and clearer action grouping, and updated DeepSeek v4 reasoning support.
+- Redesigned the connection runtime overview around pool usage, consumers, health attention, and refresh status, and allowed approved OxideSens tools to update non-secret Cloud Sync configuration.
+
+### 🛠️ Fixes
+
+- Improved RDP automatic reconnect and frame uploads, preserved sparse update regions through presentation, and reduced RDP and VNC work for incremental framebuffer changes.
+- Repaired HTTP JSON Cloud Sync revision baselines, preserved configuration drafts across provider changes, reused snapshot encryption keys within one operation, and batched macOS credential authorization during imports.
+- Made SSH connection timeouts configurable across saved connections, SSH config import, `.xoide` transfer, Cloud Sync, and CLI specifications while preserving imported timeout values.
+- Preserved serial and Telnet profile identity and automatic-open metadata when editing, and ensured Telnet changes mark Cloud Sync state dirty.
+
+## 2.0.19
+
+OxideTerm 2.0.19 improves native window and terminal behavior, repairs Windows PowerShell and OneDrive compatibility, and simplifies supported update channels.
+
+### ✨ Highlights
+
+- Added native full-screen shortcuts with F11 on Windows and Linux and Control-Command-F on macOS, exposed the action in shortcut settings, and made macOS title-bar double-clicks follow the system preference.
+
+### 🛠️ Fixes
+
+- Prevented Windows PowerShell 5.1 from displaying OSC 7 directory-reporting bytes as visible `e]7;...` text in local and remote Shell integration.
+- Made detached tab windows movable through native Windows caption handling, and made closing a detached window close its tab and local terminal instead of leaving the terminal active in the background; shared SSH node connections remain independently owned.
+- Kept typed keys and pasted text flowing to selected broadcast terminals without re-entering the GPUI workspace entity during synchronous input delivery.
+- Repaired OneDrive app-folder hierarchy creation by sending Microsoft Graph conflict behavior through the supported request URL annotation.
+
+### 🧰 Release Maintenance
+
+- Retired the GPUI Preview channel from runtime settings, updater selection, help content, and plugin compatibility while preserving Stable and Beta updates and safely migrating older saved channel settings.
+
+## 2.0.18
+
+OxideTerm 2.0.18 makes remote Shell integration safer across terminal clients, restores terminal and SSH interaction workflows, and repairs Windows Cloud Sync and OneDrive behavior.
+
+### ✨ Highlights
+
+- Migrated remote SSH directory reporting to standard OSC 7 while retaining legacy protocol parsing and in-place upgrades for existing integration packages; private editor enhancements now activate only for marked OxideTerm channels and safely remain unavailable when the server rejects the optional marker.
+- Added complete editing for saved SSH proxy chains, preserving unchanged hop credentials, copying credentials into independent owners when needed, and resolving saved proxy authentication when connecting.
+
+### 🛠️ Fixes
+
+- Restored terminal input broadcasting for typed text, protocol keys, and paste operations without rebroadcast loops or widening AI and credential input scope.
+- Prevented Tab Rename input from reaching the terminal behind its dialog, restored pane focus after the dialog closes, and stopped UTF-8 prompt glyphs such as `❯` from being mistaken for terminal control bytes.
+- Preserved terminal-driven SFTP directory navigation when shared-session readiness or an older listing completes after a newer path request.
+- Recovered valid Windows credentials when malformed chunk metadata exists, allowed damaged metadata to be replaced or deleted, and retained safe platform error context for Cloud Sync diagnosis.
+- Repaired OneDrive app-folder uploads with supported create-conflict semantics, more precise permission and conflict classification, and actionable operation and request identifiers.
+
+### 🔒 Security
+
+- Suppressed private editor OSC messages in tmux, GNU screen, and Zellij shared panes, removed private OSC clipboard payloads from terminal recordings across fragmented and oversized messages, and zeroized captured payload buffers after use.
+
+## 2.0.17
+
+OxideTerm 2.0.17 strengthens Windows SSH, SFTP, and RDP workflows, adds terminal tab naming and optional SSH close-confirmation suppression, and improves AI provider compatibility and settings polish.
+
+### ✨ Highlights
+
+- Added terminal tab renaming from attached or detached windows while preserving the existing pane and session.
+- Added direct custom model ID entry for AI providers and consolidated system monitoring into the Host Tools sidebar instead of a duplicate full-page health view.
+- Added an opt-out checkbox to SSH close and disconnect confirmations, persisting the preference only after the user confirms the action.
+
+### 🛠️ Fixes
+
+- Preserved credentials entered during SSH connection tests when saving a connection, allowed unavailable X11 forwarding to fall back to a normal shell, and applied saved X11 policy changes to subsequent shells without restarting the application.
+- Made RDP display resizing recover through a controlled reconnect with stale-frame isolation instead of leaving the remote view stalled or incorrectly sized.
+- Prevented SFTP downloads from silently overwriting local files, strengthened collision and resume validation, and restored text-editor keyboard input on Windows.
+- Stored oversized Windows Credential Manager values, including long OneDrive tokens, in bounded chunks and restored them transparently.
+- Kept AI model chips visible in narrow provider cards, showed successful SSH connection tests with the success color, and stopped broad conversational wording from forcing unnecessary AI tool calls.
+
+### 🧰 Release Maintenance
+
+- Added an artifact-repair workflow that can republish successfully built native packages without rebuilding unaffected platforms.
+- Updated issue intake to close reports from superseded major versions with a bilingual upgrade notice while retaining reminders for older stable patch releases.
+
 ## 2.0.16
 
 OxideTerm 2.0.16 combines the latest native workspace, SSH, remote-desktop, AI, and terminal workflow improvements in an installer-only stable release.

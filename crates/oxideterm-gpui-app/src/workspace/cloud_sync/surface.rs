@@ -407,7 +407,7 @@ impl WorkspaceApp {
         items
     }
 
-    pub(super) fn invalidate_cloud_sync_snapshot_caches(&self, cx: &App) {
+    pub(in crate::workspace) fn invalidate_cloud_sync_snapshot_caches(&self, cx: &App) {
         // Source mutations advance one explicit generation so render-time cache
         // hits never need to rescan stores or query filesystem metadata.
         self.cloud_sync.read(cx).view.snapshot_cache_generation.set(
@@ -483,6 +483,8 @@ impl WorkspaceApp {
                 .ok(),
             quick_commands,
             serial_profiles: self.connection_store.export_serial_profiles_snapshot().ok(),
+            telnet_profiles: self.connection_store.export_telnet_profiles_snapshot().ok(),
+            mosh_profiles: self.connection_store.export_mosh_profiles_snapshot().ok(),
             remote_desktop_profiles: self
                 .connection_store
                 .export_remote_desktop_profiles_snapshot()
@@ -1147,6 +1149,9 @@ impl CloudSyncPageRenderer {
         match cloud_sync_error_message_spec(error) {
             CloudSyncErrorMessageSpec::Raw(message) => message,
             CloudSyncErrorMessageSpec::Key(key) => self.i18n.t(key),
+            CloudSyncErrorMessageSpec::KeyWithDetail { key, detail } => {
+                format!("{} ({detail})", self.i18n.t(key))
+            }
             CloudSyncErrorMessageSpec::SnapshotTooLarge { limit } => self.i18n_replace(
                 "plugin.cloud_sync.errors.snapshot_too_large",
                 &[("limit", limit.unwrap_or_else(|| "—".to_string()))],

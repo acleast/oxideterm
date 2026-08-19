@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::forwards;
+
 use oxideterm_gpui_remote_desktop::{
     RemoteDesktopFrameApplyStats, RemoteDesktopMappedPoint, RemoteDesktopViewState,
     SharedRemoteDesktopGeometry, remote_desktop_surface_with_geometry,
@@ -40,6 +42,7 @@ use oxideterm_remote_desktop::{
 };
 use oxideterm_workspace::{Tab, TabKind, TabTitleSource};
 use tokio::sync::Notify;
+use zeroize::Zeroizing;
 
 use super::*;
 
@@ -47,9 +50,12 @@ mod certificate;
 mod clipboard;
 mod input;
 mod interaction;
+mod public_mcp;
 mod session;
 mod view;
 mod worker;
+
+pub(in crate::workspace) use public_mcp::RemoteDesktopPublicClipboardSnapshot;
 
 use certificate::*;
 use clipboard::*;
@@ -98,6 +104,33 @@ const REMOTE_DESKTOP_DELIVERY_BUDGET: delivery::DeliveryBudget =
 const REMOTE_DESKTOP_FRAME_READY_DRAIN_LIMIT: usize = 32;
 const REMOTE_DESKTOP_FRAME_READY_DRAIN_BUDGET: Duration = Duration::from_millis(6);
 const REMOTE_DESKTOP_DIAGNOSTICS_ENV: &str = "OXIDETERM_REMOTE_DESKTOP_DIAGNOSTICS";
+const REMOTE_DESKTOP_AUTOMATIC_RECONNECT_DELAYS: [Duration; 4] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+];
+
+fn remote_desktop_automatic_reconnect_delay(attempt: usize) -> Duration {
+    REMOTE_DESKTOP_AUTOMATIC_RECONNECT_DELAYS
+        .get(attempt)
+        .copied()
+        .unwrap_or_else(|| {
+            REMOTE_DESKTOP_AUTOMATIC_RECONNECT_DELAYS
+                .last()
+                .copied()
+                .unwrap_or(Duration::ZERO)
+        })
+}
+
+fn remote_desktop_network_failure_allows_automatic_reconnect(
+    has_connected: bool,
+    category: Option<RemoteDesktopErrorCategory>,
+) -> bool {
+    // Initial setup, authentication, protocol, and dependency failures need a
+    // user decision. Only a network failure after a proven session is retried.
+    has_connected && category == Some(RemoteDesktopErrorCategory::Network)
+}
 
 fn remote_desktop_tab_visible(main_tab_visible: bool, detached_tab_visible: bool) -> bool {
     main_tab_visible || detached_tab_visible
@@ -184,7 +217,11 @@ impl RemoteDesktopWorkerWake {
 
 #[cfg(test)]
 mod visibility_tests {
-    use super::remote_desktop_tab_visible;
+    use super::{
+        REMOTE_DESKTOP_AUTOMATIC_RECONNECT_DELAYS, remote_desktop_automatic_reconnect_delay,
+        remote_desktop_network_failure_allows_automatic_reconnect, remote_desktop_tab_visible,
+    };
+    use oxideterm_remote_desktop::RemoteDesktopErrorCategory;
 
     #[test]
     fn remote_desktop_visibility_covers_main_detached_and_hidden_tabs() {
@@ -192,6 +229,38 @@ mod visibility_tests {
         assert!(remote_desktop_tab_visible(false, true));
         assert!(remote_desktop_tab_visible(true, true));
         assert!(!remote_desktop_tab_visible(false, false));
+    }
+
+    #[test]
+    fn automatic_reconnect_backoff_caps_at_the_last_delay() {
+        assert_eq!(
+            remote_desktop_automatic_reconnect_delay(0),
+            REMOTE_DESKTOP_AUTOMATIC_RECONNECT_DELAYS[0]
+        );
+        assert_eq!(
+            remote_desktop_automatic_reconnect_delay(usize::MAX),
+            *REMOTE_DESKTOP_AUTOMATIC_RECONNECT_DELAYS.last().unwrap()
+        );
+    }
+
+    #[test]
+    fn automatic_reconnect_requires_an_established_network_session() {
+        assert!(remote_desktop_network_failure_allows_automatic_reconnect(
+            true,
+            Some(RemoteDesktopErrorCategory::Network)
+        ));
+        assert!(!remote_desktop_network_failure_allows_automatic_reconnect(
+            false,
+            Some(RemoteDesktopErrorCategory::Network)
+        ));
+        assert!(!remote_desktop_network_failure_allows_automatic_reconnect(
+            true,
+            Some(RemoteDesktopErrorCategory::Authentication)
+        ));
+        assert!(!remote_desktop_network_failure_allows_automatic_reconnect(
+            true,
+            Some(RemoteDesktopErrorCategory::Unknown)
+        ));
     }
 }
 
@@ -378,6 +447,90 @@ impl Drop for RemoteDesktopWorkerOwner {
     }
 }
 
+enum RemoteDesktopPublicClipboard {
+    Text(Zeroizing<String>),
+    Image {
+        format: RemoteDesktopClipboardFormat,
+        bytes: Zeroizing<Vec<u8>>,
+    },
+}
+
+pub(in crate::workspace) struct RemoteDesktopSshTunnelLease {
+    lease_id: String,
+    forwarding_service: forwards::ForwardingRuntimeService,
+}
+
+pub(in crate::workspace) struct PendingRemoteDesktopSshTunnel {
+    lease_id: Option<String>,
+    forwarding_service: forwards::ForwardingRuntimeService,
+    worker: Option<tokio::task::JoinHandle<Result<RemoteDesktopEndpoint, String>>>,
+}
+
+impl PendingRemoteDesktopSshTunnel {
+    pub(in crate::workspace) fn new(
+        lease_id: String,
+        forwarding_service: forwards::ForwardingRuntimeService,
+        worker: tokio::task::JoinHandle<Result<RemoteDesktopEndpoint, String>>,
+    ) -> Self {
+        Self {
+            lease_id: Some(lease_id),
+            forwarding_service,
+            worker: Some(worker),
+        }
+    }
+
+    pub(in crate::workspace) async fn finish(
+        mut self,
+    ) -> Result<(RemoteDesktopEndpoint, RemoteDesktopSshTunnelLease), String> {
+        let worker = self
+            .worker
+            .take()
+            .expect("pending remote desktop tunnel owns one worker");
+        let endpoint = worker.await.map_err(|error| error.to_string())??;
+        let lease_id = self
+            .lease_id
+            .take()
+            .expect("pending remote desktop tunnel owns one lease id");
+        let lease = RemoteDesktopSshTunnelLease::new(lease_id, self.forwarding_service.clone());
+        Ok((endpoint, lease))
+    }
+}
+
+impl Drop for PendingRemoteDesktopSshTunnel {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
+        // Cancellation may race with listener creation, so the shared lease
+        // registry remains the authoritative cleanup boundary.
+        if let Some(lease_id) = self.lease_id.take() {
+            self.forwarding_service
+                .close_remote_desktop_tunnel(lease_id);
+        }
+    }
+}
+
+impl RemoteDesktopSshTunnelLease {
+    pub(in crate::workspace) fn new(
+        lease_id: String,
+        forwarding_service: forwards::ForwardingRuntimeService,
+    ) -> Self {
+        Self {
+            lease_id,
+            forwarding_service,
+        }
+    }
+}
+
+impl Drop for RemoteDesktopSshTunnelLease {
+    fn drop(&mut self) {
+        // The lease stops only its hidden listener; NodeRouter retains the
+        // physical SSH node for every other registered consumer.
+        self.forwarding_service
+            .close_remote_desktop_tunnel(self.lease_id.clone());
+    }
+}
+
 pub(in crate::workspace) struct RemoteDesktopSessionEntity {
     tab_id: TabId,
     profile: RemoteDesktopConnectionProfile,
@@ -389,11 +542,19 @@ pub(in crate::workspace) struct RemoteDesktopSessionEntity {
     state: RemoteDesktopViewState,
     geometry: SharedRemoteDesktopGeometry,
     frame_slot: RemoteDesktopFrameDeliverySlot,
+    ui_frame_visible: bool,
+    public_mcp_frame_observers: usize,
+    public_mcp_clipboard: Option<RemoteDesktopPublicClipboard>,
+    ssh_tunnel: Option<RemoteDesktopSshTunnelLease>,
     delivery_tx: mpsc::Sender<RemoteDesktopWorkerDelivery>,
     delivery_rx: mpsc::Receiver<RemoteDesktopWorkerDelivery>,
     worker: Option<RemoteDesktopWorkerOwner>,
     worker_wake: Option<RemoteDesktopWorkerWake>,
     worker_generation: u64,
+    has_connected: bool,
+    automatic_reconnect_attempt: usize,
+    automatic_reconnect_worker_generation: Option<u64>,
+    automatic_reconnect_task: Option<Task<()>>,
     window_handle: AnyWindowHandle,
     last_viewport_size: Option<RemoteDesktopSize>,
     last_sent_resize: Option<RemoteDesktopResizeRequestState>,
@@ -409,6 +570,15 @@ pub(in crate::workspace) struct RemoteDesktopSessionEntity {
 }
 
 impl RemoteDesktopSessionEntity {
+    pub(in crate::workspace) fn active_session_protocol(&self) -> RemoteDesktopProtocol {
+        self.profile.protocol
+    }
+
+    pub(in crate::workspace) fn active_session_status(&self) -> RemoteDesktopSessionStatus {
+        // The protocol entity remains the authoritative source for sidebar liveness.
+        self.state.snapshot().status
+    }
+
     pub(in crate::workspace) fn ai_can_disconnect(&self) -> bool {
         matches!(
             self.state.snapshot().status,
@@ -442,8 +612,8 @@ impl RemoteDesktopSessionEntity {
             tab_id,
             profile,
             provider,
-            // The tab owns the credential only until one accepted certificate
-            // moves it into the helper authentication request.
+            // The tab retains one zeroizing credential owner so a reconnect
+            // can answer a fresh certificate-gated authentication request.
             password,
             certificate_store_path,
             certificate_challenge: None,
@@ -451,6 +621,10 @@ impl RemoteDesktopSessionEntity {
             state,
             geometry: SharedRemoteDesktopGeometry::default(),
             frame_slot,
+            ui_frame_visible: false,
+            public_mcp_frame_observers: 0,
+            public_mcp_clipboard: None,
+            ssh_tunnel: None,
             // Each tab owns its delivery mailbox. A wake for one detached window
             // must never drain another tab's lifecycle events or frame notices.
             delivery_tx,
@@ -458,6 +632,10 @@ impl RemoteDesktopSessionEntity {
             worker: None,
             worker_wake: None,
             worker_generation: 0,
+            has_connected: false,
+            automatic_reconnect_attempt: 0,
+            automatic_reconnect_worker_generation: None,
+            automatic_reconnect_task: None,
             window_handle,
             last_viewport_size: None,
             last_sent_resize: None,

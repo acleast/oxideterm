@@ -47,6 +47,10 @@ pub struct CloudSyncHistorySummary {
     #[serde(default)]
     pub serial_profiles: usize,
     #[serde(default)]
+    pub telnet_profiles: usize,
+    #[serde(default)]
+    pub mosh_profiles: usize,
+    #[serde(default)]
     pub remote_desktop_profiles: usize,
     #[serde(default)]
     pub sensitive_credentials: usize,
@@ -79,6 +83,10 @@ pub struct CloudSyncRollbackBackupMetadata {
     pub quick_commands: usize,
     #[serde(default)]
     pub serial_profiles: usize,
+    #[serde(default)]
+    pub telnet_profiles: usize,
+    #[serde(default)]
+    pub mosh_profiles: usize,
     #[serde(default)]
     pub remote_desktop_profiles: usize,
     #[serde(default)]

@@ -3053,28 +3053,6 @@ mod tests {
         assert!(dropped.load(Ordering::Acquire));
     }
 
-    #[test]
-    fn keybinding_import_preserves_the_invoking_window_as_action_context() {
-        let action_source = include_str!("../actions.rs");
-        let update_source = include_str!("update.rs");
-        let init_source = include_str!("../root/init.rs");
-        let compact_update_source = update_source
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .concat();
-
-        assert!(action_source.contains("let target_window = window.window_handle();"));
-        assert!(
-            action_source.contains(
-                "settings.start_keybinding_import(selection, runtime, target_window, cx);"
-            )
-        );
-        assert!(compact_update_source.contains(
-            "self.apply_runtime_key_bindings_to_window_handle(runtime_bindings,target_window,cx,);"
-        ));
-        assert!(!init_source.contains("settings_workspace_window_handle"));
-    }
-
     #[gpui::test]
     fn background_blur_preview_and_debounce_task_are_entity_owned(cx: &mut TestAppContext) {
         let entity = cx.new(SettingsWorkspaceEntity::new);

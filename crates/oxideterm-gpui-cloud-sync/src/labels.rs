@@ -90,8 +90,25 @@ pub enum CloudSyncErrorMessageSpec {
     Raw(String),
     /// Known error codes are mapped to stable translation keys outside the app crate.
     Key(&'static str),
+    /// Provider diagnostics are appended to a localized summary without translation.
+    KeyWithDetail { key: &'static str, detail: String },
     /// Snapshot size errors need one dynamic replacement value for localized copy.
     SnapshotTooLarge { limit: Option<String> },
+}
+
+fn cloud_sync_key_with_detail(error: &str, key: &'static str) -> CloudSyncErrorMessageSpec {
+    let Some((_, detail)) = error.split_once(':') else {
+        return CloudSyncErrorMessageSpec::Key(key);
+    };
+    let detail = detail.trim();
+    if detail.is_empty() {
+        CloudSyncErrorMessageSpec::Key(key)
+    } else {
+        CloudSyncErrorMessageSpec::KeyWithDetail {
+            key,
+            detail: detail.to_string(),
+        }
+    }
 }
 
 /// Converts backend error strings into UI copy specs without needing WorkspaceApp.
@@ -164,29 +181,30 @@ pub fn cloud_sync_error_message_spec(error: &str) -> CloudSyncErrorMessageSpec {
             CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.github_oauth_empty_response")
         }
         "onedrive_bad_credentials" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_bad_credentials")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_bad_credentials")
         }
         "onedrive_missing_scope" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_missing_scope")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_missing_scope")
         }
         "onedrive_access_denied" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_access_denied")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_access_denied")
         }
         "onedrive_bad_request" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_bad_request")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_bad_request")
         }
         "onedrive_locked" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_locked")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_locked")
         }
         "onedrive_rate_limited" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_rate_limited")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_rate_limited")
         }
         "onedrive_quota_exceeded" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_quota_exceeded")
+            cloud_sync_key_with_detail(error, "plugin.cloud_sync.errors.onedrive_quota_exceeded")
         }
-        "onedrive_service_unavailable" => {
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_service_unavailable")
-        }
+        "onedrive_service_unavailable" => cloud_sync_key_with_detail(
+            error,
+            "plugin.cloud_sync.errors.onedrive_service_unavailable",
+        ),
         "google_drive_bad_credentials" => {
             CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.google_drive_bad_credentials")
         }
@@ -339,6 +357,7 @@ pub enum CloudSyncRollbackBackupSummarySpec {
         forwards: usize,
         quick_commands: usize,
         serial_profiles: usize,
+        telnet_profiles: usize,
         sensitive_credentials: usize,
         plugin_settings_count: usize,
         size: String,
@@ -356,6 +375,7 @@ pub fn cloud_sync_rollback_backup_summary_spec(
             forwards: metadata.forwards,
             quick_commands: metadata.quick_commands,
             serial_profiles: metadata.serial_profiles,
+            telnet_profiles: metadata.telnet_profiles,
             sensitive_credentials: metadata.sensitive_credentials,
             plugin_settings_count: metadata.plugin_settings_count,
             size,
@@ -501,13 +521,29 @@ mod tests {
     fn maps_onedrive_and_microsoft_oauth_errors_to_copy_specs() {
         assert_eq!(
             cloud_sync_error_message_spec("onedrive_access_denied: tenant policy blocked access"),
-            CloudSyncErrorMessageSpec::Key("plugin.cloud_sync.errors.onedrive_access_denied")
+            CloudSyncErrorMessageSpec::KeyWithDetail {
+                key: "plugin.cloud_sync.errors.onedrive_access_denied",
+                detail: "tenant policy blocked access".to_string(),
+            }
         );
         assert_eq!(
             cloud_sync_error_message_spec("microsoft_oauth_consent_required: admin consent needed"),
             CloudSyncErrorMessageSpec::Key(
                 "plugin.cloud_sync.errors.microsoft_oauth_consent_required"
             )
+        );
+    }
+
+    #[test]
+    fn keeps_onedrive_graph_diagnostics_beside_localized_copy() {
+        assert_eq!(
+            cloud_sync_error_message_spec(
+                "onedrive_bad_request: Invalid request [operation=onedrive_metadata_upload, status=400, graph_code=badRequest, request_id=request-123]"
+            ),
+            CloudSyncErrorMessageSpec::KeyWithDetail {
+                key: "plugin.cloud_sync.errors.onedrive_bad_request",
+                detail: "Invalid request [operation=onedrive_metadata_upload, status=400, graph_code=badRequest, request_id=request-123]".to_string(),
+            }
         );
     }
 
@@ -543,8 +579,10 @@ mod tests {
                 forwards: 4,
                 quick_commands: 5,
                 serial_profiles: 6,
-                remote_desktop_profiles: 7,
-                sensitive_credentials: 8,
+                telnet_profiles: 7,
+                mosh_profiles: 0,
+                remote_desktop_profiles: 8,
+                sensitive_credentials: 9,
             }),
         };
 
@@ -555,7 +593,8 @@ mod tests {
                 forwards: 4,
                 quick_commands: 5,
                 serial_profiles: 6,
-                sensitive_credentials: 8,
+                telnet_profiles: 7,
+                sensitive_credentials: 9,
                 plugin_settings_count: 2,
                 size: "1.5 KB".to_string()
             }

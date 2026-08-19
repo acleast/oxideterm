@@ -243,32 +243,6 @@ pub(super) fn connections_moved_label(i18n: &I18n, count: usize, group: String) 
         .replace("{{group}}", &group)
 }
 
-pub(super) fn terminal_serial_parity_from_profile(
-    parity: &oxideterm_connections::SerialParity,
-) -> oxideterm_terminal::SerialParity {
-    match parity {
-        oxideterm_connections::SerialParity::None => oxideterm_terminal::SerialParity::None,
-        oxideterm_connections::SerialParity::Odd => oxideterm_terminal::SerialParity::Odd,
-        oxideterm_connections::SerialParity::Even => oxideterm_terminal::SerialParity::Even,
-    }
-}
-
-pub(super) fn terminal_serial_flow_from_profile(
-    flow: &oxideterm_connections::SerialFlowControl,
-) -> oxideterm_terminal::SerialFlowControl {
-    match flow {
-        oxideterm_connections::SerialFlowControl::None => {
-            oxideterm_terminal::SerialFlowControl::None
-        }
-        oxideterm_connections::SerialFlowControl::Software => {
-            oxideterm_terminal::SerialFlowControl::Software
-        }
-        oxideterm_connections::SerialFlowControl::Hardware => {
-            oxideterm_terminal::SerialFlowControl::Hardware
-        }
-    }
-}
-
 pub(in crate::workspace) fn form_from_saved_connection(
     conn: &SavedConnection,
     error: Option<String>,
@@ -397,6 +371,11 @@ pub(in crate::workspace) fn form_from_saved_connection(
     form.icon = conn.icon.clone().unwrap_or_default();
     form.tags = conn.tags.clone();
     form.post_connect_command = conn.post_connect_command().unwrap_or_default().to_string();
+    form.proxy_command_enabled = conn.proxy_command.is_some();
+    form.proxy_command_keychain_id = conn
+        .proxy_command
+        .as_ref()
+        .and_then(|command| command.keychain_id.clone());
     form.upstream_proxy_policy = upstream_proxy_form.policy;
     form.upstream_proxy_protocol = upstream_proxy_form.protocol;
     form.upstream_proxy_host = upstream_proxy_form.host;
@@ -415,12 +394,53 @@ pub(in crate::workspace) fn form_from_saved_connection(
         oxideterm_ssh::ssh_agent_available(identity_agent_selector(&form.identity_agent));
     // Preserve compatibility settings when an existing connection enters edit mode.
     form.legacy_ssh_compatibility = conn.options.legacy_ssh_compatibility;
+    form.connect_timeout_seconds = conn.options.effective_connect_timeout_seconds();
     form.dedicated_new_terminal_connection = conn.options.dedicated_new_terminal_connection;
     form.x11_forwarding = conn.options.x11_forwarding;
-    form.terminal = conn.options.terminal;
+    form.terminal = conn.options.terminal.clone();
     form.save_connection = true;
     form.error = error;
     form
+}
+
+pub(in crate::workspace) fn restore_saved_proxy_chain_in_form(
+    form: &mut NewConnectionForm,
+    connection: &SavedConnection,
+) {
+    // Edit forms retain only non-secret hop metadata plus an index back to the
+    // persisted owner; passwords and passphrases remain in the keychain.
+    form.proxy_hops = connection
+        .proxy_chain
+        .iter()
+        .enumerate()
+        .map(|(persisted_proxy_hop_index, hop)| {
+            proxy_hop_form_from_saved_proxy_hop(persisted_proxy_hop_index, hop)
+        })
+        .collect();
+    form.proxy_chain_expanded = !form.proxy_hops.is_empty();
+}
+
+fn proxy_hop_form_from_saved_proxy_hop(
+    persisted_proxy_hop_index: usize,
+    hop: &SavedProxyHop,
+) -> NewConnectionProxyHop {
+    NewConnectionProxyHop {
+        saved_connection_id: String::new(),
+        persisted_proxy_hop_index: Some(persisted_proxy_hop_index),
+        host: hop.host.clone(),
+        port: hop.port.to_string(),
+        username: hop.username.clone(),
+        auth_tab: ssh_auth_tab_from_saved_auth(&hop.auth),
+        password: String::new(),
+        key_path: hop.auth.key_path().unwrap_or_default().to_string(),
+        managed_key_id: hop.auth.managed_key_id().unwrap_or_default().to_string(),
+        cert_path: hop.auth.cert_path().unwrap_or_default().to_string(),
+        passphrase: String::new(),
+        agent_forwarding: hop.agent_forwarding,
+        identity_agent: hop.identity_agent.clone().unwrap_or_default(),
+        agent_forwarding_socket: hop.agent_forwarding_socket.clone(),
+        legacy_ssh_compatibility: hop.legacy_ssh_compatibility,
+    }
 }
 
 pub(super) fn connection_has_unloaded_keychain_password(conn: &SavedConnection) -> bool {
@@ -526,6 +546,7 @@ pub(in crate::workspace) fn save_request_from_form_with_proxy_hop_prefix(
         None,
     )?;
     request.upstream_proxy = saved_upstream_proxy_policy_from_form(form)?;
+    request.proxy_command = saved_proxy_command_from_form(form);
     Ok(request)
 }
 
@@ -542,6 +563,7 @@ pub(in crate::workspace) fn save_request_from_form_with_existing_auth(
         existing_auth,
     )?;
     request.upstream_proxy = saved_upstream_proxy_policy_from_form(form)?;
+    request.proxy_command = saved_proxy_command_from_form(form);
     Ok(request)
 }
 
@@ -581,6 +603,12 @@ fn validate_save_form_non_secret(
             anyhow::bail!("Upstream proxy username is required");
         }
     }
+    if form.proxy_command_enabled
+        && form.proxy_command.trim().is_empty()
+        && form.proxy_command_keychain_id.is_none()
+    {
+        anyhow::bail!("ProxyCommand value is required");
+    }
     Ok(())
 }
 
@@ -609,10 +637,11 @@ fn connection_draft_from_form_with_proxy_hop_prefix(
         identity_agent: identity_agent_from_form(&form.identity_agent),
         agent_forwarding_socket: form.agent_forwarding_socket.clone(),
         legacy_ssh_compatibility: form.legacy_ssh_compatibility,
+        connect_timeout_seconds: form.connect_timeout_seconds,
         dedicated_new_terminal_connection: form.dedicated_new_terminal_connection,
         x11_forwarding: form.x11_forwarding,
         post_connect_command: form.post_connect_command.clone(),
-        terminal: form.terminal,
+        terminal: form.terminal.clone(),
     }
 }
 
@@ -664,6 +693,15 @@ pub(super) fn auth_draft_from_form(
 pub(super) fn take_secret_from_ui_draft(value: &mut String) -> SecretString {
     // Move the existing allocation into a zeroizing owner at the persistence boundary.
     SecretString::from(std::mem::take(value))
+}
+
+fn saved_proxy_command_from_form(form: &mut NewConnectionForm) -> Option<SavedProxyCommand> {
+    form.proxy_command_enabled.then(|| SavedProxyCommand {
+        keychain_id: form.proxy_command_keychain_id.clone(),
+        // An empty edit draft retains the existing protected value without loading it into UI.
+        plaintext_command: (!form.proxy_command.trim().is_empty())
+            .then(|| take_secret_from_ui_draft(&mut form.proxy_command)),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

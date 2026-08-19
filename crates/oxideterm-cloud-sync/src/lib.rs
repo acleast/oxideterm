@@ -231,6 +231,10 @@ pub struct RawSyncScope {
     #[serde(default)]
     pub sync_serial_profiles: Option<bool>,
     #[serde(default)]
+    pub sync_telnet_profiles: Option<bool>,
+    #[serde(default)]
+    pub sync_mosh_profiles: Option<bool>,
+    #[serde(default)]
     pub sync_remote_desktop_profiles: Option<bool>,
     #[serde(default)]
     pub sync_sensitive_credentials: Option<bool>,
@@ -257,6 +261,10 @@ pub struct SyncScope {
     pub sync_quick_commands: bool,
     #[serde(default = "default_true")]
     pub sync_serial_profiles: bool,
+    #[serde(default = "default_true")]
+    pub sync_telnet_profiles: bool,
+    #[serde(default = "default_true")]
+    pub sync_mosh_profiles: bool,
     #[serde(default = "default_true")]
     pub sync_remote_desktop_profiles: bool,
     #[serde(default)]
@@ -291,6 +299,10 @@ pub struct LocalSyncMetadata {
     #[serde(default)]
     pub serial_profiles_revision: Option<String>,
     #[serde(default)]
+    pub telnet_profiles_revision: Option<String>,
+    #[serde(default)]
+    pub mosh_profiles_revision: Option<String>,
+    #[serde(default)]
     pub remote_desktop_profiles_revision: Option<String>,
     #[serde(default)]
     pub sensitive_credentials_revision: Option<String>,
@@ -314,6 +326,10 @@ pub struct StructuredLocalState {
     #[serde(default)]
     pub serial_profiles: Option<String>,
     #[serde(default)]
+    pub telnet_profiles: Option<String>,
+    #[serde(default)]
+    pub mosh_profiles: Option<String>,
+    #[serde(default)]
     pub remote_desktop_profiles: Option<String>,
     #[serde(default)]
     pub sensitive_credentials: Option<String>,
@@ -334,6 +350,10 @@ pub struct StructuredDirtySections {
     pub quick_commands: bool,
     #[serde(default)]
     pub serial_profiles: bool,
+    #[serde(default)]
+    pub telnet_profiles: bool,
+    #[serde(default)]
+    pub mosh_profiles: bool,
     #[serde(default)]
     pub remote_desktop_profiles: bool,
     #[serde(default)]
@@ -364,6 +384,10 @@ pub struct StructuredSectionRevisions {
     #[serde(default)]
     pub serial_profiles: Option<String>,
     #[serde(default)]
+    pub telnet_profiles: Option<String>,
+    #[serde(default)]
+    pub mosh_profiles: Option<String>,
+    #[serde(default)]
     pub remote_desktop_profiles: Option<String>,
     #[serde(default)]
     pub sensitive_credentials: Option<String>,
@@ -384,6 +408,10 @@ pub struct StructuredApplySelection {
     pub quick_commands: bool,
     #[serde(default)]
     pub serial_profiles: bool,
+    #[serde(default)]
+    pub telnet_profiles: bool,
+    #[serde(default)]
+    pub mosh_profiles: bool,
     #[serde(default)]
     pub remote_desktop_profiles: bool,
     #[serde(default)]
@@ -415,6 +443,10 @@ pub struct StructuredManifestSections {
     pub quick_commands: Option<StructuredObjectEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_profiles: Option<StructuredObjectEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telnet_profiles: Option<StructuredObjectEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mosh_profiles: Option<StructuredObjectEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_desktop_profiles: Option<StructuredObjectEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -476,6 +508,12 @@ pub fn normalize_sync_scope(
             .unwrap_or(true),
         sync_serial_profiles: scope
             .and_then(|scope| scope.sync_serial_profiles)
+            .unwrap_or(true),
+        sync_telnet_profiles: scope
+            .and_then(|scope| scope.sync_telnet_profiles)
+            .unwrap_or(true),
+        sync_mosh_profiles: scope
+            .and_then(|scope| scope.sync_mosh_profiles)
             .unwrap_or(true),
         sync_remote_desktop_profiles: scope
             .and_then(|scope| scope.sync_remote_desktop_profiles)
@@ -559,6 +597,14 @@ pub fn build_structured_local_state(
             .sync_serial_profiles
             .then(|| local_metadata.serial_profiles_revision.clone())
             .flatten(),
+        telnet_profiles: scope
+            .sync_telnet_profiles
+            .then(|| local_metadata.telnet_profiles_revision.clone())
+            .flatten(),
+        mosh_profiles: scope
+            .sync_mosh_profiles
+            .then(|| local_metadata.mosh_profiles_revision.clone())
+            .flatten(),
         remote_desktop_profiles: scope
             .sync_remote_desktop_profiles
             .then(|| local_metadata.remote_desktop_profiles_revision.clone())
@@ -590,6 +636,12 @@ pub fn compute_structured_dirty_sections(
         serial_profiles: scope.sync_serial_profiles
             && current_state.serial_profiles
                 != baseline_state.and_then(|state| state.serial_profiles.clone()),
+        telnet_profiles: scope.sync_telnet_profiles
+            && current_state.telnet_profiles
+                != baseline_state.and_then(|state| state.telnet_profiles.clone()),
+        mosh_profiles: scope.sync_mosh_profiles
+            && current_state.mosh_profiles
+                != baseline_state.and_then(|state| state.mosh_profiles.clone()),
         remote_desktop_profiles: scope.sync_remote_desktop_profiles
             && current_state.remote_desktop_profiles
                 != baseline_state.and_then(|state| state.remote_desktop_profiles.clone()),
@@ -647,6 +699,8 @@ pub fn compute_structured_dirty_sections(
         || dirty_sections.forwards
         || dirty_sections.quick_commands
         || dirty_sections.serial_profiles
+        || dirty_sections.telnet_profiles
+        || dirty_sections.mosh_profiles
         || dirty_sections.remote_desktop_profiles
         || dirty_sections.sensitive_credentials
         || dirty_sections.app_settings.values().any(|dirty| *dirty)
@@ -701,6 +755,16 @@ pub fn build_manifest_section_revisions(
             .serial_profiles
             .as_ref()
             .map(|entry| entry.revision.clone()),
+        telnet_profiles: manifest
+            .sections
+            .telnet_profiles
+            .as_ref()
+            .map(|entry| entry.revision.clone()),
+        mosh_profiles: manifest
+            .sections
+            .mosh_profiles
+            .as_ref()
+            .map(|entry| entry.revision.clone()),
         remote_desktop_profiles: manifest
             .sections
             .remote_desktop_profiles
@@ -745,6 +809,12 @@ pub fn merge_structured_baseline(
     if selection.serial_profiles {
         merged.serial_profiles = next_state.serial_profiles.clone();
     }
+    if selection.telnet_profiles {
+        merged.telnet_profiles = next_state.telnet_profiles.clone();
+    }
+    if selection.mosh_profiles {
+        merged.mosh_profiles = next_state.mosh_profiles.clone();
+    }
     if selection.remote_desktop_profiles {
         merged.remote_desktop_profiles = next_state.remote_desktop_profiles.clone();
     }
@@ -783,6 +853,12 @@ pub fn count_structured_upload_plan_units(
     }
     if scope.sync_serial_profiles {
         total += usize::from(local_metadata.serial_profiles_revision.is_some());
+    }
+    if scope.sync_telnet_profiles {
+        total += usize::from(local_metadata.telnet_profiles_revision.is_some());
+    }
+    if scope.sync_mosh_profiles {
+        total += usize::from(local_metadata.mosh_profiles_revision.is_some());
     }
     if scope.sync_remote_desktop_profiles {
         total += usize::from(local_metadata.remote_desktop_profiles_revision.is_some());
@@ -828,6 +904,14 @@ pub fn quick_commands_object_path(revision: &str) -> String {
 
 pub fn serial_profiles_object_path(revision: &str) -> String {
     format!("structured/serial-profiles/{revision}.json")
+}
+
+pub fn telnet_profiles_object_path(revision: &str) -> String {
+    format!("structured/telnet-profiles/{revision}.json")
+}
+
+pub fn mosh_profiles_object_path(revision: &str) -> String {
+    format!("structured/mosh-profiles/{revision}.json")
 }
 
 pub fn remote_desktop_profiles_object_path(revision: &str) -> String {
@@ -880,15 +964,6 @@ pub fn revision_id(timestamp: DateTime<Utc>, device_id: &str, sequence: u64) -> 
         device_id,
         format!("{sequence:03}")
     )
-}
-
-pub fn next_revision(
-    timestamp: DateTime<Utc>,
-    device_id: &str,
-    previous_sequence: u64,
-) -> (String, u64) {
-    let sequence = previous_sequence + 1;
-    (revision_id(timestamp, device_id, sequence), sequence)
 }
 
 fn default_namespace() -> String {
@@ -983,6 +1058,7 @@ mod tests {
         assert!(scope.sync_connections);
         assert!(scope.sync_forwards);
         assert!(scope.sync_serial_profiles);
+        assert!(scope.sync_mosh_profiles);
         assert!(scope.sync_remote_desktop_profiles);
         assert!(scope.sync_app_settings);
         assert_eq!(scope.app_settings_sections, DEFAULT_APP_SETTINGS_SECTIONS);
@@ -1095,6 +1171,8 @@ mod tests {
             forwards: Some("fwd-1".into()),
             quick_commands: None,
             serial_profiles: None,
+            telnet_profiles: None,
+            mosh_profiles: None,
             remote_desktop_profiles: None,
             sensitive_credentials: None,
             app_settings: BTreeMap::from([
@@ -1200,6 +1278,8 @@ mod tests {
             forwards: Some("fwd-old".into()),
             quick_commands: None,
             serial_profiles: None,
+            telnet_profiles: None,
+            mosh_profiles: None,
             remote_desktop_profiles: None,
             sensitive_credentials: None,
             app_settings: BTreeMap::from([
@@ -1213,6 +1293,8 @@ mod tests {
             forwards: Some("fwd-new".into()),
             quick_commands: None,
             serial_profiles: None,
+            telnet_profiles: None,
+            mosh_profiles: None,
             remote_desktop_profiles: None,
             sensitive_credentials: None,
             app_settings: BTreeMap::from([
@@ -1245,10 +1327,11 @@ mod tests {
     #[test]
     fn preserves_tauri_revision_shape_and_snapshot_paths() {
         let timestamp = Utc.with_ymd_and_hms(2026, 5, 19, 4, 5, 6).unwrap();
-        let (revision, sequence) = next_revision(timestamp, "macos-abcd1234", 8);
 
-        assert_eq!(sequence, 9);
-        assert_eq!(revision, "2026-05-19T04:05:06.000Z-macos-abcd1234-009");
+        assert_eq!(
+            revision_id(timestamp, "macos-abcd1234", 9),
+            "2026-05-19T04:05:06.000Z-macos-abcd1234-009"
+        );
         assert_eq!(
             snapshot_object_paths("/team/default/"),
             SnapshotObjectPaths {

@@ -108,6 +108,8 @@ pub fn cloud_sync_section_signature(
             state.sync_scope.sync_forwards.hash(&mut hasher);
             state.sync_scope.sync_quick_commands.hash(&mut hasher);
             state.sync_scope.sync_serial_profiles.hash(&mut hasher);
+            state.sync_scope.sync_telnet_profiles.hash(&mut hasher);
+            state.sync_scope.sync_mosh_profiles.hash(&mut hasher);
             state
                 .sync_scope
                 .sync_remote_desktop_profiles
@@ -167,6 +169,8 @@ pub fn cloud_sync_rollback_backup_signature(backup: &CloudSyncRollbackBackup) ->
         metadata.forwards.hash(&mut hasher);
         metadata.quick_commands.hash(&mut hasher);
         metadata.serial_profiles.hash(&mut hasher);
+        metadata.telnet_profiles.hash(&mut hasher);
+        metadata.mosh_profiles.hash(&mut hasher);
         metadata.sensitive_credentials.hash(&mut hasher);
     }
     hasher.finish()
@@ -183,6 +187,8 @@ pub fn cloud_sync_history_signature(entry: &CloudSyncHistoryEntry) -> u64 {
     entry.summary.forwards.hash(&mut hasher);
     entry.summary.quick_commands.hash(&mut hasher);
     entry.summary.serial_profiles.hash(&mut hasher);
+    entry.summary.telnet_profiles.hash(&mut hasher);
+    entry.summary.mosh_profiles.hash(&mut hasher);
     entry.summary.sensitive_credentials.hash(&mut hasher);
     entry.summary.has_app_settings.hash(&mut hasher);
     entry.summary.plugin_settings_count.hash(&mut hasher);
@@ -223,9 +229,8 @@ mod tests {
     }
 
     #[test]
-    fn cloud_sync_sections_overview_shows_status_and_recent_history() {
+    fn cloud_sync_sections_follow_tab_preview_and_backup_state() {
         let state = CloudSyncPersistedState::default();
-
         assert_eq!(
             cloud_sync_sections(&state, false, CloudSyncTab::Overview),
             vec![
@@ -234,12 +239,6 @@ mod tests {
                 CloudSyncSection::RecentHistory,
             ]
         );
-    }
-
-    #[test]
-    fn cloud_sync_sections_configure_shows_config_and_guide() {
-        let state = CloudSyncPersistedState::default();
-
         assert_eq!(
             cloud_sync_sections(&state, false, CloudSyncTab::Configure),
             vec![
@@ -252,15 +251,9 @@ mod tests {
                 CloudSyncSection::Guide,
             ]
         );
-    }
-
-    #[test]
-    fn cloud_sync_sections_history_keeps_history_and_backups() {
         let mut state = CloudSyncPersistedState::default();
         state.rollback_backups.push(rollback_backup());
-
         let sections = cloud_sync_sections(&state, true, CloudSyncTab::History);
-
         assert_eq!(sections.last(), Some(&CloudSyncSection::Rollback));
         assert_eq!(
             sections,

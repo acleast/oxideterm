@@ -141,6 +141,7 @@ impl WorkspaceApp {
         // preventing a held key or mouse button from remaining active remotely.
         self.release_active_remote_desktop_inputs(cx);
         self.finish_sidebar_resize(cx);
+        self.finish_embedded_sftp_sidebar_resize(cx);
         self.finish_ai_sidebar_resize(cx);
         self.finish_sftp_pane_resize(cx);
         self.finish_sftp_queue_resize(cx);
@@ -148,6 +149,7 @@ impl WorkspaceApp {
         // A locked workspace must not keep sending unattended terminal input.
         self.terminal_command_sender
             .update(cx, |sender, cx| sender.stop_all(cx));
+        self.suspend_public_mcp_runtime(cx);
         self.finish_split_drag(cx);
         self.close_terminal_command_overlays(cx);
         self.clear_workspace_tooltip("activity-app-lock", cx);
@@ -315,6 +317,7 @@ impl WorkspaceApp {
                         this.app_lock.lock_after_configure = false;
                         this.clear_app_lock_input_state();
                         if should_lock {
+                            this.suspend_public_mcp_runtime(cx);
                             this.app_lock.locked = true;
                             this.focused_settings_input =
                                 Some(SettingsInput::AppLockCurrentPassword);

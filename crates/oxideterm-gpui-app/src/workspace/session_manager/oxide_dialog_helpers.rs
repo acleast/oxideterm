@@ -189,6 +189,8 @@ pub(super) fn oxide_export_has_selected_content(dialog: &OxideExportDialogState)
         || (dialog.include_app_settings && !dialog.selected_app_settings_sections.is_empty())
         || dialog.include_quick_commands
         || dialog.include_serial_profiles
+        || dialog.include_telnet_profiles
+        || dialog.include_mosh_profiles
         || dialog.include_remote_desktop_profiles
         || (dialog.include_plugin_settings
             && oxide_export_selected_plugin_setting_count(dialog) > 0)
@@ -205,6 +207,8 @@ pub(super) fn oxide_import_has_selected_content(dialog: &OxideImportDialogState)
             && !dialog.selected_app_settings_sections.is_empty())
         || (preview.has_quick_commands && dialog.import_quick_commands)
         || (preview.serial_profiles_count > 0 && dialog.import_serial_profiles)
+        || (preview.telnet_profiles_count > 0 && dialog.import_telnet_profiles)
+        || (preview.mosh_profiles_count > 0 && dialog.import_mosh_profiles)
         || (preview.plugin_settings_count > 0
             && dialog.import_plugin_settings
             && !dialog.selected_plugin_ids.is_empty())
@@ -270,16 +274,13 @@ pub(super) fn oxide_export_footer_body_inputs(
 pub(super) fn session_manager_input_is_active(
     input: SessionManagerInput,
     session_manager_tab_active: bool,
-    saved_connections_sidebar_active: bool,
     import_dialog: Option<&OxideImportDialogState>,
     export_dialog: Option<&OxideExportDialogState>,
 ) -> bool {
     // Import and export are workspace-level dialogs and may be opened from
     // Settings. Their text fields must remain active independently of the tab
-    // underneath the modal. SavedSearch belongs to the persistent sidebar, so
-    // its input ownership follows that surface instead of the active tab.
-    (input == SessionManagerInput::SavedSearch && saved_connections_sidebar_active)
-        || (input != SessionManagerInput::SavedSearch && session_manager_tab_active)
+    // underneath the modal.
+    session_manager_tab_active
         || import_dialog
             .is_some_and(|dialog| oxide_import_footer_body_inputs(dialog).contains(&input))
         || export_dialog
@@ -343,6 +344,7 @@ pub(super) fn oxide_settings_field_label(field: &str, i18n: &oxideterm_i18n::I18
         "renderer" => i18n.t("settings_view.terminal.renderer"),
         "adaptiveRenderer" => i18n.t("settings_view.terminal.adaptive_renderer"),
         "showFpsOverlay" => i18n.t("settings_view.terminal.show_performance_overlay"),
+        "highlightTabOnNewOutput" => i18n.t("settings_view.terminal.highlight_tab_on_new_output"),
         "pasteProtection" => i18n.t("settings_view.terminal.paste_protection"),
         "smartCopy" => i18n.t("settings_view.terminal.smart_copy"),
         "osc52Clipboard" => i18n.t("settings_view.terminal.osc52_clipboard"),

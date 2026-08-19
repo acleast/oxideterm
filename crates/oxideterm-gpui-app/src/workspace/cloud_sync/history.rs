@@ -151,6 +151,7 @@ impl CloudSyncPageRenderer {
                 ("forwards", entry.summary.forwards.to_string()),
                 ("quickCommands", entry.summary.quick_commands.to_string()),
                 ("serialProfiles", entry.summary.serial_profiles.to_string()),
+                ("telnetProfiles", entry.summary.telnet_profiles.to_string()),
                 (
                     "sensitiveCredentials",
                     entry.summary.sensitive_credentials.to_string(),
@@ -541,6 +542,9 @@ impl CloudSyncListRenderProjection {
         match cloud_sync_error_message_spec(error) {
             CloudSyncErrorMessageSpec::Raw(message) => message,
             CloudSyncErrorMessageSpec::Key(key) => self.i18n.t(key),
+            CloudSyncErrorMessageSpec::KeyWithDetail { key, detail } => {
+                format!("{} ({detail})", self.i18n.t(key))
+            }
             CloudSyncErrorMessageSpec::SnapshotTooLarge { limit } => self.replace(
                 "plugin.cloud_sync.errors.snapshot_too_large",
                 &[("limit", limit.unwrap_or_else(|| "—".to_string()))],
@@ -695,6 +699,7 @@ impl CloudSyncWorkspaceEntity {
                 forwards,
                 quick_commands,
                 serial_profiles,
+                telnet_profiles,
                 sensitive_credentials,
                 plugin_settings_count,
                 size,
@@ -705,6 +710,7 @@ impl CloudSyncWorkspaceEntity {
                     ("forwards", forwards.to_string()),
                     ("quickCommands", quick_commands.to_string()),
                     ("serialProfiles", serial_profiles.to_string()),
+                    ("telnetProfiles", telnet_profiles.to_string()),
                     ("sensitiveCredentials", sensitive_credentials.to_string()),
                     ("pluginSettingsCount", plugin_settings_count.to_string()),
                     ("size", size),
@@ -785,6 +791,7 @@ impl CloudSyncWorkspaceEntity {
                 ("forwards", entry.summary.forwards.to_string()),
                 ("quickCommands", entry.summary.quick_commands.to_string()),
                 ("serialProfiles", entry.summary.serial_profiles.to_string()),
+                ("telnetProfiles", entry.summary.telnet_profiles.to_string()),
                 (
                     "sensitiveCredentials",
                     entry.summary.sensitive_credentials.to_string(),

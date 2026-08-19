@@ -144,35 +144,25 @@ pub(in crate::workspace) enum OnboardingImportState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ONBOARDING_FONT_OPTIONS, disclaimer_accepted_from_settings};
-    use oxideterm_settings::{FontFamily, PersistedSettings};
+    use super::disclaimer_accepted_from_settings;
+    use oxideterm_settings::PersistedSettings;
 
     #[test]
-    fn persisted_disclaimer_acceptance_restores_without_completed_onboarding() {
-        let mut settings = PersistedSettings::default();
-        settings.onboarding_disclaimer_accepted = true;
-
-        assert!(disclaimer_accepted_from_settings(&settings));
-    }
-
-    #[test]
-    fn completed_legacy_onboarding_implies_disclaimer_acceptance() {
-        let mut settings = PersistedSettings::default();
-        settings.onboarding_completed = true;
-
-        assert!(disclaimer_accepted_from_settings(&settings));
-    }
-
-    #[test]
-    fn onboarding_fonts_are_bundled_or_custom() {
-        assert_eq!(
-            ONBOARDING_FONT_OPTIONS.map(|(family, _, bundled)| (family, bundled)),
-            [
-                (FontFamily::Jetbrains, true),
-                (FontFamily::Meslo, true),
-                (FontFamily::Maple, true),
-                (FontFamily::Custom, false),
-            ]
-        );
+    fn persisted_and_legacy_onboarding_accept_the_disclaimer() {
+        for mut settings in [
+            PersistedSettings {
+                onboarding_disclaimer_accepted: true,
+                ..PersistedSettings::default()
+            },
+            PersistedSettings {
+                onboarding_completed: true,
+                ..PersistedSettings::default()
+            },
+        ] {
+            assert!(disclaimer_accepted_from_settings(&settings));
+            settings.onboarding_disclaimer_accepted = false;
+            settings.onboarding_completed = false;
+            assert!(!disclaimer_accepted_from_settings(&settings));
+        }
     }
 }

@@ -15,13 +15,13 @@ use oxideterm_ai::{
     update_provider as ai_update_provider_values,
 };
 use oxideterm_settings::{
-    AI_TOOL_CANCEL_BACKGROUND_TASK, AI_TOOL_CONTROL_HOST_TOOL, AI_TOOL_CREATE_BACKGROUND_TASK,
-    AI_TOOL_GET_BACKGROUND_TASK, AI_TOOL_GET_CLOUD_SYNC_STATE, AI_TOOL_GET_TRANSPORT_SESSION_STATE,
-    AI_TOOL_INSPECT_HOST_TOOLS, AI_TOOL_LIST_BACKGROUND_TASKS, AI_TOOL_LIST_CREDENTIALS,
-    AI_TOOL_LIST_FORWARDS, AI_TOOL_LIST_PLUGINS, AI_TOOL_LIST_REMOTE_DESKTOP_SESSIONS,
-    AI_TOOL_LIST_TRANSPORT_PROFILES, AI_TOOL_LOAD_SKILL, AI_TOOL_MANAGE_CLOUD_SYNC,
-    AI_TOOL_MANAGE_CREDENTIAL, AI_TOOL_MANAGE_FORWARD, AI_TOOL_MANAGE_PLUGIN,
-    AI_TOOL_MANAGE_REMOTE_DESKTOP_SESSION, AI_TOOL_MANAGE_SERIAL_SESSION,
+    AI_TOOL_CANCEL_BACKGROUND_TASK, AI_TOOL_CONFIGURE_CLOUD_SYNC, AI_TOOL_CONTROL_HOST_TOOL,
+    AI_TOOL_CREATE_BACKGROUND_TASK, AI_TOOL_GET_BACKGROUND_TASK, AI_TOOL_GET_CLOUD_SYNC_STATE,
+    AI_TOOL_GET_TRANSPORT_SESSION_STATE, AI_TOOL_INSPECT_HOST_TOOLS, AI_TOOL_LIST_BACKGROUND_TASKS,
+    AI_TOOL_LIST_CREDENTIALS, AI_TOOL_LIST_FORWARDS, AI_TOOL_LIST_PLUGINS,
+    AI_TOOL_LIST_REMOTE_DESKTOP_SESSIONS, AI_TOOL_LIST_TRANSPORT_PROFILES, AI_TOOL_LOAD_SKILL,
+    AI_TOOL_MANAGE_CLOUD_SYNC, AI_TOOL_MANAGE_CREDENTIAL, AI_TOOL_MANAGE_FORWARD,
+    AI_TOOL_MANAGE_PLUGIN, AI_TOOL_MANAGE_REMOTE_DESKTOP_SESSION, AI_TOOL_MANAGE_SERIAL_SESSION,
     AI_TOOL_MANAGE_TELNET_SESSION, AI_TOOL_OPEN_TRANSPORT_PROFILE, AI_TOOL_READ_SKILL_RESOURCE,
     AcpAgentAuthState, AcpAgentCapabilityPolicy, AcpAgentConfig, AcpAgentRuntimeStatus,
     PersistedSettings,
@@ -132,7 +132,9 @@ pub struct AiModelContextWindowRow {
 pub enum AcpAgentPreset {
     ClaudeCode,
     Codex,
+    GeminiCli,
     GithubCopilot,
+    OpenCode,
 }
 
 struct AcpAgentPresetTemplate {
@@ -165,12 +167,26 @@ impl AcpAgentPreset {
                 command: "oxideterm-native",
                 args: &["--acp-adapter", "codex"],
             },
+            Self::GeminiCli => AcpAgentPresetTemplate {
+                base_id: "gemini-cli",
+                display_name: "Gemini CLI",
+                command: "gemini",
+                // Gemini CLI exposes its native ACP server over stdio.
+                args: &["--acp"],
+            },
             Self::GithubCopilot => AcpAgentPresetTemplate {
                 base_id: "github-copilot",
                 display_name: "GitHub Copilot",
                 command: "copilot",
                 // GitHub Copilot CLI exposes a native ACP stdio server.
                 args: &["--acp", "--stdio"],
+            },
+            Self::OpenCode => AcpAgentPresetTemplate {
+                base_id: "opencode",
+                display_name: "OpenCode",
+                command: "opencode",
+                // OpenCode exposes its native ACP server over stdio.
+                args: &["acp"],
             },
         }
     }
@@ -430,6 +446,12 @@ pub fn ai_tool_policy_groups(settings: &PersistedSettings) -> Vec<AiToolPolicyGr
                     key: Some(AI_TOOL_MANAGE_CLOUD_SYNC),
                     label_key: "settings_view.ai.tool_policy_manage_cloud_sync",
                     checked: checked(AI_TOOL_MANAGE_CLOUD_SYNC),
+                    locked: false,
+                },
+                AiToolPolicyItem {
+                    key: Some(AI_TOOL_CONFIGURE_CLOUD_SYNC),
+                    label_key: "settings_view.ai.tool_policy_configure_cloud_sync",
+                    checked: checked(AI_TOOL_CONFIGURE_CLOUD_SYNC),
                     locked: false,
                 },
                 AiToolPolicyItem {
@@ -996,7 +1018,9 @@ mod tests {
 
         ai_add_acp_agent_preset(&mut settings, AcpAgentPreset::ClaudeCode);
         ai_add_acp_agent_preset(&mut settings, AcpAgentPreset::Codex);
+        ai_add_acp_agent_preset(&mut settings, AcpAgentPreset::GeminiCli);
         ai_add_acp_agent_preset(&mut settings, AcpAgentPreset::GithubCopilot);
+        ai_add_acp_agent_preset(&mut settings, AcpAgentPreset::OpenCode);
         ai_add_acp_agent_preset(&mut settings, AcpAgentPreset::Codex);
 
         let claude = &settings.ai.acp_agents[0];
@@ -1016,7 +1040,14 @@ mod tests {
             vec!["--acp-adapter".to_string(), "codex".to_string()]
         );
 
-        let copilot = &settings.ai.acp_agents[2];
+        let gemini = &settings.ai.acp_agents[2];
+        assert_eq!(gemini.id, "gemini-cli");
+        assert_eq!(gemini.display_name, "Gemini CLI");
+        assert_eq!(gemini.command, "gemini");
+        assert_eq!(gemini.args, vec!["--acp".to_string()]);
+        assert!(gemini.env.is_empty());
+
+        let copilot = &settings.ai.acp_agents[3];
         assert_eq!(copilot.id, "github-copilot");
         assert_eq!(copilot.command, "copilot");
         assert_eq!(
@@ -1024,7 +1055,14 @@ mod tests {
             vec!["--acp".to_string(), "--stdio".to_string()]
         );
 
-        assert_eq!(settings.ai.acp_agents[3].id, "codex-2");
+        let opencode = &settings.ai.acp_agents[4];
+        assert_eq!(opencode.id, "opencode");
+        assert_eq!(opencode.display_name, "OpenCode");
+        assert_eq!(opencode.command, "opencode");
+        assert_eq!(opencode.args, vec!["acp".to_string()]);
+        assert!(opencode.env.is_empty());
+
+        assert_eq!(settings.ai.acp_agents[5].id, "codex-2");
     }
 }
 

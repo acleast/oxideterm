@@ -546,15 +546,10 @@ impl WorkspaceApp {
         let session_manager_tab_active = self
             .active_tab(cx)
             .is_some_and(|tab| tab.kind == oxideterm_workspace::TabKind::SessionManager);
-        let settings = self.settings_store.settings();
-        let saved_connections_sidebar_active = !self.sidebar_collapsed
-            && !settings.sidebar_ui.zen_mode
-            && self.effective_sidebar_panel_section() == SidebarSection::Connections;
         let session_manager = self.session_manager.read(cx);
         session_manager_input_is_active(
             input,
             session_manager_tab_active,
-            saved_connections_sidebar_active,
             session_manager.oxide_import_dialog.as_ref(),
             session_manager.oxide_export_dialog.as_ref(),
         )
@@ -569,7 +564,6 @@ impl WorkspaceApp {
         let input = session_manager.focused_input?;
         session_manager_input_is_active(
             input,
-            false,
             false,
             session_manager.oxide_import_dialog.as_ref(),
             session_manager.oxide_export_dialog.as_ref(),
@@ -1107,6 +1101,8 @@ impl WorkspaceApp {
                         conflict_strategy: dialog.conflict_strategy,
                         import_forwards: dialog.import_forwards,
                         import_serial_profiles: dialog.import_serial_profiles,
+                        import_telnet_profiles: dialog.import_telnet_profiles,
+                        import_mosh_profiles: dialog.import_mosh_profiles,
                         import_portable_secrets: dialog.import_portable_secrets,
                         restore_managed_keys: dialog.restore_managed_keys,
                         restore_managed_key_passphrases: dialog.restore_managed_key_passphrases,
@@ -1224,6 +1220,8 @@ impl WorkspaceApp {
                             dialog.import_app_settings = preview.has_app_settings;
                             dialog.import_quick_commands = preview.has_quick_commands;
                             dialog.import_serial_profiles = preview.serial_profiles_count > 0;
+                            dialog.import_telnet_profiles = preview.telnet_profiles_count > 0;
+                            dialog.import_mosh_profiles = preview.mosh_profiles_count > 0;
                             dialog.import_plugin_settings = preview.plugin_settings_count > 0;
                             dialog.import_forwards = preview.total_forwards > 0;
                             dialog.import_portable_secrets = false;
@@ -1394,6 +1392,10 @@ impl WorkspaceApp {
             skipped_quick_commands: result.skipped_quick_commands,
             imported_serial_profiles: result.envelope.imported_serial_profiles,
             skipped_serial_profiles: result.envelope.skipped_serial_profiles,
+            imported_telnet_profiles: result.envelope.imported_telnet_profiles,
+            skipped_telnet_profiles: result.envelope.skipped_telnet_profiles,
+            imported_mosh_profiles: result.envelope.imported_mosh_profiles,
+            skipped_mosh_profiles: result.envelope.skipped_mosh_profiles,
             quick_commands_errors: result.quick_commands_errors.clone(),
             imported_plugin_settings: result.imported_plugin_settings,
             skipped_plugin_settings: result.skipped_plugin_settings,
@@ -1422,6 +1424,23 @@ impl WorkspaceApp {
                         "{{count}}",
                         &result_view.imported_serial_profiles.to_string(),
                     ),
+            );
+        }
+        if result_view.imported_telnet_profiles > 0 {
+            parts.push(
+                self.i18n
+                    .t("modals.import.imported_telnet_profiles")
+                    .replace(
+                        "{{count}}",
+                        &result_view.imported_telnet_profiles.to_string(),
+                    ),
+            );
+        }
+        if result_view.imported_mosh_profiles > 0 {
+            parts.push(
+                self.i18n
+                    .t("modals.import.imported_mosh_profiles")
+                    .replace("{{count}}", &result_view.imported_mosh_profiles.to_string()),
             );
         }
         if result_view.imported_plugin_settings > 0 {
@@ -1478,6 +1497,8 @@ impl WorkspaceApp {
             || (dialog.include_app_settings && !dialog.selected_app_settings_sections.is_empty())
             || dialog.include_quick_commands
             || dialog.include_serial_profiles
+            || dialog.include_telnet_profiles
+            || dialog.include_mosh_profiles
             || dialog.include_remote_desktop_profiles
             || (dialog.include_plugin_settings && !dialog.selected_plugin_ids.is_empty())
             || dialog.include_portable_secrets
@@ -1711,6 +1732,32 @@ impl WorkspaceApp {
         } else {
             None
         };
+        let telnet_profiles_json = if dialog.include_telnet_profiles {
+            Some(
+                serde_json::to_string_pretty(
+                    &self
+                        .connection_store
+                        .export_telnet_profiles_snapshot()
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        let mosh_profiles_json = if dialog.include_mosh_profiles {
+            Some(
+                serde_json::to_string_pretty(
+                    &self
+                        .connection_store
+                        .export_mosh_profiles_snapshot()
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
         let remote_desktop_profiles_json = if dialog.include_remote_desktop_profiles {
             Some(
                 serde_json::to_string_pretty(
@@ -1806,6 +1853,8 @@ impl WorkspaceApp {
             app_settings_json,
             quick_commands_json,
             serial_profiles_json,
+            telnet_profiles_json,
+            mosh_profiles_json,
             remote_desktop_profiles_json,
             plugin_settings,
             portable_secrets,

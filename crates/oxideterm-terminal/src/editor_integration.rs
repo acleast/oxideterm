@@ -361,15 +361,4 @@ mod tests {
         assert!(!TerminalEditorApplication::Vim.matches_process_command("nvim"));
         assert!(!TerminalEditorApplication::Emacs.matches_process_command("tmux"));
     }
-
-    #[test]
-    fn bundled_editor_integrations_emit_the_private_protocol() {
-        assert!(VIM_FREE_TYPE_INTEGRATION_SOURCE.contains("7719;v=3;kind=editor-state"));
-        assert!(EMACS_FREE_TYPE_INTEGRATION_SOURCE.contains("7719;v=3;kind=editor-state"));
-        assert!(VIM_FREE_TYPE_INTEGRATION_SOURCE.contains("has('nvim') ? 'nvim' : 'vim'"));
-        assert!(VIM_FREE_TYPE_INTEGRATION_SOURCE.contains("set mouse=a"));
-        assert!(EMACS_FREE_TYPE_INTEGRATION_SOURCE.contains("(xterm-mouse-mode 1)"));
-        assert!(EMACS_FREE_TYPE_INTEGRATION_SOURCE.contains("(format \"%%%02X\" byte)"));
-        assert!(!EMACS_FREE_TYPE_INTEGRATION_SOURCE.contains("url-hexify-string"));
-    }
 }

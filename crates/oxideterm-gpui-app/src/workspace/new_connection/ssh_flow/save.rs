@@ -6,8 +6,283 @@ use crate::workspace::{
     WorkspaceNotificationKind, WorkspaceNotificationScope, WorkspaceNotificationSeverity,
 };
 use gpui::App;
-use oxideterm_connections::{ConnectionStore, SavedConnection};
+use oxideterm_connections::{ConnectionStore, SavedAuth, SavedConnection, SavedProxyHop};
 use oxideterm_gpui_terminal::TerminalNoticeVariant;
+
+struct PreparedMoshConnect {
+    config: SshConfig,
+    title: String,
+    options: MoshConnectionOptions,
+}
+
+fn parse_mosh_udp_port(value: &str) -> anyhow::Result<SavedMoshUdpPortSelection> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(SavedMoshUdpPortSelection::Automatic);
+    }
+    if let Some((start, end)) = value.split_once(':') {
+        let start = start.trim().parse::<u16>()?;
+        let end = end.trim().parse::<u16>()?;
+        if start == 0 || end == 0 || start > end {
+            anyhow::bail!("invalid Mosh UDP port range");
+        }
+        return Ok(SavedMoshUdpPortSelection::Range { start, end });
+    }
+    let port = value.parse::<u16>()?;
+    if port == 0 {
+        anyhow::bail!("invalid Mosh UDP port");
+    }
+    Ok(SavedMoshUdpPortSelection::Fixed { port })
+}
+
+fn mosh_password_draft_is_persistent(form: &NewConnectionForm) -> bool {
+    form.save_password || (form.mosh_profile_id.is_some() && !form.password.is_empty())
+}
+
+fn saved_mosh_auth_from_form(form: &mut NewConnectionForm) -> SavedAuth {
+    match form.auth_tab {
+        SshAuthTab::Password => {
+            // Editing follows SSH property semantics: a newly entered password is
+            // an explicit replacement and crosses directly into protected storage.
+            let persist_password = mosh_password_draft_is_persistent(form);
+            let plaintext_password = (persist_password && !form.password.is_empty())
+                .then(|| SecretString::from(std::mem::take(&mut form.password)));
+            SavedAuth::Password {
+                // An unchanged edit keeps the protected value by reference; a replacement
+                // reuses that same owner while new profiles honor the save-password choice.
+                keychain_id: persist_password
+                    .then(|| form.saved_password_keychain_id.clone())
+                    .flatten(),
+                plaintext_password,
+            }
+        }
+        SshAuthTab::Agent => SavedAuth::Agent,
+        SshAuthTab::DefaultKey => SavedAuth::Key {
+            key_path: String::new(),
+            has_passphrase: !form.passphrase.is_empty(),
+            passphrase_keychain_id: None,
+            plaintext_passphrase: (!form.passphrase.is_empty())
+                .then(|| SecretString::from(std::mem::take(&mut form.passphrase))),
+        },
+        SshAuthTab::SshKey => SavedAuth::Key {
+            key_path: form.key_path.trim().to_string(),
+            has_passphrase: !form.passphrase.is_empty(),
+            passphrase_keychain_id: None,
+            plaintext_passphrase: (!form.passphrase.is_empty())
+                .then(|| SecretString::from(std::mem::take(&mut form.passphrase))),
+        },
+        SshAuthTab::ManagedKey => SavedAuth::ManagedKey {
+            key_id: form.managed_key_id.trim().to_string(),
+            passphrase_keychain_id: None,
+            plaintext_passphrase: (!form.passphrase.is_empty())
+                .then(|| SecretString::from(std::mem::take(&mut form.passphrase))),
+        },
+        SshAuthTab::Certificate => SavedAuth::Certificate {
+            key_path: form.key_path.trim().to_string(),
+            cert_path: form.cert_path.trim().to_string(),
+            has_passphrase: !form.passphrase.is_empty(),
+            passphrase_keychain_id: None,
+            plaintext_passphrase: (!form.passphrase.is_empty())
+                .then(|| SecretString::from(std::mem::take(&mut form.passphrase))),
+        },
+        SshAuthTab::TwoFactor => SavedAuth::KeyboardInteractive,
+    }
+}
+
+fn runtime_mosh_auth_from_form(form: &mut NewConnectionForm) -> AuthMethod {
+    match form.auth_tab {
+        SshAuthTab::Password => {
+            AuthMethod::password_secret(take_zeroizing_secret(&mut form.password))
+        }
+        SshAuthTab::Agent => AuthMethod::Agent,
+        SshAuthTab::DefaultKey => AuthMethod::key_secret(
+            "",
+            (!form.passphrase.is_empty()).then(|| take_zeroizing_secret(&mut form.passphrase)),
+        ),
+        SshAuthTab::SshKey => AuthMethod::key_secret(
+            form.key_path.trim().to_string(),
+            (!form.passphrase.is_empty()).then(|| take_zeroizing_secret(&mut form.passphrase)),
+        ),
+        SshAuthTab::ManagedKey => AuthMethod::managed_key_secret(
+            form.managed_key_id.trim().to_string(),
+            (!form.passphrase.is_empty()).then(|| take_zeroizing_secret(&mut form.passphrase)),
+        ),
+        SshAuthTab::Certificate => AuthMethod::certificate_secret(
+            form.key_path.trim().to_string(),
+            form.cert_path.trim().to_string(),
+            (!form.passphrase.is_empty()).then(|| take_zeroizing_secret(&mut form.passphrase)),
+        ),
+        SshAuthTab::TwoFactor => AuthMethod::KeyboardInteractive,
+    }
+}
+
+fn runtime_mosh_auth_from_saved(
+    auth: &SavedAuth,
+    secrets: SavedMoshProfileRuntimeSecrets,
+) -> Option<AuthMethod> {
+    let secret = secrets.auth.map(SecretString::into_zeroizing);
+    Some(match auth {
+        SavedAuth::Password { .. } => AuthMethod::password_secret(secret?),
+        SavedAuth::Key { key_path, .. } => AuthMethod::key_secret(key_path.clone(), secret),
+        SavedAuth::ManagedKey { key_id, .. } => {
+            AuthMethod::managed_key_secret(key_id.clone(), secret)
+        }
+        SavedAuth::Certificate {
+            key_path,
+            cert_path,
+            ..
+        } => AuthMethod::certificate_secret(key_path.clone(), cert_path.clone(), secret),
+        SavedAuth::KeyboardInteractive => AuthMethod::KeyboardInteractive,
+        SavedAuth::Agent => AuthMethod::Agent,
+    })
+}
+
+pub(in crate::workspace) fn mosh_options_from_profile(
+    profile: &oxideterm_connections::MoshProfile,
+) -> MoshConnectionOptions {
+    MoshConnectionOptions {
+        saved_profile_id: Some(profile.id.clone()),
+        server_executable: profile.server_executable.clone(),
+        udp_host_override: profile.udp_host_override.clone(),
+        udp_port: profile.udp_port,
+        ip_family: profile.ip_family,
+        prediction: profile.prediction,
+        locale: profile.locale.clone(),
+        public_mcp_open_token: None,
+    }
+}
+
+fn saved_proxy_hop_auth_copies(
+    connection_store: &ConnectionStore,
+    proxy_hops: &[NewConnectionProxyHop],
+    missing_credentials_message: &str,
+) -> anyhow::Result<Vec<Option<SavedAuth>>> {
+    proxy_hops
+        .iter()
+        .map(|hop| {
+            if hop.saved_connection_id.is_empty() || hop.has_explicit_secret_draft() {
+                return Ok(None);
+            }
+            let saved_connection = connection_store
+                .get(&hop.saved_connection_id)
+                .ok_or_else(|| anyhow::anyhow!(missing_credentials_message.to_string()))?;
+            if !hop.matches_saved_connection(saved_connection) {
+                return Err(anyhow::anyhow!(missing_credentials_message.to_string()));
+            }
+            connection_store
+                .copy_saved_auth_for_new_owner(&saved_connection.auth)
+                .map(Some)
+        })
+        .collect()
+}
+
+fn apply_saved_proxy_hop_auth_copies(
+    request: &mut SaveConnectionRequest,
+    runtime_proxy_hop_count: usize,
+    auth_copies: Vec<Option<SavedAuth>>,
+) {
+    // Runtime ancestors already own their secrets; only form-added hops can reference a
+    // saved connection whose credential must be copied into a new keychain owner.
+    for (proxy_hop, auth_copy) in request
+        .proxy_chain
+        .iter_mut()
+        .skip(runtime_proxy_hop_count)
+        .zip(auth_copies)
+    {
+        if let Some(auth) = auth_copy {
+            proxy_hop.auth = auth;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EditedProxyHopSource {
+    persisted_proxy_hop_index: Option<usize>,
+    has_explicit_secret_draft: bool,
+}
+
+fn preserve_edited_proxy_hop_auth(
+    proxy_chain: &mut [SavedProxyHop],
+    persisted_proxy_chain: &[SavedProxyHop],
+    edit_sources: Vec<EditedProxyHopSource>,
+    saved_auth_copies: Vec<Option<SavedAuth>>,
+    missing_credentials_message: &str,
+) -> anyhow::Result<()> {
+    if proxy_chain.len() != edit_sources.len() || proxy_chain.len() != saved_auth_copies.len() {
+        anyhow::bail!(missing_credentials_message.to_string());
+    }
+
+    for ((request_hop, edit_source), saved_auth_copy) in proxy_chain
+        .iter_mut()
+        .zip(edit_sources)
+        .zip(saved_auth_copies)
+    {
+        if let Some(saved_auth_copy) = saved_auth_copy {
+            request_hop.auth = saved_auth_copy;
+            continue;
+        }
+        if edit_source.has_explicit_secret_draft {
+            continue;
+        }
+        let Some(persisted_proxy_hop_index) = edit_source.persisted_proxy_hop_index else {
+            continue;
+        };
+        let persisted_hop = persisted_proxy_chain
+            .get(persisted_proxy_hop_index)
+            .ok_or_else(|| anyhow::anyhow!(missing_credentials_message.to_string()))?;
+        if !proxy_hop_auth_target_matches(request_hop, persisted_hop) {
+            anyhow::bail!(missing_credentials_message.to_string());
+        }
+        // The unchanged edit row keeps its existing keychain reference; no secret is loaded
+        // into the form or copied into another owner during an in-place connection update.
+        request_hop.auth = persisted_hop.auth.clone();
+    }
+    Ok(())
+}
+
+fn proxy_hop_auth_target_matches(left: &SavedProxyHop, right: &SavedProxyHop) -> bool {
+    left.host == right.host
+        && left.port == right.port
+        && left.username == right.username
+        && match (&left.auth, &right.auth) {
+            (SavedAuth::Password { .. }, SavedAuth::Password { .. })
+            | (SavedAuth::KeyboardInteractive, SavedAuth::KeyboardInteractive)
+            | (SavedAuth::Agent, SavedAuth::Agent) => true,
+            (
+                SavedAuth::Key {
+                    key_path: left_path,
+                    ..
+                },
+                SavedAuth::Key {
+                    key_path: right_path,
+                    ..
+                },
+            ) => left_path == right_path,
+            (
+                SavedAuth::Certificate {
+                    key_path: left_key_path,
+                    cert_path: left_cert_path,
+                    ..
+                },
+                SavedAuth::Certificate {
+                    key_path: right_key_path,
+                    cert_path: right_cert_path,
+                    ..
+                },
+            ) => left_key_path == right_key_path && left_cert_path == right_cert_path,
+            (
+                SavedAuth::ManagedKey {
+                    key_id: left_key_id,
+                    ..
+                },
+                SavedAuth::ManagedKey {
+                    key_id: right_key_id,
+                    ..
+                },
+            ) => left_key_id == right_key_id,
+            _ => false,
+        }
+}
 
 impl WorkspaceApp {
     pub(super) fn report_saved_next_hop_error(&mut self, i18n_key: &str, cx: &mut Context<Self>) {
@@ -164,14 +439,48 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (transport, drill_down_parent_id, mode) = {
+        let (transport, local_shell_id, drill_down_parent_id, mode) = {
             let state = self.connection_form_state(cx);
             (
                 state.form.as_ref().map(|form| form.transport),
+                state
+                    .form
+                    .as_ref()
+                    .and_then(|form| form.local_shell_id.clone()),
                 state.drill_down_parent_node_id.clone(),
                 state.mode(),
             )
         };
+        if transport == Some(NewConnectionTransport::LocalTerminal)
+            && drill_down_parent_id.is_none()
+            && mode == NewConnectionFormMode::NewConnection
+        {
+            // The modal is only another launch surface; the terminal tab owns the local PTY.
+            let selected_shell = self.resolved_local_shell(local_shell_id.as_deref());
+            self.close_new_connection_form(window, cx);
+            if let Some(shell) = selected_shell {
+                let mut terminal_config = self.local_terminal_config();
+                terminal_config.shell = Some(shell.clone());
+                self.edit_settings(
+                    |settings| {
+                        let recent = &mut settings.local_terminal.recent_shell_ids;
+                        recent.retain(|id| id != &shell.id);
+                        recent.insert(0, shell.id.clone());
+                        recent.truncate(5);
+                    },
+                    cx,
+                );
+                let _ = self.create_local_terminal_tab_with_config(
+                    terminal_config,
+                    shell.label,
+                    window,
+                    cx,
+                );
+            } else {
+                let _ = self.create_local_terminal_tab(window, cx);
+            }
+            return;
+        }
         if transport == Some(NewConnectionTransport::Serial)
             && drill_down_parent_id.is_none()
             && mode == NewConnectionFormMode::NewConnection
@@ -184,6 +493,13 @@ impl WorkspaceApp {
             && mode == NewConnectionFormMode::NewConnection
         {
             self.submit_telnet_connection_form(action, window, cx);
+            return;
+        }
+        if transport == Some(NewConnectionTransport::Mosh)
+            && drill_down_parent_id.is_none()
+            && mode == NewConnectionFormMode::NewConnection
+        {
+            self.submit_mosh_connection_form(action, window, cx);
             return;
         }
         if transport
@@ -468,13 +784,29 @@ impl WorkspaceApp {
             },
             None => Vec::new(),
         };
-        self.with_connection_form_mut(cx, |_this, form, _cx| {
+        self.with_connection_form_mut(cx, |this, form, _cx| {
             let form = form?;
-            Some(save_request_from_form_with_proxy_hop_prefix(
-                form,
-                &mut runtime_proxy_hops,
-                None,
-            ))
+            Some((|| {
+                let missing_credentials_message =
+                    this.i18n.t("sessions.saved_next_hop.missing_credentials");
+                let auth_copies = saved_proxy_hop_auth_copies(
+                    &this.connection_store,
+                    &form.proxy_hops,
+                    &missing_credentials_message,
+                )?;
+                let runtime_proxy_hop_count = runtime_proxy_hops.len();
+                let mut request = save_request_from_form_with_proxy_hop_prefix(
+                    form,
+                    &mut runtime_proxy_hops,
+                    None,
+                )?;
+                apply_saved_proxy_hop_auth_copies(
+                    &mut request,
+                    runtime_proxy_hop_count,
+                    auth_copies,
+                );
+                Ok(request)
+            })())
         })
     }
 
@@ -510,9 +842,19 @@ impl WorkspaceApp {
                     parity: form.serial_parity,
                     flow_control: form.serial_flow_control,
                 };
-                let should_save_profile = action != NewConnectionSubmitAction::Connect;
+                let editing_profile_id = form.serial_profile_id.clone();
+                let existing_connect_on_open = editing_profile_id.as_deref().and_then(|id| {
+                    this.connection_store
+                        .serial_profiles()
+                        .iter()
+                        .find(|profile| profile.id == id)
+                        .map(|profile| profile.connect_on_open)
+                });
+                // Editing always updates the persisted asset and preserves hidden sync metadata.
+                let should_save_profile =
+                    editing_profile_id.is_some() || action != NewConnectionSubmitAction::Connect;
                 let save_request = should_save_profile.then(|| SaveSerialProfileRequest {
-                    id: None,
+                    id: editing_profile_id,
                     name: serial_profile_name_or_port(&form.serial_profile_name, &port_path),
                     group: serial_profile_group_from_form(&form.group, &this.i18n),
                     icon: asset_icon_from_form(&form.icon),
@@ -524,7 +866,7 @@ impl WorkspaceApp {
                     stop_bits: Some(form.serial_stop_bits),
                     parity: Some(serial_profile_parity_from_terminal(form.serial_parity)),
                     flow_control: Some(serial_profile_flow_from_terminal(form.serial_flow_control)),
-                    connect_on_open: None,
+                    connect_on_open: existing_connect_on_open,
                 });
                 form.pending = true;
                 form.error = None;
@@ -631,9 +973,19 @@ impl WorkspaceApp {
                     cx.notify();
                     return None;
                 };
-                let should_save_profile = action != NewConnectionSubmitAction::Connect;
+                let editing_profile_id = form.telnet_profile_id.clone();
+                let existing_connect_on_open = editing_profile_id.as_deref().and_then(|id| {
+                    this.connection_store
+                        .telnet_profiles()
+                        .iter()
+                        .find(|profile| profile.id == id)
+                        .map(|profile| profile.connect_on_open)
+                });
+                // Editing always updates the persisted asset and preserves hidden sync metadata.
+                let should_save_profile =
+                    editing_profile_id.is_some() || action != NewConnectionSubmitAction::Connect;
                 let save_request = should_save_profile.then(|| SaveTelnetProfileRequest {
-                    id: None,
+                    id: editing_profile_id,
                     name: telnet_profile_name_or_endpoint(&form.telnet_profile_name, &host, port),
                     group: serial_profile_group_from_form(&form.group, &this.i18n),
                     icon: asset_icon_from_form(&form.icon),
@@ -641,11 +993,11 @@ impl WorkspaceApp {
                     icon_background_color: asset_color_from_form(&form.icon_background_color),
                     host: host.clone(),
                     port,
-                    terminal: form.terminal,
-                    connect_on_open: None,
+                    terminal: form.terminal.clone(),
+                    connect_on_open: existing_connect_on_open,
                 });
                 let config = TelnetSessionConfig { host, port };
-                let terminal_options = form.terminal;
+                let terminal_options = form.terminal.clone();
                 form.pending = true;
                 form.error = None;
                 Some((config, terminal_options, save_request))
@@ -659,6 +1011,7 @@ impl WorkspaceApp {
                 save_request.expect("telnet save action must build a telnet profile request");
             match self.connection_store.upsert_telnet_profile(request) {
                 Ok(_) => {
+                    self.queue_cloud_sync_dirty_refresh(cx);
                     self.update_connection_form_state(cx, ConnectionFormState::clear);
                 }
                 Err(error) => {
@@ -677,12 +1030,16 @@ impl WorkspaceApp {
             return;
         }
 
+        let mut connected_profile_id = None;
         if action == NewConnectionSubmitAction::SaveAndConnect {
             let request = save_request
                 .take()
                 .expect("telnet save-and-open action must build a telnet profile request");
             match self.connection_store.upsert_telnet_profile(request) {
-                Ok(_) => {}
+                Ok(profile) => {
+                    connected_profile_id = Some(profile.id);
+                    self.queue_cloud_sync_dirty_refresh(cx);
+                }
                 Err(error) => {
                     self.update_connection_form_state(cx, |state| {
                         if let Some(form) = state.form.as_mut() {
@@ -702,10 +1059,13 @@ impl WorkspaceApp {
         // Telnet is opened as a native local terminal transport. It does not
         // create an SSH node, so SSH-only saved-connection/test flows stay out.
         match self.create_telnet_terminal_tab(config, terminal_options, window, cx) {
-            Ok(_) => {
+            Ok(session_id) => {
                 if let Some(request) = save_request {
                     match self.connection_store.upsert_telnet_profile(request) {
-                        Ok(_) => {}
+                        Ok(profile) => {
+                            connected_profile_id = Some(profile.id);
+                            self.queue_cloud_sync_dirty_refresh(cx);
+                        }
                         Err(error) => {
                             let message = format!(
                                 "{}: {error}",
@@ -716,6 +1076,10 @@ impl WorkspaceApp {
                             });
                         }
                     }
+                }
+                if let Some(profile_id) = connected_profile_id {
+                    self.telnet_terminal_profile_ids
+                        .insert(session_id, profile_id);
                 }
                 self.update_connection_form_state(cx, ConnectionFormState::clear);
             }
@@ -731,14 +1095,215 @@ impl WorkspaceApp {
         cx.notify();
     }
 
+    pub(super) fn submit_mosh_connection_form(
+        &mut self,
+        action: NewConnectionSubmitAction,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prepared = self.with_connection_form_mut(cx, |this, form, cx| {
+            let form = form?;
+            let host = form.host.trim().to_string();
+            let username = form.username.trim().to_string();
+            let ssh_port = form
+                .port
+                .trim()
+                .parse::<u16>()
+                .ok()
+                .filter(|port| *port > 0);
+            if host.is_empty() || username.is_empty() || ssh_port.is_none() {
+                form.error = Some(this.i18n.t("ssh.form.validation_required"));
+                cx.notify();
+                return None;
+            }
+            match form.auth_tab {
+                SshAuthTab::SshKey if form.key_path.trim().is_empty() => {
+                    form.error = Some(this.i18n.t("ssh.form.key_path_required"));
+                    cx.notify();
+                    return None;
+                }
+                SshAuthTab::ManagedKey if form.managed_key_id.trim().is_empty() => {
+                    form.error = Some(this.i18n.t("ssh.form.managed_key_required"));
+                    cx.notify();
+                    return None;
+                }
+                SshAuthTab::Certificate
+                    if form.key_path.trim().is_empty() || form.cert_path.trim().is_empty() =>
+                {
+                    form.error = Some(this.i18n.t("ssh.form.certificate_paths_required"));
+                    cx.notify();
+                    return None;
+                }
+                _ => {}
+            }
+            let udp_port = match parse_mosh_udp_port(&form.mosh_udp_port) {
+                Ok(udp_port) => udp_port,
+                Err(_) => {
+                    form.error = Some(this.i18n.t("mosh.form.invalid_udp_port"));
+                    cx.notify();
+                    return None;
+                }
+            };
+            let server_executable = form.mosh_server_executable.trim().to_string();
+            if server_executable.is_empty() {
+                form.error = Some(this.i18n.t("mosh.form.server_executable_required"));
+                cx.notify();
+                return None;
+            }
+            let title = if form.name.trim().is_empty() {
+                format!("{username}@{host}")
+            } else {
+                form.name.trim().to_string()
+            };
+            let options = MoshConnectionOptions {
+                saved_profile_id: None,
+                server_executable: server_executable.clone(),
+                udp_host_override: (!form.mosh_udp_host.trim().is_empty())
+                    .then(|| form.mosh_udp_host.trim().to_string()),
+                udp_port,
+                ip_family: form.mosh_ip_family,
+                prediction: form.mosh_prediction,
+                locale: (!form.mosh_locale.trim().is_empty())
+                    .then(|| form.mosh_locale.trim().to_string()),
+                public_mcp_open_token: None,
+            };
+            let ssh_port = ssh_port.expect("validated Mosh SSH port must exist");
+
+            if action == NewConnectionSubmitAction::Connect {
+                let auth = runtime_mosh_auth_from_form(form);
+                let config = SshConfig {
+                    host,
+                    port: ssh_port,
+                    username,
+                    auth,
+                    identity_agent: identity_agent_from_form(&form.identity_agent),
+                    legacy_ssh_compatibility: form.legacy_ssh_compatibility,
+                    strict_host_key_checking: true,
+                    ..SshConfig::default()
+                };
+                form.pending = true;
+                form.error = Some(this.i18n.t("ssh.form.checking_host_key"));
+                return Some((
+                    Some(PreparedMoshConnect {
+                        config,
+                        title,
+                        options,
+                    }),
+                    None,
+                    None,
+                ));
+            }
+
+            let auth_override = (action == NewConnectionSubmitAction::SaveAndConnect
+                && form.auth_tab == SshAuthTab::Password
+                && !mosh_password_draft_is_persistent(form))
+            .then(|| runtime_mosh_auth_from_form(form));
+            let auth = saved_mosh_auth_from_form(form);
+            let request = SaveMoshProfileRequest {
+                id: form.mosh_profile_id.clone(),
+                name: title,
+                group: serial_profile_group_from_form(&form.group, &this.i18n),
+                icon: asset_icon_from_form(&form.icon),
+                color: asset_color_from_form(&form.color),
+                icon_background_color: asset_color_from_form(&form.icon_background_color),
+                host,
+                ssh_port,
+                username,
+                auth,
+                server_executable,
+                udp_host_override: options.udp_host_override,
+                udp_port,
+                ip_family: options.ip_family,
+                prediction: options.prediction,
+                locale: options.locale,
+                identity_agent: identity_agent_from_form(&form.identity_agent),
+                legacy_ssh_compatibility: form.legacy_ssh_compatibility,
+            };
+            form.pending = true;
+            form.error = None;
+            Some((None, Some(request), auth_override))
+        });
+        let Some((direct_connect, save_request, auth_override)) = prepared else {
+            return;
+        };
+
+        if let Some(connect) = direct_connect {
+            self.start_ssh_preflight(
+                connect.config,
+                connect.title,
+                SshConnectionIntent::Mosh(connect.options),
+                cx,
+            );
+            cx.notify();
+            return;
+        }
+
+        let request = save_request.expect("Mosh save action must build a profile request");
+        let (profile, runtime_secrets) = match self
+            .connection_store
+            .upsert_mosh_profile_with_runtime_secrets(request)
+        {
+            Ok(saved) => saved,
+            Err(error) => {
+                self.update_connection_form_state(cx, |state| {
+                    if let Some(form) = state.form.as_mut() {
+                        form.pending = false;
+                        form.error =
+                            Some(format!("{}: {error}", self.i18n.t("mosh.form.save_failed")));
+                    }
+                });
+                cx.notify();
+                return;
+            }
+        };
+        self.queue_cloud_sync_dirty_refresh(cx);
+        if action == NewConnectionSubmitAction::Save {
+            self.update_connection_form_state(cx, ConnectionFormState::clear);
+            cx.notify();
+            return;
+        }
+
+        let Some(auth) =
+            auth_override.or_else(|| runtime_mosh_auth_from_saved(&profile.auth, runtime_secrets))
+        else {
+            self.update_connection_form_state(cx, |state| {
+                if let Some(form) = state.form.as_mut() {
+                    form.pending = false;
+                    form.error = Some(self.i18n.t("mosh.form.missing_credentials"));
+                }
+            });
+            cx.notify();
+            return;
+        };
+        let config = SshConfig {
+            host: profile.host.clone(),
+            port: profile.ssh_port,
+            username: profile.username.clone(),
+            auth,
+            identity_agent: profile.identity_agent.clone(),
+            legacy_ssh_compatibility: profile.legacy_ssh_compatibility,
+            strict_host_key_checking: true,
+            ..SshConfig::default()
+        };
+        let title = profile.name.clone();
+        let options = mosh_options_from_profile(&profile);
+        self.update_connection_form_state(cx, |state| {
+            if let Some(form) = state.form.as_mut() {
+                form.error = Some(self.i18n.t("ssh.form.checking_host_key"));
+            }
+        });
+        self.start_ssh_preflight(config, title, SshConnectionIntent::Mosh(options), cx);
+        cx.notify();
+    }
+
     pub(super) fn submit_remote_desktop_connection_form(
         &mut self,
         action: NewConnectionSubmitAction,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((mut profile, save_request, mut runtime_password)) = self
-            .with_connection_form_mut(cx, |this, form, cx| {
+        let Some((mut profile, save_request, mut runtime_password, ssh_gateway_connection_id)) =
+            self.with_connection_form_mut(cx, |this, form, cx| {
                 let form = form?;
                 let Some(protocol) = remote_desktop_protocol_for_transport(form.transport) else {
                     return None;
@@ -774,6 +1339,18 @@ impl WorkspaceApp {
                     cx.notify();
                     return None;
                 }
+                if form
+                    .remote_desktop_ssh_gateway_connection_id
+                    .as_deref()
+                    .is_some_and(|connection_id| this.connection_store.get(connection_id).is_none())
+                {
+                    form.error = Some(
+                        this.i18n
+                            .t("modals.new_connection.remote_desktop_ssh_gateway_missing"),
+                    );
+                    cx.notify();
+                    return None;
+                }
                 let editing_profile_id = form.remote_desktop_profile_id.clone();
                 let existing_profile = editing_profile_id
                     .as_deref()
@@ -803,6 +1380,8 @@ impl WorkspaceApp {
                     None
                 };
                 let save_credential = form.save_password;
+                let ssh_gateway_connection_id =
+                    form.remote_desktop_ssh_gateway_connection_id.clone();
                 let should_save =
                     editing_profile_id.is_some() || action != NewConnectionSubmitAction::Connect;
                 let clear_credential =
@@ -831,6 +1410,9 @@ impl WorkspaceApp {
                     port,
                     username: username.clone(),
                     domain: domain.clone(),
+                    ssh_gateway_connection_id: form
+                        .remote_desktop_ssh_gateway_connection_id
+                        .clone(),
                     credential_ref: None,
                     credential: credential_to_save,
                     clear_credential,
@@ -842,6 +1424,7 @@ impl WorkspaceApp {
                     label,
                     protocol,
                     endpoint: RemoteDesktopEndpoint::new(host, port),
+                    transport_endpoint: None,
                     username,
                     domain,
                     credential_ref: None,
@@ -852,7 +1435,12 @@ impl WorkspaceApp {
                 };
                 form.pending = true;
                 form.error = None;
-                Some((profile, save_request, runtime_password))
+                Some((
+                    profile,
+                    save_request,
+                    runtime_password,
+                    ssh_gateway_connection_id,
+                ))
             })
         else {
             return;
@@ -910,7 +1498,13 @@ impl WorkspaceApp {
         if action != NewConnectionSubmitAction::Save {
             let runtime_password =
                 runtime_password.map(|secret| RemoteDesktopSecret::from(secret.into_zeroizing()));
-            self.open_remote_desktop_connection_tab(profile, runtime_password, window, cx);
+            self.open_remote_desktop_connection_with_gateway(
+                profile,
+                runtime_password,
+                ssh_gateway_connection_id,
+                window,
+                cx,
+            );
         }
         cx.notify();
     }
@@ -996,7 +1590,7 @@ impl WorkspaceApp {
         cx.notify();
     }
 
-    pub(in crate::workspace) fn open_saved_connection(
+    pub(crate) fn open_saved_connection(
         &mut self,
         id: &str,
         window: &mut Window,
@@ -1055,7 +1649,8 @@ impl WorkspaceApp {
             return;
         };
         self.prepare_modal_interaction_boundary(cx);
-        let form = form_from_saved_connection(&conn, error);
+        let mut form = form_from_saved_connection(&conn, error);
+        restore_saved_proxy_chain_in_form(&mut form, &conn);
         self.update_connection_form_state(cx, |state| {
             state.replace_with_new_form(form);
             state.editing_saved_connection_id = Some(id.to_string());
@@ -1163,7 +1758,23 @@ impl WorkspaceApp {
         let Some((mut config, title)) = self.build_new_connection_config(secret_handoff, cx) else {
             return;
         };
+        if config.proxy_command.is_none()
+            && let Some(conn) = self.connection_store.get(&id)
+            && let Some(saved_config) = ssh_config_from_saved_connection_with_auth(
+                &self.connection_store,
+                self.settings_store.settings(),
+                conn,
+                Some(AuthMethod::Agent),
+            )
+            && saved_config.proxy_command.is_some()
+        {
+            // Imported ProxyCommand routing remains attached when only auth is supplied by a prompt.
+            config.proxy_command = saved_config.proxy_command;
+            config.proxy_chain = None;
+            config.upstream_proxy = None;
+        }
         if config.proxy_chain.is_none()
+            && config.proxy_command.is_none()
             && let Some(conn) = self.connection_store.get(&id)
             && let Some(proxy_chain) =
                 proxy_chain_config_from_saved_connection(&self.connection_store, conn)
@@ -1224,27 +1835,42 @@ impl WorkspaceApp {
         else {
             return;
         };
-        let existing_connection = self.connection_store.get(&id).cloned();
-        let existing_auth = existing_connection
-            .as_ref()
-            .map(|connection| connection.auth.clone());
-        let Some(save_request) = self.with_connection_form_mut(cx, |_this, form, _cx| {
+        let Some(existing_connection) = self.connection_store.get(&id).cloned() else {
+            return;
+        };
+        let existing_auth = existing_connection.auth.clone();
+        let Some(save_request) = self.with_connection_form_mut(cx, |this, form, _cx| {
             let form = form?;
-            Some(
-                save_request_from_form_with_existing_auth(
+            Some((|| -> anyhow::Result<SaveConnectionRequest> {
+                let missing_credentials_message =
+                    this.i18n.t("sessions.saved_next_hop.missing_credentials");
+                let saved_auth_copies = saved_proxy_hop_auth_copies(
+                    &this.connection_store,
+                    &form.proxy_hops,
+                    &missing_credentials_message,
+                )?;
+                let edit_sources = form
+                    .proxy_hops
+                    .iter()
+                    .map(|hop| EditedProxyHopSource {
+                        persisted_proxy_hop_index: hop.persisted_proxy_hop_index,
+                        has_explicit_secret_draft: hop.has_explicit_secret_draft(),
+                    })
+                    .collect();
+                let mut request = save_request_from_form_with_existing_auth(
                     form,
                     Some(id.clone()),
-                    existing_auth.as_ref(),
-                )
-                .map(|mut request| {
-                    if form.proxy_hops.is_empty()
-                        && let Some(connection) = existing_connection.as_ref()
-                    {
-                        request.proxy_chain = connection.proxy_chain.clone();
-                    }
-                    request
-                }),
-            )
+                    Some(&existing_auth),
+                )?;
+                preserve_edited_proxy_hop_auth(
+                    &mut request.proxy_chain,
+                    &existing_connection.proxy_chain,
+                    edit_sources,
+                    saved_auth_copies,
+                    &missing_credentials_message,
+                )?;
+                Ok(request)
+            })())
         }) else {
             return;
         };
@@ -1334,21 +1960,33 @@ impl WorkspaceApp {
         let source_auth = source_connection
             .as_ref()
             .map(|connection| connection.auth.clone());
-        let Some(save_request) = self.with_connection_form_mut(cx, |_this, form, _cx| {
+        let Some(save_request) = self.with_connection_form_mut(cx, |this, form, _cx| {
             let form = form?;
-            Some(
-                save_request_from_form_with_existing_auth(form, None, source_auth.as_ref()).map(
-                    |mut request| {
-                        if form.proxy_hops.is_empty()
-                            && let Some(connection) = source_connection.as_ref()
-                        {
-                            // Preserve the source chain when it was not expanded for editing.
-                            request.proxy_chain = connection.proxy_chain.clone();
-                        }
-                        request
-                    },
-                ),
-            )
+            Some((|| {
+                let mut request =
+                    save_request_from_form_with_existing_auth(form, None, source_auth.as_ref())?;
+                if form.proxy_hops.is_empty()
+                    && let Some(connection) = source_connection.as_ref()
+                {
+                    // Preserve the source chain when it was not expanded for editing.
+                    request.proxy_chain = connection.proxy_chain.clone();
+                }
+                if request.proxy_command.is_some()
+                    && let Some(source_command) = source_connection
+                        .as_ref()
+                        .and_then(|connection| connection.proxy_command.as_ref())
+                {
+                    // A duplicate receives a new protected-store owner instead of sharing an id.
+                    request.proxy_command = Some(SavedProxyCommand {
+                        keychain_id: None,
+                        plaintext_command: Some(
+                            this.connection_store
+                                .get_saved_proxy_command(source_command)?,
+                        ),
+                    });
+                }
+                Ok::<SaveConnectionRequest, anyhow::Error>(request)
+            })())
         }) else {
             return;
         };
@@ -1422,6 +2060,57 @@ impl WorkspaceApp {
         cx.notify();
     }
 
+    pub(in crate::workspace) fn open_saved_mosh_profile(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.connection_store.get_mosh_profile(id).cloned() else {
+            return;
+        };
+        let Some(auth) = auth_method_from_saved_auth(&self.connection_store, &profile.auth) else {
+            // Portable profiles intentionally omit credentials. Open the editor at the
+            // matching secret field so the device-local value can be supplied safely.
+            self.open_saved_mosh_profile_editor(id, window, cx);
+            let missing_credentials = self
+                .i18n
+                .t("sessionManager.mosh_profiles.missing_credentials");
+            self.update_connection_form_state(cx, |state| {
+                if let Some(form) = state.form.as_mut() {
+                    form.error = Some(missing_credentials);
+                    form.focused_field = match form.auth_tab {
+                        SshAuthTab::Password => NewConnectionField::Password,
+                        SshAuthTab::DefaultKey
+                        | SshAuthTab::SshKey
+                        | SshAuthTab::ManagedKey
+                        | SshAuthTab::Certificate => NewConnectionField::Passphrase,
+                        SshAuthTab::Agent | SshAuthTab::TwoFactor => NewConnectionField::Name,
+                    };
+                    form.field_focused = false;
+                }
+            });
+            return;
+        };
+        let config = SshConfig {
+            host: profile.host.clone(),
+            port: profile.ssh_port,
+            username: profile.username.clone(),
+            auth,
+            identity_agent: profile.identity_agent.clone(),
+            legacy_ssh_compatibility: profile.legacy_ssh_compatibility,
+            strict_host_key_checking: true,
+            ..SshConfig::default()
+        };
+        let title = profile.name.clone();
+        let options = mosh_options_from_profile(&profile);
+        self.session_manager.update(cx, |session_manager, cx| {
+            session_manager.set_status(Some(self.i18n.t("ssh.form.checking_host_key")), cx);
+        });
+        self.start_ssh_preflight(config, title, SshConnectionIntent::Mosh(options), cx);
+        cx.notify();
+    }
+
     pub(in crate::workspace) fn start_ssh_preflight(
         &self,
         mut config: SshConfig,
@@ -1432,16 +2121,18 @@ impl WorkspaceApp {
         let tx = self.ssh_worker_sender(cx);
         let host = config.host.clone();
         let port = config.port;
+        let connect_timeout_seconds = config.timeout_secs;
         let upstream_proxy = config.upstream_proxy.take();
         let worker_config = config;
         let worker_title = title;
         std::thread::spawn(move || {
             let status = match tokio::runtime::Runtime::new() {
-                Ok(runtime) => runtime.block_on(check_host_key_with_upstream_proxy(
+                Ok(runtime) => runtime.block_on(check_host_key_with_route(
                     &host,
                     port,
-                    10,
+                    connect_timeout_seconds,
                     upstream_proxy.as_ref(),
+                    worker_config.proxy_command.as_ref(),
                 )),
                 Err(error) => HostKeyStatus::Error {
                     message: format!("failed to initialize SSH runtime: {error}"),
@@ -1466,6 +2157,79 @@ fn saved_connection_for_open(store: &ConnectionStore, id: &str) -> Option<SavedC
 mod saved_connection_open_tests {
     use super::*;
 
+    fn password_proxy_hop(auth: SavedAuth) -> SavedProxyHop {
+        SavedProxyHop {
+            host: "jump.example.com".to_string(),
+            port: 22,
+            username: "ops".to_string(),
+            auth,
+            agent_forwarding: false,
+            identity_agent: None,
+            agent_forwarding_socket: None,
+            legacy_ssh_compatibility: false,
+        }
+    }
+
+    #[test]
+    fn unchanged_mosh_password_edit_preserves_protected_store_reference() {
+        let mut form = NewConnectionForm::default();
+        form.auth_tab = SshAuthTab::Password;
+        form.save_password = true;
+        form.saved_password_keychain_id = Some("mosh-password-owner".to_string());
+
+        let auth = saved_mosh_auth_from_form(&mut form);
+
+        assert!(matches!(
+            auth,
+            SavedAuth::Password {
+                keychain_id: Some(keychain_id),
+                plaintext_password: None,
+            } if keychain_id == "mosh-password-owner"
+        ));
+        assert!(form.password.is_empty());
+    }
+
+    #[test]
+    fn replacement_mosh_password_moves_secret_into_save_request() {
+        let mut form = NewConnectionForm::default();
+        form.auth_tab = SshAuthTab::Password;
+        form.password = "replacement-secret".to_string();
+        form.save_password = true;
+        form.saved_password_keychain_id = Some("mosh-password-owner".to_string());
+
+        let auth = saved_mosh_auth_from_form(&mut form);
+
+        assert!(matches!(
+            auth,
+            SavedAuth::Password {
+                keychain_id: Some(keychain_id),
+                plaintext_password: Some(password),
+            } if keychain_id == "mosh-password-owner" && password == "replacement-secret"
+        ));
+        assert!(form.password.is_empty());
+    }
+
+    #[test]
+    fn mosh_edit_persists_an_entered_password_without_new_profile_checkbox_state() {
+        let mut form = NewConnectionForm::default();
+        form.mosh_profile_id = Some("mosh-profile".to_string());
+        form.auth_tab = SshAuthTab::Password;
+        form.password = "replacement-secret".to_string();
+        form.save_password = false;
+
+        assert!(mosh_password_draft_is_persistent(&form));
+        let auth = saved_mosh_auth_from_form(&mut form);
+
+        assert!(matches!(
+            auth,
+            SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: Some(password),
+            } if password == "replacement-secret"
+        ));
+        assert!(form.password.is_empty());
+    }
+
     #[test]
     fn stale_saved_connection_id_is_detected_before_opening() {
         let path = std::env::temp_dir().join(format!(
@@ -1475,5 +2239,95 @@ mod saved_connection_open_tests {
         let store = ConnectionStore::load(path).expect("empty connection store");
 
         assert!(saved_connection_for_open(&store, "removed-connection").is_none());
+    }
+
+    #[test]
+    fn unchanged_edited_proxy_hop_preserves_its_keychain_reference() {
+        let persisted_proxy_chain = vec![password_proxy_hop(SavedAuth::Password {
+            keychain_id: Some("persisted-proxy-password".to_string()),
+            plaintext_password: None,
+        })];
+        let mut edited_proxy_chain = vec![password_proxy_hop(SavedAuth::Password {
+            keychain_id: None,
+            plaintext_password: Some(SecretString::default()),
+        })];
+
+        preserve_edited_proxy_hop_auth(
+            &mut edited_proxy_chain,
+            &persisted_proxy_chain,
+            vec![EditedProxyHopSource {
+                persisted_proxy_hop_index: Some(0),
+                has_explicit_secret_draft: false,
+            }],
+            vec![None],
+            "missing proxy credentials",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &edited_proxy_chain[0].auth,
+            SavedAuth::Password {
+                keychain_id: Some(keychain_id),
+                plaintext_password: None,
+            } if keychain_id == "persisted-proxy-password"
+        ));
+    }
+
+    #[test]
+    fn saved_proxy_hop_added_during_edit_uses_its_independent_auth_copy() {
+        let mut edited_proxy_chain = vec![password_proxy_hop(SavedAuth::Password {
+            keychain_id: None,
+            plaintext_password: Some(SecretString::default()),
+        })];
+
+        preserve_edited_proxy_hop_auth(
+            &mut edited_proxy_chain,
+            &[],
+            vec![EditedProxyHopSource {
+                persisted_proxy_hop_index: None,
+                has_explicit_secret_draft: false,
+            }],
+            vec![Some(SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: Some(SecretString::from("copied-proxy-secret")),
+            })],
+            "missing proxy credentials",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &edited_proxy_chain[0].auth,
+            SavedAuth::Password {
+                keychain_id: None,
+                plaintext_password: Some(password),
+            } if password == "copied-proxy-secret"
+        ));
+    }
+
+    #[test]
+    fn edited_proxy_hop_never_reuses_credentials_for_another_host() {
+        let persisted_proxy_chain = vec![password_proxy_hop(SavedAuth::Password {
+            keychain_id: Some("persisted-proxy-password".to_string()),
+            plaintext_password: None,
+        })];
+        let mut edited_hop = password_proxy_hop(SavedAuth::Password {
+            keychain_id: None,
+            plaintext_password: Some(SecretString::default()),
+        });
+        edited_hop.host = "other.example.com".to_string();
+
+        let error = preserve_edited_proxy_hop_auth(
+            std::slice::from_mut(&mut edited_hop),
+            &persisted_proxy_chain,
+            vec![EditedProxyHopSource {
+                persisted_proxy_hop_index: Some(0),
+                has_explicit_secret_draft: false,
+            }],
+            vec![None],
+            "missing proxy credentials",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "missing proxy credentials");
     }
 }

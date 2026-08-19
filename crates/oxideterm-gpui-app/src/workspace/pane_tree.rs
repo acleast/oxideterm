@@ -25,6 +25,63 @@ enum TerminalPaneInteraction {
     ContextAction,
 }
 
+#[derive(Clone)]
+struct TerminalInputBroadcastRoute {
+    source_pane_id: PaneId,
+    tab_host: gpui::WeakEntity<tabs::WorkspaceTabHostEntity>,
+    terminal: gpui::WeakEntity<WorkspaceTerminalEntity>,
+}
+
+impl TerminalInputBroadcastRoute {
+    fn broadcaster(self) -> TerminalInputBroadcaster {
+        Rc::new(move |kind, bytes, cx| self.deliver(kind, bytes, cx))
+    }
+
+    fn deliver(&self, kind: TerminalBroadcastInputKind, bytes: &[u8], cx: &mut App) {
+        let Some(tab_host) = self.tab_host.upgrade() else {
+            return;
+        };
+        let Some(terminal) = self.terminal.upgrade() else {
+            return;
+        };
+        if !terminal.read(cx).broadcast_enabled() {
+            return;
+        }
+
+        let (live_panes, mut candidates) = {
+            let tab_host = tab_host.read(cx);
+            let live_panes = tab_host.panes().keys().copied().collect::<HashSet<_>>();
+            let mut candidates = Vec::new();
+            for tab in tab_host.tabs() {
+                if let Some(root) = tab.root_pane.as_ref() {
+                    root.collect_pane_ids(&mut candidates);
+                }
+            }
+            (live_panes, candidates)
+        };
+        candidates
+            .retain(|pane_id| *pane_id != self.source_pane_id && live_panes.contains(pane_id));
+
+        let targets = terminal.update(cx, |terminal, _cx| {
+            terminal.retain_live_broadcast_targets(&live_panes);
+            if !terminal.broadcast_enabled() {
+                return Vec::new();
+            }
+            terminal.filter_broadcast_targets(candidates)
+        });
+        for pane_id in targets {
+            let Some(pane) = tab_host.read(cx).panes().get(&pane_id).cloned() else {
+                continue;
+            };
+            let _ = pane.update(cx, |pane, cx| {
+                // Borrowed input is delivered synchronously and never retained
+                // outside the target pane's existing zeroizing write path.
+                pane.send_broadcast_input(kind, bytes, cx);
+            });
+        }
+    }
+}
+
 impl WorkspaceApp {
     pub(super) fn register_terminal_pane(
         &mut self,
@@ -36,6 +93,17 @@ impl WorkspaceApp {
     ) {
         let window_handle = window.window_handle();
         let terminal_label = pane.read(cx).title().to_string();
+        let broadcaster = TerminalInputBroadcastRoute {
+            source_pane_id: pane_id,
+            tab_host: self.tab_host.downgrade(),
+            terminal: self.terminal.downgrade(),
+        }
+        .broadcaster();
+        pane.update(cx, |pane, _cx| {
+            // Weak routing endpoints follow pane remounts without taking
+            // ownership of the pane, its SSH channel, or the physical node.
+            pane.set_input_broadcaster(Some(broadcaster));
+        });
         self.tab_host.update(cx, |tab_host, cx| {
             tab_host.register_terminal_pane(pane_id, session_id, pane, window_handle, cx);
         });
@@ -58,6 +126,8 @@ impl WorkspaceApp {
             TerminalPaneEvent::Exited { .. } => {
                 self.queue_auto_close_terminal_session(session_id, cx);
             }
+            // TabHost consumes this signal before ordinary pane delivery.
+            TerminalPaneEvent::OutputActivity => {}
             TerminalPaneEvent::CurrentDirectoryChanged => {
                 if self.active_pane_id(cx) == Some(pane_id) {
                     self.sync_active_terminal_metadata_context(cx);
@@ -277,7 +347,7 @@ impl WorkspaceApp {
             return;
         }
 
-        if tab_kind == TabKind::SshTerminal {
+        if matches!(tab_kind, TabKind::SshTerminal | TabKind::MoshTerminal) {
             return;
         }
         if self.active_tab_has_serial_terminal(cx) {
@@ -287,13 +357,20 @@ impl WorkspaceApp {
         let group_id = self.alloc_pane_id(cx);
         let pane_id = self.alloc_pane_id(cx);
         let session_id = self.alloc_session_id(cx);
-        let preferences = self.prepare_terminal_preferences_for_tab_kind(&tab_kind, cx);
+        let mut preferences = self.prepare_terminal_preferences_for_tab_kind(&tab_kind, cx);
         let local_config =
             (tab_kind == TabKind::LocalTerminal).then(|| self.local_terminal_config());
+        let local_preference_overrides = local_config.as_ref().map(|config| {
+            self.terminal_preference_overrides_for_local_shell(config.shell.as_ref())
+        });
+        if let Some(overrides) = &local_preference_overrides {
+            overrides.apply_to(&mut preferences);
+        }
         let pane = cx.new(|cx| {
             if let Some(config) = local_config {
                 TerminalPane::new_local_with_config_and_preferences(config, preferences, window, cx)
                     .expect("failed to initialize split terminal pane")
+                    .with_preference_overrides(local_preference_overrides.unwrap_or_default())
             } else {
                 TerminalPane::new_with_preferences(preferences, window, cx)
                     .expect("failed to initialize split terminal pane")
@@ -340,7 +417,9 @@ impl WorkspaceApp {
         }
 
         if let Some(session_id) = session_id {
+            self.release_public_mcp_terminal_for_closed_session(session_id, cx);
             self.serial_terminal_configs.remove(&session_id);
+            self.telnet_terminal_profile_ids.remove(&session_id);
             self.unregister_ssh_terminal_session(session_id, cx);
         }
 
@@ -388,7 +467,9 @@ impl WorkspaceApp {
             .into_iter()
             .filter(|session_id| *session_id != active_session_id)
         {
+            self.release_public_mcp_terminal_for_closed_session(session_id, cx);
             self.serial_terminal_configs.remove(&session_id);
+            self.telnet_terminal_profile_ids.remove(&session_id);
             self.unregister_ssh_terminal_session(session_id, cx);
         }
         for pane_id in pane_ids
@@ -706,5 +787,141 @@ impl WorkspaceApp {
                 group.into_any_element()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{AppContext, IntoElement, TestAppContext};
+
+    struct BroadcastRouteTestRoot;
+
+    struct BroadcastRouteCaller {
+        source: Entity<TerminalPane>,
+    }
+
+    impl Render for BroadcastRouteTestRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_input_broadcast_does_not_reenter_the_caller_entity(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| BroadcastRouteTestRoot);
+        let source = cx.update(|window, cx| {
+            cx.new(|cx| TerminalPane::new(window, cx).expect("source terminal pane"))
+        });
+        let target = cx.update(|window, cx| {
+            cx.new(|cx| TerminalPane::new(window, cx).expect("target terminal pane"))
+        });
+        let delivered = Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+        let delivered_for_interceptor = Arc::clone(&delivered);
+        target.update(cx, |target, _cx| {
+            target.set_plugin_input_interceptor(Some(Arc::new(move |bytes| {
+                // The fixture records only fixed non-secret input needed to
+                // prove synchronous target delivery through the real pane path.
+                delivered_for_interceptor
+                    .lock()
+                    .expect("lock delivered input")
+                    .push(bytes.to_vec());
+                TerminalInputInterceptorResult::Continue(bytes.to_vec())
+            })));
+        });
+
+        let source_pane_id = PaneId(1);
+        let target_pane_id = PaneId(2);
+        let source_session_id = TerminalSessionId(1);
+        let target_session_id = TerminalSessionId(2);
+        let tab_host = cx.new(|_| tabs::WorkspaceTabHostEntity::new());
+        let window_handle = cx.window_handle();
+        tab_host.update(cx, |tab_host, cx| {
+            tab_host.insert_tab(Tab {
+                id: TabId(1),
+                kind: TabKind::LocalTerminal,
+                title: "Source".to_string(),
+                title_source: TabTitleSource::Static,
+                root_pane: Some(PaneNode::leaf(source_pane_id, source_session_id)),
+                active_pane_id: Some(source_pane_id),
+            });
+            tab_host.insert_tab(Tab {
+                id: TabId(2),
+                kind: TabKind::LocalTerminal,
+                title: "Target".to_string(),
+                title_source: TabTitleSource::Static,
+                root_pane: Some(PaneNode::leaf(target_pane_id, target_session_id)),
+                active_pane_id: Some(target_pane_id),
+            });
+            tab_host.register_terminal_pane(
+                source_pane_id,
+                source_session_id,
+                source.clone(),
+                window_handle,
+                cx,
+            );
+            tab_host.register_terminal_pane(
+                target_pane_id,
+                target_session_id,
+                target.clone(),
+                window_handle,
+                cx,
+            );
+        });
+
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("terminal test runtime"),
+        );
+        let registry = SshConnectionRegistry::new(ConnectionPoolConfig::default());
+        let terminal = cx.new(|cx| {
+            WorkspaceTerminalEntity::new(
+                runtime,
+                NodeRouter::new(registry),
+                &std::env::temp_dir().join(format!(
+                    "oxideterm-input-broadcast-route-{}.json",
+                    std::process::id()
+                )),
+                cx,
+            )
+        });
+        terminal.update(cx, |terminal, _cx| {
+            terminal.set_broadcast_targets(&[target_pane_id]);
+        });
+        source.update(cx, |source, _cx| {
+            source.set_input_broadcaster(Some(
+                TerminalInputBroadcastRoute {
+                    source_pane_id,
+                    tab_host: tab_host.downgrade(),
+                    terminal: terminal.downgrade(),
+                }
+                .broadcaster(),
+            ));
+        });
+
+        let caller = cx.new(|_| BroadcastRouteCaller {
+            source: source.clone(),
+        });
+        let tab = KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                key: "tab".to_string(),
+                ..Default::default()
+            },
+            is_held: false,
+            prefer_character_input: false,
+        };
+        caller.update(cx, |caller, cx| {
+            caller.source.update(cx, |source, cx| {
+                assert!(source.handle_unfocused_key(&tab, cx));
+                source.paste_text("paste fixture", cx);
+            });
+        });
+
+        assert_eq!(
+            delivered.lock().expect("lock delivered input").as_slice(),
+            [b"\t".to_vec(), b"paste fixture".to_vec()]
+        );
     }
 }

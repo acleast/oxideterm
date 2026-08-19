@@ -31,9 +31,9 @@ use oxideterm_sftp::TransferConflict as SftpConflictInfo;
 use oxideterm_sftp::{
     AssetFileKind, BackgroundTransferDirection, BackgroundTransferKind, BackgroundTransferSnapshot,
     BackgroundTransferState, FileInfo as RemoteFileInfo, FileType as RemoteFileType,
-    ListFilter as RemoteListFilter, PreviewContent, SftpError, SftpSession, SftpTransferGuard,
-    SortOrder as RemoteSortOrder, StoredTransferProgress, TarCapabilities,
-    TransferDirection as SftpTransferDirection, TransferProgress,
+    ListFilter as RemoteListFilter, LocalDownloadDisposition, PreviewContent, SftpError,
+    SftpSession, SftpTransferGuard, SortOrder as RemoteSortOrder, StoredTransferProgress,
+    TarCapabilities, TransferDirection as SftpTransferDirection, TransferProgress,
     TransferProtocol as RemoteTransferProtocol, TransferStrategy as RemoteTransferStrategy,
     TransferType as RemoteTransferType, encode_to_encoding, scp_download_directory,
     scp_download_file, scp_upload_directory, scp_upload_file, tar_download_directory,
@@ -74,6 +74,9 @@ const SFTP_BREADCRUMB_CONTENT_GAP: f32 = 2.0;
 const SFTP_TRANSFER_QUEUE_LIST_INITIAL_ITEM_COUNT: usize = 0;
 const SFTP_TRANSFER_QUEUE_LIST_ESTIMATED_HEIGHT: f32 = 56.0;
 const SFTP_TRANSFER_QUEUE_LIST_OVERSCAN: usize = 6;
+// The embedded browser keeps enough room for files while exposing the most
+// relevant transfers owned by its current node.
+const SFTP_SIDEBAR_TRANSFER_MAX_ROWS: usize = 3;
 const SFTP_INCOMPLETE_TRANSFER_LIST_INITIAL_ITEM_COUNT: usize = 0;
 const SFTP_INCOMPLETE_TRANSFER_LIST_ESTIMATED_HEIGHT: f32 = 52.0;
 const SFTP_INCOMPLETE_TRANSFER_LIST_OVERSCAN: usize = 4;
@@ -119,11 +122,14 @@ const SFTP_GREEN: u32 = 0x22c55e; // Tauri text-green-500
 const SFTP_YELLOW: u32 = 0xeab308; // Tauri text-yellow-500
 const SFTP_ORANGE: u32 = 0xfb923c; // Tauri text-orange-400
 const SFTP_RED: u32 = 0xf87171; // Tauri text-red-400
+const SFTP_DESTRUCTIVE_TEXT: u32 = 0xffffff;
 const SFTP_CONTEXT_MENU_WIDTH: f32 = 180.0; // Tauri min-w-[180px]
 const SFTP_CONTEXT_MENU_MAX_HEIGHT: f32 = 288.0; // 8 items + separators, clamped like fixed portal menu
 const SFTP_CONTEXT_MENU_PADDING: f32 = 4.0; // Tauri py-1
 const SFTP_CONTEXT_MENU_ITEM_HEIGHT: f32 = 30.0; // Tauri px-3 py-1.5 text-xs
 const SFTP_BUTTON_TRANSPARENT_ALPHA: u32 = 0x00; // Tauri Button border-transparent/bg-transparent
+const SFTP_DESTRUCTIVE_BG_ALPHA: u32 = 0xe6;
+const SFTP_DESTRUCTIVE_BORDER_ALPHA: u32 = 0xcc;
 const SFTP_DIALOG_SHADOW_ALPHA: u32 = 0x40; // Tauri shadow-lg-ish overlay shadow
 const SFTP_DIALOG_BORDER_SUBTLE_ALPHA: u32 = 0x99; // Tauri border-theme-border/60
 const SFTP_DIALOG_BORDER_HALF_ALPHA: u32 = 0x80; // Tauri border-theme-border/50
@@ -211,6 +217,7 @@ enum SftpFileType {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SftpButtonVariant {
     Default,
+    Destructive,
     Secondary,
     Ghost,
 }
@@ -236,14 +243,27 @@ pub(super) struct SftpMutationToast {
     error_title: String,
 }
 
+// Surface identity prevents a hidden tab completion from replacing sidebar state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SftpSurfaceId {
+    Tab(TabId),
+    Sidebar,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SftpPresentationRequest {
+    node_id: NodeId,
+    remote_path: Option<String>,
+}
+
 #[derive(Debug)]
 pub(super) enum SftpWorkerResult {
     StartRemoteLoad {
-        tab_id: TabId,
+        surface_id: SftpSurfaceId,
         node_id: NodeId,
     },
     RemoteList {
-        tab_id: TabId,
+        surface_id: SftpSurfaceId,
         node_id: NodeId,
         view_generation: u64,
         session_id: String,
@@ -333,11 +353,11 @@ pub(in crate::workspace::sftp) enum SftpWorkspaceEffect {
         node_id: NodeId,
     },
     RemoteLoadPending {
-        tab_id: TabId,
+        surface_id: SftpSurfaceId,
         node_id: NodeId,
     },
     StartRemoteLoad {
-        tab_id: TabId,
+        surface_id: SftpSurfaceId,
         node_id: NodeId,
         path: String,
         view_generation: u64,
@@ -403,7 +423,7 @@ pub(super) enum SftpWorkspaceEvent {
         id: String,
     },
     RemoteLoadReady {
-        tab_id: TabId,
+        surface_id: SftpSurfaceId,
         node_id: NodeId,
         delivery: delivery::ActiveDeliverySender<SftpWorkerResult>,
     },
@@ -783,8 +803,8 @@ pub(super) struct SftpWorkspaceEntity {
     remote_load_inflight: bool,
     remote_load_retry_count: u8,
     remote_load_retry_task: Option<Task<()>>,
-    current_tab_id: Option<TabId>,
-    current_node_id: Option<NodeId>,
+    pub(in crate::workspace) current_surface_id: Option<SftpSurfaceId>,
+    pub(in crate::workspace) current_node_id: Option<NodeId>,
     local_path_by_node: HashMap<NodeId, String>,
     remote_path_by_node: HashMap<NodeId, String>,
     remote_home_by_node: HashMap<NodeId, String>,
@@ -859,7 +879,7 @@ pub(super) struct SftpWorkspaceEntity {
 
 impl Default for SftpWorkspaceEntity {
     fn default() -> Self {
-        let local_path = home_path();
+        let local_path = default_download_path();
         let remote_path = String::new();
         let (worker_tx, worker_rx) = delivery::ActiveDeliverySender::channel();
         Self {
@@ -902,7 +922,7 @@ impl Default for SftpWorkspaceEntity {
             remote_load_inflight: false,
             remote_load_retry_count: 0,
             remote_load_retry_task: None,
-            current_tab_id: None,
+            current_surface_id: None,
             current_node_id: None,
             local_path_by_node: HashMap::new(),
             remote_path_by_node: HashMap::new(),
@@ -1454,7 +1474,7 @@ mod entity_delivery_tests {
     fn stale_remote_list_result_does_not_emit_effect(cx: &mut TestAppContext) {
         let entity = cx.new(SftpWorkspaceEntity::new);
         entity.update(cx, |sftp, _cx| {
-            sftp.current_tab_id = Some(TabId(1));
+            sftp.current_surface_id = Some(SftpSurfaceId::Tab(TabId(1)));
             sftp.current_node_id = Some(NodeId::new("current-node"));
             sftp.view_generation = 2;
             sftp.remote_load_inflight = true;
@@ -1472,7 +1492,7 @@ mod entity_delivery_tests {
 
         sender
             .send(SftpWorkerResult::RemoteList {
-                tab_id: TabId(1),
+                surface_id: SftpSurfaceId::Tab(TabId(1)),
                 node_id: NodeId::new("current-node"),
                 view_generation: 1,
                 session_id: "stale-session".to_string(),
@@ -1487,6 +1507,46 @@ mod entity_delivery_tests {
 
         assert_eq!(effect_events.load(Ordering::Acquire), 0);
         cx.read(|cx| assert!(!entity.read(cx).remote_load_inflight));
+    }
+
+    #[gpui::test]
+    fn pending_terminal_cwd_is_not_overwritten_by_inflight_listing(cx: &mut TestAppContext) {
+        let entity = cx.new(SftpWorkspaceEntity::new);
+        entity.update(cx, |sftp, _cx| {
+            // Opening SFTP queues the terminal cwd after the remembered directory starts loading.
+            sftp.current_surface_id = Some(SftpSurfaceId::Tab(TabId(1)));
+            sftp.current_node_id = Some(NodeId::new("current-node"));
+            sftp.view_generation = 1;
+            sftp.remote_path = "/root/.oxideterm".to_string();
+            sftp.remote_path_input = sftp.remote_path.clone();
+            sftp.remote_loading = true;
+            sftp.remote_load_inflight = true;
+            sftp.remote_load_pending = true;
+        });
+        let sender = cx.read(|cx| entity.read(cx).worker_sender());
+
+        sender
+            .send(SftpWorkerResult::RemoteList {
+                surface_id: SftpSurfaceId::Tab(TabId(1)),
+                node_id: NodeId::new("current-node"),
+                view_generation: 1,
+                session_id: "current-session".to_string(),
+                path: "/root".to_string(),
+                result: Ok(RemoteSftpListing {
+                    cwd: "/root".to_string(),
+                    files: Vec::new(),
+                }),
+            })
+            .expect("inflight SFTP directory delivery");
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let sftp = entity.read(cx);
+            assert_eq!(sftp.remote_path, "/root/.oxideterm");
+            assert_eq!(sftp.remote_path_input, "/root/.oxideterm");
+            assert!(sftp.remote_load_pending);
+            assert!(!sftp.remote_load_inflight);
+        });
     }
 
     #[gpui::test]
@@ -1539,16 +1599,16 @@ mod transfers;
 // Re-export only the cross-module helpers needed by the SFTP facade and its children.
 pub(in crate::workspace::sftp) use actions::{SftpTransferLaunch, sftp_extract_archive_kind};
 use helpers::{
-    diff_cell, format_conflict_modified, format_file_size, format_modified, format_sftp_media_time,
-    format_transfer_speed, home_path, is_sftp_incomplete_store_compat_error, join_local_path,
-    join_sftp_path, list_local_files, load_remote_sftp_completion_listing,
-    load_remote_sftp_listing, load_remote_sftp_preview, load_remote_sftp_preview_hex, local_drives,
-    new_sftp_transfer_id, normalize_external_dropped_path, normalize_remote_path, parent_path,
-    preview_content_text, refreshed_local_files, remote_directory_prefixes,
-    save_remote_sftp_preview, sftp_bg, sftp_border, sftp_card_surface,
-    sftp_conflict_resolution_from_settings, sftp_diff_visual_lines, sftp_editor_language,
-    sftp_editor_language_id, sftp_file_name, sftp_hover_bg, sftp_panel_bg, sftp_path_segments,
-    sftp_preview_editor_is_network_error, sftp_preview_is_markdown,
+    default_download_path, diff_cell, format_conflict_modified, format_file_size, format_modified,
+    format_sftp_media_time, format_transfer_speed, home_path,
+    is_sftp_incomplete_store_compat_error, join_local_path, join_sftp_path, list_local_files,
+    load_remote_sftp_completion_listing, load_remote_sftp_listing, load_remote_sftp_preview,
+    load_remote_sftp_preview_hex, local_drives, new_sftp_transfer_id,
+    normalize_external_dropped_path, normalize_remote_path, parent_path, preview_content_text,
+    refreshed_local_files, remote_directory_prefixes, save_remote_sftp_preview, sftp_bg,
+    sftp_border, sftp_card_surface, sftp_conflict_resolution_from_settings, sftp_diff_visual_lines,
+    sftp_editor_language, sftp_editor_language_id, sftp_file_name, sftp_hover_bg, sftp_panel_bg,
+    sftp_path_segments, sftp_preview_editor_is_network_error, sftp_preview_is_markdown,
     sftp_source_not_newer_than_target, sftp_transfer_conflicts,
     sftp_transfer_state_from_background, sorted_sftp_files, unique_sftp_conflict_name,
 };

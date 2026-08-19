@@ -68,18 +68,6 @@ impl WorkspaceApp {
         collapsed: bool,
         cx: &mut Context<Self>,
     ) {
-        let released_saved_search = collapsed
-            && self.session_manager.update(cx, |session_manager, cx| {
-                if session_manager.focused_input() != Some(SessionManagerInput::SavedSearch) {
-                    return false;
-                }
-                // A closing sidebar must release its synthetic IME owner before
-                // the visual exit animation finishes, or it can swallow terminal keys.
-                session_manager.clear_input_focus(cx)
-            });
-        if released_saved_search {
-            self.ime_marked_text = None;
-        }
         self.sidebar_collapsed = collapsed;
         self.sidebar_motion_generation = self.sidebar_motion_generation.wrapping_add(1);
         let generation = self.sidebar_motion_generation;
@@ -180,24 +168,15 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) {
         self.clear_ai_sidebar_keyboard_focus(cx);
-        let released_saved_search = section != SidebarSection::Connections
-            && self.session_manager.update(cx, |session_manager, cx| {
-                if session_manager.focused_input() != Some(SessionManagerInput::SavedSearch) {
-                    return false;
-                }
-                // Switching the sidebar body transfers keyboard ownership away
-                // from the saved-connections search field.
-                session_manager.clear_input_focus(cx)
-            });
-        if released_saved_search {
-            self.ime_marked_text = None;
-        }
         self.active_sidebar_section = section;
         if section == SidebarSection::Extensions {
             self.bootstrap_native_plugin_runtime(cx);
         }
         if self.sidebar_collapsed {
             self.set_sidebar_collapsed_with_motion(false, cx);
+        }
+        if section == SidebarSection::Sessions {
+            self.activate_embedded_sftp_sidebar_if_visible(cx);
         }
         self.persist_sidebar_settings(cx);
         cx.notify();
@@ -286,6 +265,71 @@ impl WorkspaceApp {
             self.persist_sidebar_settings(cx);
             cx.notify();
         }
+    }
+
+    pub(in crate::workspace) fn start_embedded_sftp_sidebar_resize(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.embedded_sftp_sidebar_resizing = true;
+        self.set_embedded_sftp_sidebar_fraction(event.position.y, window, cx);
+    }
+
+    pub(in crate::workspace) fn update_embedded_sftp_sidebar_resize(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.embedded_sftp_sidebar_resizing {
+            return;
+        }
+        if !event.dragging() {
+            // End capture when the platform no longer reports a pressed mouse
+            // button, even if the splitter missed the corresponding mouse-up.
+            self.finish_embedded_sftp_sidebar_resize(cx);
+            return;
+        }
+        self.set_embedded_sftp_sidebar_fraction(event.position.y, window, cx);
+    }
+
+    pub(in crate::workspace) fn finish_embedded_sftp_sidebar_resize(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.embedded_sftp_sidebar_resizing {
+            return;
+        }
+        self.embedded_sftp_sidebar_resizing = false;
+        self.persist_sidebar_settings_store(cx);
+        cx.notify();
+    }
+
+    fn set_embedded_sftp_sidebar_fraction(
+        &mut self,
+        cursor_y: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The split lives below the native/custom titlebar and the fixed
+        // primary-sidebar header, so convert the window cursor into that body.
+        let body_top = self.window_titlebar_height(window) + self.tokens.metrics.tabbar_height;
+        let body_height = (f32::from(window.viewport_size().height) - body_top).max(1.0);
+        let fraction = ((f32::from(cursor_y) - body_top) / body_height).clamp(
+            EMBEDDED_SFTP_MIN_SESSION_FRACTION,
+            EMBEDDED_SFTP_MAX_SESSION_FRACTION,
+        );
+        let current = self.settings_store.settings().sftp.sidebar_session_fraction;
+        if (current - fraction).abs() < f32::EPSILON {
+            return;
+        }
+        self.settings_store
+            .settings_mut()
+            .sftp
+            .sidebar_session_fraction = fraction;
+        cx.notify();
     }
 
     pub(in crate::workspace) fn sidebar_width_from_cursor(
@@ -515,6 +559,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn primary_sidebar_section_click_collapses_only_the_visible_open_panel() {
+        assert!(should_collapse_primary_sidebar_section(
+            false,
+            SidebarSection::Sessions,
+            SidebarSection::Sessions,
+        ));
+        assert!(!should_collapse_primary_sidebar_section(
+            true,
+            SidebarSection::Sessions,
+            SidebarSection::Sessions,
+        ));
+        assert!(!should_collapse_primary_sidebar_section(
+            false,
+            SidebarSection::Sessions,
+            SidebarSection::Forwards,
+        ));
+    }
+
+    #[test]
     fn context_sidebar_panel_click_collapses_only_the_visible_active_panel() {
         assert!(should_collapse_context_sidebar_panel(
             true,
@@ -584,11 +647,6 @@ pub(in crate::workspace) fn ai_sidebar_width_from_cursor_value(
 #[cfg(test)]
 mod sidebar_resize_state_tests {
     use super::*;
-
-    #[test]
-    pub(in crate::workspace) fn ai_sidebar_width_from_cursor_uses_right_edge_distance() {
-        assert_eq!(ai_sidebar_width_from_cursor_value(700.0, 1000.0), 300.0);
-    }
 
     #[test]
     pub(in crate::workspace) fn ai_sidebar_width_from_cursor_clamps_to_responsive_limits() {

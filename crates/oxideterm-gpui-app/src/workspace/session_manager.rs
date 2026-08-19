@@ -8,7 +8,7 @@ use std::{
 
 use crate::workspace::new_connection::{
     NewConnectionProxyHop, NewConnectionUpstreamProxyAuth, NewConnectionUpstreamProxyPolicy,
-    identity_agent_from_form, identity_agent_selector,
+    identity_agent_from_form, identity_agent_selector, ssh_auth_tab_from_saved_auth,
 };
 use crate::workspace::quick_commands::QuickCommandImportStrategy;
 use crate::workspace::session_icons;
@@ -16,9 +16,10 @@ use chrono::{DateTime, Datelike, Local, Utc};
 use gpui::{Div, EventEmitter, Task, prelude::*, rgba};
 use oxideterm_connections::{
     AuthType, ConnectionAuthDraft, ConnectionAuthDraftKind, ConnectionDraft, ConnectionInfo,
-    ConnectionStore, ProxyHopDraft, RemoteDesktopProfile, SaveConnectionRequest, SavedAuth,
-    SavedConnection, SavedUpstreamProxyAuth, SavedUpstreamProxyConfig, SavedUpstreamProxyPolicy,
-    SavedUpstreamProxyProtocol, SecretString, SerialProfile, SshConfigHost, TelnetProfile,
+    ConnectionStore, MoshProfile, ProxyHopDraft, RemoteDesktopProfile, SaveConnectionRequest,
+    SavedAuth, SavedConnection, SavedProxyCommand, SavedProxyHop, SavedUpstreamProxyAuth,
+    SavedUpstreamProxyConfig, SavedUpstreamProxyPolicy, SavedUpstreamProxyProtocol, SecretString,
+    SerialProfile, SshConfigHost, TelnetProfile,
     oxide_file::{
         ExportPreflightResult, ForwardDetail, ImportConflictStrategy, ImportPreview,
         ImportResultEnvelope, OxideExportOptions, OxideFile, OxideFileError, OxideForwardRecord,
@@ -99,8 +100,6 @@ const MANAGER_SORT_MENU_WIDTH: f32 = 184.0; // Sort fields reuse the compact too
 const MANAGER_SORT_MENU_HEIGHT: f32 = 220.0; // Seven compact radio rows plus menu padding.
 const MANAGER_BATCH_MOVE_MENU_WIDTH: f32 = 220.0; // Tauri batch move DropdownMenuContent natural width.
 const MANAGER_BATCH_MOVE_MENU_HEIGHT: f32 = 260.0; // Keeps long group lists scrollable without covering the viewport.
-pub(super) const SAVED_CONNECTION_VIRTUAL_ROW_HEIGHT: f32 = 43.0; // Tauri Sidebar SAVED_CONNECTION_ROW_HEIGHT
-pub(super) const SAVED_CONNECTION_VIRTUAL_OVERSCAN: usize = 12; // Tauri savedListVirtualizer overscan
 const MANAGER_RESPONSIVE_SM: f32 = 640.0;
 const MANAGER_RESPONSIVE_MD: f32 = 768.0;
 const OXIDE_APP_SETTINGS_SECTIONS: &[&str] = ALL_OXIDE_SETTINGS_SECTIONS;
@@ -128,7 +127,6 @@ const OXIDE_NEW_BADGE_BG_ALPHA: u32 = 0x26; // Tauri bg-green-500/15
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) enum SessionManagerInput {
     Search,
-    SavedSearch,
     GroupName,
     OxideImportPassword,
     OxideExportPassword,
@@ -140,7 +138,6 @@ impl SessionManagerInput {
     pub(super) fn anchor_key(self) -> u64 {
         match self {
             Self::Search => 1,
-            Self::SavedSearch => 2,
             Self::GroupName => 3,
             Self::OxideImportPassword => 4,
             Self::OxideExportPassword => 5,
@@ -285,6 +282,10 @@ pub(super) enum SessionManagerDeleteConfirm {
         id: String,
         name: String,
     },
+    MoshProfile {
+        id: String,
+        name: String,
+    },
     RemoteDesktopProfile {
         id: String,
         name: String,
@@ -300,6 +301,9 @@ pub(super) enum SessionManagerDeleteConfirm {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) enum SessionManagerSelectionTarget {
     Connection(String),
+    Serial(String),
+    Telnet(String),
+    Mosh(String),
     RemoteDesktop(String),
 }
 
@@ -308,6 +312,7 @@ pub(super) enum SessionManagerRowActionTarget {
     Connection(String),
     Serial(String),
     Telnet(String),
+    Mosh(String),
     RemoteDesktop(String),
     GroupRoot,
     Group(String),
@@ -345,6 +350,10 @@ pub(super) struct OxideImportResultView {
     pub(super) skipped_quick_commands: bool,
     pub(super) imported_serial_profiles: usize,
     pub(super) skipped_serial_profiles: usize,
+    pub(super) imported_telnet_profiles: usize,
+    pub(super) skipped_telnet_profiles: usize,
+    pub(super) imported_mosh_profiles: usize,
+    pub(super) skipped_mosh_profiles: usize,
     pub(super) quick_commands_errors: Vec<String>,
     pub(super) imported_plugin_settings: usize,
     pub(super) skipped_plugin_settings: bool,
@@ -383,7 +392,6 @@ pub(super) struct SessionManagerState {
     pub(super) sort_field: SessionSortField,
     pub(super) sort_direction: SortDirection,
     pub(super) search_query: String,
-    pub(super) saved_search_query: String,
     pub(super) selected_items: HashSet<SessionManagerSelectionTarget>,
     pub(super) view_mode_menu_open: bool,
     pub(super) sort_menu_open: bool,
@@ -403,7 +411,6 @@ pub(super) struct SessionManagerState {
     pub(super) oxide_export_dialog: Option<OxideExportDialogState>,
     pub(super) status: Option<String>,
     pub(super) ssh_config_hosts: Vec<SshConfigHost>,
-    pub(super) saved_sidebar_scroll_handle: UniformListScrollHandle,
     pub(super) main_grid_list_state: ListState,
     pub(super) main_grid_list_cache: RefCell<VirtualListSignatureCache>,
     pub(super) main_list_state: ListState,
@@ -445,7 +452,6 @@ impl Default for SessionManagerState {
             sort_field: SessionSortField::LastUsed,
             sort_direction: SortDirection::Desc,
             search_query: String::new(),
-            saved_search_query: String::new(),
             selected_items: HashSet::new(),
             view_mode_menu_open: false,
             sort_menu_open: false,
@@ -465,7 +471,6 @@ impl Default for SessionManagerState {
             oxide_export_dialog: None,
             status: None,
             ssh_config_hosts: Vec::new(),
-            saved_sidebar_scroll_handle: UniformListScrollHandle::new(),
             main_grid_list_state: tauri_virtual_list_state(
                 0,
                 ListAlignment::Top,
@@ -606,7 +611,6 @@ impl SessionManagerState {
     pub(in crate::workspace) fn input_value(&self, input: SessionManagerInput) -> Option<&str> {
         match input {
             SessionManagerInput::Search => Some(&self.search_query),
-            SessionManagerInput::SavedSearch => Some(&self.saved_search_query),
             SessionManagerInput::GroupName => Some(&self.group_name_draft),
             SessionManagerInput::OxideImportPassword => self
                 .oxide_import_dialog
@@ -636,7 +640,6 @@ impl SessionManagerState {
     ) -> bool {
         let value = match input {
             SessionManagerInput::Search => &mut self.search_query,
-            SessionManagerInput::SavedSearch => &mut self.saved_search_query,
             SessionManagerInput::GroupName => {
                 self.group_editor_error = None;
                 &mut self.group_name_draft
@@ -749,6 +752,8 @@ pub(super) struct OxideImportDialogState {
     pub(super) expanded_app_settings_sections: HashSet<String>,
     pub(super) import_quick_commands: bool,
     pub(super) import_serial_profiles: bool,
+    pub(super) import_telnet_profiles: bool,
+    pub(super) import_mosh_profiles: bool,
     pub(super) import_plugin_settings: bool,
     pub(super) selected_plugin_ids: HashSet<String>,
     pub(super) import_forwards: bool,
@@ -791,6 +796,8 @@ impl Default for OxideImportDialogState {
             expanded_app_settings_sections: HashSet::new(),
             import_quick_commands: true,
             import_serial_profiles: true,
+            import_telnet_profiles: true,
+            import_mosh_profiles: true,
             import_plugin_settings: true,
             selected_plugin_ids: HashSet::new(),
             import_forwards: true,
@@ -831,6 +838,8 @@ impl std::fmt::Debug for OxideImportDialogState {
             )
             .field("import_quick_commands", &self.import_quick_commands)
             .field("import_serial_profiles", &self.import_serial_profiles)
+            .field("import_telnet_profiles", &self.import_telnet_profiles)
+            .field("import_mosh_profiles", &self.import_mosh_profiles)
             .field("import_plugin_settings", &self.import_plugin_settings)
             .field("selected_plugin_ids", &self.selected_plugin_ids)
             .field("import_forwards", &self.import_forwards)
@@ -863,6 +872,8 @@ pub(super) struct OxideExportDialogState {
     pub(super) include_local_terminal_env_vars: bool,
     pub(super) include_quick_commands: bool,
     pub(super) include_serial_profiles: bool,
+    pub(super) include_telnet_profiles: bool,
+    pub(super) include_mosh_profiles: bool,
     pub(super) include_remote_desktop_profiles: bool,
     pub(super) include_plugin_settings: bool,
     pub(super) plugin_groups: HashMap<String, usize>,
@@ -904,6 +915,8 @@ impl Default for OxideExportDialogState {
             include_local_terminal_env_vars: false,
             include_quick_commands: true,
             include_serial_profiles: true,
+            include_telnet_profiles: true,
+            include_mosh_profiles: true,
             include_remote_desktop_profiles: true,
             include_plugin_settings: true,
             plugin_groups: HashMap::new(),
@@ -948,6 +961,7 @@ impl std::fmt::Debug for OxideExportDialogState {
             )
             .field("include_quick_commands", &self.include_quick_commands)
             .field("include_serial_profiles", &self.include_serial_profiles)
+            .field("include_telnet_profiles", &self.include_telnet_profiles)
             .field(
                 "include_remote_desktop_profiles",
                 &self.include_remote_desktop_profiles,
@@ -1012,8 +1026,8 @@ use self::{
 pub(in crate::workspace) use self::helpers::save_request_from_form;
 pub(in crate::workspace) use self::helpers::{
     RuntimeSecretHandoff, duplicate_connection_template_name, form_from_saved_connection,
-    save_request_from_form_with_existing_auth, save_request_from_form_with_proxy_hop_prefix,
-    upstream_proxy_config_from_form,
+    restore_saved_proxy_chain_in_form, save_request_from_form_with_existing_auth,
+    save_request_from_form_with_proxy_hop_prefix, upstream_proxy_config_from_form,
 };
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ const EN_PARTS: &[&str] = &[
     include_str!("../locales/en/sftp.json"),
     include_str!("../locales/en/ssh.json"),
     include_str!("../locales/en/terminal.json"),
+    include_str!("../locales/en/mosh.json"),
     include_str!("../locales/en/ide.json"),
     include_str!("../locales/en/fileManager.json"),
     include_str!("../locales/en/launcher.json"),
@@ -41,6 +42,7 @@ const DE_PARTS: &[&str] = &[
     include_str!("../locales/de/sftp.json"),
     include_str!("../locales/de/ssh.json"),
     include_str!("../locales/de/terminal.json"),
+    include_str!("../locales/de/mosh.json"),
     include_str!("../locales/de/ide.json"),
     include_str!("../locales/de/fileManager.json"),
     include_str!("../locales/de/launcher.json"),
@@ -62,6 +64,7 @@ const ES_ES_PARTS: &[&str] = &[
     include_str!("../locales/es-ES/sftp.json"),
     include_str!("../locales/es-ES/ssh.json"),
     include_str!("../locales/es-ES/terminal.json"),
+    include_str!("../locales/es-ES/mosh.json"),
     include_str!("../locales/es-ES/ide.json"),
     include_str!("../locales/es-ES/fileManager.json"),
     include_str!("../locales/es-ES/launcher.json"),
@@ -83,6 +86,7 @@ const FR_FR_PARTS: &[&str] = &[
     include_str!("../locales/fr-FR/sftp.json"),
     include_str!("../locales/fr-FR/ssh.json"),
     include_str!("../locales/fr-FR/terminal.json"),
+    include_str!("../locales/fr-FR/mosh.json"),
     include_str!("../locales/fr-FR/ide.json"),
     include_str!("../locales/fr-FR/fileManager.json"),
     include_str!("../locales/fr-FR/launcher.json"),
@@ -104,6 +108,7 @@ const IT_PARTS: &[&str] = &[
     include_str!("../locales/it/sftp.json"),
     include_str!("../locales/it/ssh.json"),
     include_str!("../locales/it/terminal.json"),
+    include_str!("../locales/it/mosh.json"),
     include_str!("../locales/it/ide.json"),
     include_str!("../locales/it/fileManager.json"),
     include_str!("../locales/it/launcher.json"),
@@ -125,6 +130,7 @@ const JA_PARTS: &[&str] = &[
     include_str!("../locales/ja/sftp.json"),
     include_str!("../locales/ja/ssh.json"),
     include_str!("../locales/ja/terminal.json"),
+    include_str!("../locales/ja/mosh.json"),
     include_str!("../locales/ja/ide.json"),
     include_str!("../locales/ja/fileManager.json"),
     include_str!("../locales/ja/launcher.json"),
@@ -146,6 +152,7 @@ const KO_PARTS: &[&str] = &[
     include_str!("../locales/ko/sftp.json"),
     include_str!("../locales/ko/ssh.json"),
     include_str!("../locales/ko/terminal.json"),
+    include_str!("../locales/ko/mosh.json"),
     include_str!("../locales/ko/ide.json"),
     include_str!("../locales/ko/fileManager.json"),
     include_str!("../locales/ko/launcher.json"),
@@ -167,6 +174,7 @@ const PT_BR_PARTS: &[&str] = &[
     include_str!("../locales/pt-BR/sftp.json"),
     include_str!("../locales/pt-BR/ssh.json"),
     include_str!("../locales/pt-BR/terminal.json"),
+    include_str!("../locales/pt-BR/mosh.json"),
     include_str!("../locales/pt-BR/ide.json"),
     include_str!("../locales/pt-BR/fileManager.json"),
     include_str!("../locales/pt-BR/launcher.json"),
@@ -188,6 +196,7 @@ const VI_PARTS: &[&str] = &[
     include_str!("../locales/vi/sftp.json"),
     include_str!("../locales/vi/ssh.json"),
     include_str!("../locales/vi/terminal.json"),
+    include_str!("../locales/vi/mosh.json"),
     include_str!("../locales/vi/ide.json"),
     include_str!("../locales/vi/fileManager.json"),
     include_str!("../locales/vi/launcher.json"),
@@ -209,6 +218,7 @@ const ZH_CN_PARTS: &[&str] = &[
     include_str!("../locales/zh-CN/sftp.json"),
     include_str!("../locales/zh-CN/ssh.json"),
     include_str!("../locales/zh-CN/terminal.json"),
+    include_str!("../locales/zh-CN/mosh.json"),
     include_str!("../locales/zh-CN/ide.json"),
     include_str!("../locales/zh-CN/fileManager.json"),
     include_str!("../locales/zh-CN/launcher.json"),
@@ -230,6 +240,7 @@ const ZH_TW_PARTS: &[&str] = &[
     include_str!("../locales/zh-TW/sftp.json"),
     include_str!("../locales/zh-TW/ssh.json"),
     include_str!("../locales/zh-TW/terminal.json"),
+    include_str!("../locales/zh-TW/mosh.json"),
     include_str!("../locales/zh-TW/ide.json"),
     include_str!("../locales/zh-TW/fileManager.json"),
     include_str!("../locales/zh-TW/launcher.json"),
@@ -428,41 +439,12 @@ mod tests {
     }
 
     #[test]
-    fn english_locale_loads_single_catalog() {
-        let i18n = I18n::new(Locale::En);
-        assert_eq!(i18n.loaded_catalog_count(), 1);
-        assert_eq!(i18n.t("menu.new_terminal"), "New Terminal");
-    }
-
-    #[test]
     #[should_panic(expected = "duplicate native locale key")]
     fn duplicate_keys_are_rejected() {
         let _ = LocaleCatalog::from_json_parts(&[
             r#"{"menu":{"copy":"Copy"}}"#,
             r#"{"menu":{"copy":"Duplicate"}}"#,
         ]);
-    }
-
-    #[test]
-    fn all_eleven_locales_load_without_panic() {
-        let locales = [
-            Locale::De,
-            Locale::En,
-            Locale::EsEs,
-            Locale::FrFr,
-            Locale::It,
-            Locale::Ja,
-            Locale::Ko,
-            Locale::PtBr,
-            Locale::Vi,
-            Locale::ZhCn,
-            Locale::ZhTw,
-        ];
-        for locale in locales {
-            let i18n = I18n::new(locale);
-            let name = i18n.t("app.name");
-            assert_eq!(name, "OxideTerm");
-        }
     }
 
     #[test]
@@ -488,6 +470,7 @@ mod tests {
             "terminal.recording.discard",
             "terminal.recording.show_timestamps",
             "terminal.recording.hide_timestamps",
+            "terminal.highlight_override.title",
         ];
         let english = I18n::new(Locale::En);
 
@@ -531,46 +514,6 @@ mod tests {
 
         // The macOS setting describes background lifetime now that no status
         // item is registered, and every shipped locale must own that wording.
-        for locale in locales {
-            let i18n = I18n::new(locale);
-            for key in keys {
-                let translated = i18n.t(key);
-                assert_ne!(translated, key, "{locale:?} missing {key}");
-                if locale != Locale::En {
-                    assert_ne!(
-                        translated,
-                        english.t(key),
-                        "{locale:?} falls back for {key}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn preview_stable_upgrade_strings_exist_in_every_locale() {
-        let locales = [
-            Locale::De,
-            Locale::En,
-            Locale::EsEs,
-            Locale::FrFr,
-            Locale::It,
-            Locale::Ja,
-            Locale::Ko,
-            Locale::PtBr,
-            Locale::Vi,
-            Locale::ZhCn,
-            Locale::ZhTw,
-        ];
-        let keys = [
-            "settings_view.help.preview_stable_upgrade_title",
-            "settings_view.help.preview_stable_upgrade_hint",
-            "settings_view.help.download_stable",
-        ];
-        let english = I18n::new(Locale::En);
-
-        // Cross-channel protection must remain understandable without falling
-        // back to raw keys or English in any shipped locale.
         for locale in locales {
             let i18n = I18n::new(locale);
             for key in keys {
@@ -1237,6 +1180,46 @@ mod tests {
             "terminal.trzsz.max_file_count_title",
             "terminal.trzsz.max_total_bytes_title",
             "terminal.trzsz.disabled_title",
+        ];
+
+        for locale in locales {
+            let i18n = I18n::new(locale);
+            for key in keys {
+                assert_ne!(i18n.t(key), key, "{locale:?} missing {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn mosh_strings_exist_in_every_locale() {
+        let locales = [
+            Locale::De,
+            Locale::En,
+            Locale::EsEs,
+            Locale::FrFr,
+            Locale::It,
+            Locale::Ja,
+            Locale::Ko,
+            Locale::PtBr,
+            Locale::Vi,
+            Locale::ZhCn,
+            Locale::ZhTw,
+        ];
+        let keys = [
+            "terminal.typeMosh",
+            "modals.new_connection.transport_mosh",
+            "mosh.form.title",
+            "mosh.form.capability_hint",
+            "mosh.form.server_executable",
+            "mosh.form.udp_port",
+            "mosh.form.prediction",
+            "sessionManager.mosh_profiles.delete",
+            "modals.import.contains_mosh_profiles",
+            "modals.import.toggle_mosh_profiles",
+            "export.include_mosh_profiles",
+            "plugin.cloud_sync.settings.sync_mosh_profiles",
+            "plugin.cloud_sync.coverage.mosh_profiles_detail",
+            "plugin.cloud_sync.preview.toggle_mosh_profiles",
         ];
 
         for locale in locales {

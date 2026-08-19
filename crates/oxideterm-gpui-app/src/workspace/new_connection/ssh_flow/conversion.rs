@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use oxideterm_connections::ConnectionStore;
 
 pub(super) fn detect_ssh_agent_available(identity_agent: &str) -> Option<bool> {
     oxideterm_ssh::ssh_agent_available(identity_agent_selector(identity_agent))
@@ -10,20 +11,23 @@ pub(super) fn detect_ssh_agent_available(identity_agent: &str) -> Option<bool> {
 pub(super) fn proxy_chain_from_form(
     form: &mut NewConnectionForm,
     secret_handoff: RuntimeSecretHandoff,
-) -> Result<Option<Vec<ProxyHopConfig>>, String> {
+    saved_auth: Vec<Option<AuthMethod>>,
+) -> Option<Vec<ProxyHopConfig>> {
     if form.proxy_hops.is_empty() {
-        return Ok(None);
+        return None;
     }
 
-    validate_proxy_chain_form(form)?;
-
     let mut chain = Vec::new();
+    let mut saved_auth = saved_auth.into_iter();
     for hop in form.proxy_hops.iter_mut().filter(|hop| hop.complete()) {
         chain.push(ProxyHopConfig {
             host: hop.host.trim().to_string(),
             port: hop.port.trim().parse::<u16>().unwrap_or(22),
             username: hop.username.trim().to_string(),
-            auth: auth_method_from_proxy_hop(hop, secret_handoff),
+            auth: saved_auth
+                .next()
+                .flatten()
+                .unwrap_or_else(|| auth_method_from_proxy_hop(hop, secret_handoff)),
             agent_forwarding: hop.agent_forwarding,
             identity_agent: identity_agent_from_form(&hop.identity_agent),
             agent_forwarding_socket: hop.agent_forwarding_socket.clone(),
@@ -33,8 +37,36 @@ pub(super) fn proxy_chain_from_form(
             expected_host_key_fingerprint: None,
         });
     }
+    debug_assert!(saved_auth.next().is_none());
 
-    Ok(Some(chain))
+    Some(chain)
+}
+
+pub(super) fn saved_proxy_hop_auth_from_store(
+    connection_store: &ConnectionStore,
+    form: &NewConnectionForm,
+    missing_credentials_message: &str,
+) -> Result<Vec<Option<AuthMethod>>, String> {
+    form.proxy_hops
+        .iter()
+        .filter(|hop| hop.complete())
+        .map(|hop| {
+            if hop.saved_connection_id.is_empty() || hop.has_explicit_secret_draft() {
+                return Ok(None);
+            }
+            let saved_connection = connection_store
+                .get(&hop.saved_connection_id)
+                .ok_or_else(|| missing_credentials_message.to_string())?;
+            if !hop.matches_saved_connection(saved_connection) {
+                return Err(missing_credentials_message.to_string());
+            }
+            // Resolve directly into a zeroizing runtime owner without exposing the secret
+            // through the metadata-only jump-server form.
+            auth_method_from_saved_auth(connection_store, &saved_connection.auth)
+                .map(Some)
+                .ok_or_else(|| missing_credentials_message.to_string())
+        })
+        .collect()
 }
 
 pub(super) fn validate_proxy_chain_form(form: &NewConnectionForm) -> Result<(), String> {
@@ -166,6 +198,7 @@ pub(super) fn form_from_runtime_config(
     form.identity_agent = config.identity_agent.clone().unwrap_or_default();
     form.agent_forwarding_socket = config.agent_forwarding_socket.clone();
     form.legacy_ssh_compatibility = config.legacy_ssh_compatibility;
+    form.connect_timeout_seconds = config.timeout_secs;
     form.x11_forwarding = connection_x11_options(config.x11_forwarding);
     form.save_password = auth_fields.save_password;
 
@@ -203,6 +236,7 @@ pub(super) fn proxy_hop_form_from_runtime_config(config: ProxyHopConfig) -> NewC
     let auth_fields = runtime_auth_form_fields(config.auth);
     NewConnectionProxyHop {
         saved_connection_id: String::new(),
+        persisted_proxy_hop_index: None,
         host: config.host,
         port: config.port.to_string(),
         username: config.username,
@@ -327,7 +361,10 @@ fn runtime_auth_form_fields(auth: AuthMethod) -> RuntimeAuthFormFields {
 
 #[cfg(test)]
 mod runtime_save_tests {
+    use std::io::Write;
+
     use super::*;
+    use tempfile::NamedTempFile;
     use zeroize::Zeroizing;
 
     #[test]
@@ -365,6 +402,77 @@ mod runtime_save_tests {
             AuthMethod::Password { ref password } if password.as_str() == "jump-secret"
         ));
         assert_eq!(hop.password, "jump-secret");
+    }
+
+    #[test]
+    fn two_saved_password_hops_hydrate_without_populating_the_form() {
+        let mut store_file = NamedTempFile::new().unwrap();
+        // Read-only legacy data exercises the runtime handoff without requiring
+        // an operating-system credential service in the test environment.
+        let fixture = Zeroizing::new(
+            r#"{
+              "connections": [
+                {
+                  "id": "public-proxy",
+                  "name": "public-proxy",
+                  "host": "proxy.example.com",
+                  "port": 22,
+                  "username": "proxy-user",
+                  "auth": { "type": "password", "password": "public-proxy-secret" },
+                  "created_at": "2026-01-01T00:00:00Z"
+                },
+                {
+                  "id": "gateway",
+                  "name": "gateway",
+                  "host": "gateway.internal",
+                  "port": 22,
+                  "username": "gateway-user",
+                  "auth": { "type": "password", "password": "gateway-secret" },
+                  "created_at": "2026-01-01T00:00:00Z"
+                }
+              ],
+              "groups": []
+            }"#
+            .to_string(),
+        );
+        store_file.write_all(fixture.as_bytes()).unwrap();
+        store_file.flush().unwrap();
+        let connection_store = ConnectionStore::load_read_only(store_file.path()).unwrap();
+        let connection_infos = connection_store.connection_infos();
+        let public_proxy = connection_infos
+            .iter()
+            .find(|connection| connection.id == "public-proxy")
+            .unwrap();
+        let gateway = connection_infos
+            .iter()
+            .find(|connection| connection.id == "gateway")
+            .unwrap();
+        let mut form = NewConnectionForm::default();
+        for connection in [public_proxy, gateway] {
+            let mut hop = NewConnectionProxyHop::new();
+            hop.apply_saved_connection(connection);
+            form.proxy_hops.push(hop);
+        }
+
+        let saved_auth =
+            saved_proxy_hop_auth_from_store(&connection_store, &form, "missing saved credentials")
+                .unwrap();
+        let proxy_chain =
+            proxy_chain_from_form(&mut form, RuntimeSecretHandoff::CopyForTest, saved_auth)
+                .expect("proxy chain");
+
+        assert!(matches!(
+            &proxy_chain[0].auth,
+            AuthMethod::Password { password } if password.as_str() == "public-proxy-secret"
+        ));
+        assert!(matches!(
+            &proxy_chain[1].auth,
+            AuthMethod::Password { password } if password.as_str() == "gateway-secret"
+        ));
+        assert!(form.proxy_hops.iter().all(|hop| hop.password.is_empty()));
+        let debug_output = format!("{proxy_chain:?}");
+        assert!(!debug_output.contains("public-proxy-secret"));
+        assert!(!debug_output.contains("gateway-secret"));
     }
 
     #[test]

@@ -56,7 +56,7 @@ pub fn export_connections_to_oxide(
     password: &str,
     options: OxideExportOptions,
 ) -> Result<Vec<u8>, OxideFileError> {
-    export_connections_to_oxide_inner(store, connection_ids, password, options, None)
+    export_connections_to_oxide_inner(store, connection_ids, Some(password), options, None, None)
 }
 
 pub fn export_connections_to_oxide_with_progress<F>(
@@ -72,8 +72,29 @@ where
     export_connections_to_oxide_inner(
         store,
         connection_ids,
-        password,
+        Some(password),
         options,
+        None,
+        Some(&mut on_progress),
+    )
+}
+
+pub fn export_connections_to_oxide_with_context_and_progress<F>(
+    store: &ConnectionStore,
+    connection_ids: &[String],
+    options: OxideExportOptions,
+    encryption_context: &OxideBatchEncryptionContext,
+    mut on_progress: F,
+) -> Result<Vec<u8>, OxideFileError>
+where
+    F: FnMut(&str, usize, usize),
+{
+    export_connections_to_oxide_inner(
+        store,
+        connection_ids,
+        None,
+        options,
+        Some(encryption_context),
         Some(&mut on_progress),
     )
 }
@@ -81,11 +102,14 @@ where
 fn export_connections_to_oxide_inner(
     store: &ConnectionStore,
     connection_ids: &[String],
-    password: &str,
+    password: Option<&str>,
     options: OxideExportOptions,
+    encryption_context: Option<&OxideBatchEncryptionContext>,
     mut on_progress: Option<&mut dyn FnMut(&str, usize, usize)>,
 ) -> Result<Vec<u8>, OxideFileError> {
-    validate_password(password)?;
+    if let Some(password) = password {
+        validate_password(password)?;
+    }
 
     let total_steps = connection_ids.len() + 9;
     let mut current_step = 0usize;
@@ -98,6 +122,27 @@ fn export_connections_to_oxide_inner(
     };
 
     let selected: HashSet<&str> = connection_ids.iter().map(String::as_str).collect();
+    if let Some(snapshot_json) = options.remote_desktop_profiles_json.as_deref() {
+        let snapshot = serde_json::from_str::<RemoteDesktopProfilesSyncSnapshot>(snapshot_json)
+            .map_err(|error| {
+                OxideFileError::InvalidFormat(format!(
+                    "Invalid remote desktop profiles snapshot for .oxide export: {error}"
+                ))
+            })?;
+        for profile in snapshot.records {
+            let Some(gateway_connection_id) = profile.ssh_gateway_connection_id else {
+                continue;
+            };
+            if !selected.contains(gateway_connection_id.as_str()) {
+                // The encrypted archive needs both sides of this relation so
+                // import can remap the saved SSH connection safely.
+                return Err(OxideFileError::InvalidFormat(format!(
+                    "Remote desktop profile '{}' requires its SSH gateway connection to be selected",
+                    profile.name
+                )));
+            }
+        }
+    }
     let forwards_by_connection = options
         .forwards
         .iter()
@@ -143,11 +188,17 @@ fn export_connections_to_oxide_inner(
         count_quick_commands_for_export(options.quick_commands_json.as_deref());
     let serial_profiles_count =
         count_serial_profiles_for_export(options.serial_profiles_json.as_deref());
+    let telnet_profiles_count =
+        count_telnet_profiles_for_export(options.telnet_profiles_json.as_deref());
+    let mosh_profiles_count =
+        count_mosh_profiles_for_export(options.mosh_profiles_json.as_deref());
     let remote_desktop_profiles_count =
         count_remote_desktop_profiles_for_export(options.remote_desktop_profiles_json.as_deref());
     let has_extra_payload = options.app_settings_json.is_some()
         || options.quick_commands_json.is_some()
         || options.serial_profiles_json.is_some()
+        || options.telnet_profiles_json.is_some()
+        || options.mosh_profiles_json.is_some()
         || options.remote_desktop_profiles_json.is_some()
         || !options.plugin_settings.is_empty()
         || !options.portable_secrets.is_empty();
@@ -157,6 +208,8 @@ fn export_connections_to_oxide_inner(
         app_settings_json: options.app_settings_json,
         quick_commands_json: options.quick_commands_json,
         serial_profiles_json: options.serial_profiles_json,
+        telnet_profiles_json: options.telnet_profiles_json,
+        mosh_profiles_json: options.mosh_profiles_json,
         remote_desktop_profiles_json: options.remote_desktop_profiles_json,
         plugin_settings: options.plugin_settings,
         portable_secrets: options.portable_secrets,
@@ -180,6 +233,8 @@ fn export_connections_to_oxide_inner(
         quick_commands_count: quick_command_counts.map(|counts| counts.0),
         quick_command_categories_count: quick_command_counts.map(|counts| counts.1),
         serial_profiles_count,
+        telnet_profiles_count,
+        mosh_profiles_count,
         remote_desktop_profiles_count,
         plugin_settings_count: (!payload.plugin_settings.is_empty())
             .then_some(payload.plugin_settings.len()),
@@ -189,11 +244,22 @@ fn export_connections_to_oxide_inner(
     };
     report_progress("building_metadata");
 
-    let oxide_file = if has_progress {
+    let oxide_file = if let Some(encryption_context) = encryption_context {
+        encrypt_oxide_file_with_context_and_progress(
+            &payload,
+            encryption_context,
+            metadata,
+            |stage| {
+                report_progress(stage);
+            },
+        )?
+    } else if has_progress {
+        let password = password.ok_or(OxideFileError::CryptoError)?;
         encrypt_oxide_file_with_progress(&payload, password, metadata, |stage| {
             report_progress(stage);
         })?
     } else {
+        let password = password.ok_or(OxideFileError::CryptoError)?;
         encrypt_oxide_file(&payload, password, metadata)?
     };
     let bytes = oxide_file.to_bytes()?;
@@ -282,6 +348,7 @@ fn export_connection(
 ) -> Result<EncryptedConnection, OxideFileError> {
     let proxy_chain = export_proxy_chain(store, conn, options)?;
     Ok(EncryptedConnection {
+        source_connection_id: Some(conn.id.clone()),
         name: conn.name.clone(),
         group: conn.group.clone(),
         host: conn.host.clone(),
@@ -568,6 +635,16 @@ fn count_quick_commands_for_export(snapshot_json: Option<&str>) -> Option<(usize
 }
 
 fn count_serial_profiles_for_export(snapshot_json: Option<&str>) -> Option<usize> {
+    let value = serde_json::from_str::<Value>(snapshot_json?).ok()?;
+    value.get("records")?.as_array().map(Vec::len)
+}
+
+fn count_telnet_profiles_for_export(snapshot_json: Option<&str>) -> Option<usize> {
+    let value = serde_json::from_str::<Value>(snapshot_json?).ok()?;
+    value.get("records")?.as_array().map(Vec::len)
+}
+
+fn count_mosh_profiles_for_export(snapshot_json: Option<&str>) -> Option<usize> {
     let value = serde_json::from_str::<Value>(snapshot_json?).ok()?;
     value.get("records")?.as_array().map(Vec::len)
 }

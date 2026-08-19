@@ -1,5 +1,7 @@
 const AGENT_FORWARDING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const X11_FORWARDING_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+const OXIDETERM_PRIVATE_OSC_SESSION_ENV: &str = "LC_OXIDETERM_SESSION";
+const OXIDETERM_PRIVATE_OSC_SESSION_VALUE: &str = "1";
 const CHILD_CONNECTION_RETIRED_DURING_CONNECT: &str =
     "child connection was retired while its SSH transport was connecting";
 
@@ -318,6 +320,20 @@ async fn open_plain_shell(
     )
     .await
     .map_err(|(_, error)| error)?;
+    // This marker belongs to this PTY channel, not the shared physical node.
+    // Servers may reject optional environment requests; private editor OSC then
+    // stays disabled while the regular shell and standard OSC 7 remain usable.
+    if channel
+        .set_env(
+            false,
+            OXIDETERM_PRIVATE_OSC_SESSION_ENV,
+            OXIDETERM_PRIVATE_OSC_SESSION_VALUE,
+        )
+        .await
+        .is_err()
+    {
+        tracing::debug!("optional SSH shell integration marker could not be requested");
+    }
     channel
         .request_shell(false)
         .await
@@ -635,6 +651,21 @@ impl SshTransportClient {
         consumer: ConnectionConsumer,
     ) -> Result<SshConnectionHandle, SshTransportError> {
         let connection = registry.acquire(self.config.clone(), consumer.clone());
+        self.connect_existing_node_with_registry(registry, consumer, connection)
+            .await
+    }
+
+    /// Establish an isolated registry-owned SSH transport for short-lived work.
+    ///
+    /// Callers must release the consumer after the command completes. Dedicated
+    /// entries retire immediately, so bootstrap traffic cannot join the saved
+    /// SSH node pool or inherit its long-lived capabilities.
+    pub async fn connect_dedicated_node_with_registry(
+        self,
+        registry: SshConnectionRegistry,
+        consumer: ConnectionConsumer,
+    ) -> Result<SshConnectionHandle, SshTransportError> {
+        let connection = registry.acquire_dedicated(self.config.clone(), consumer.clone());
         self.connect_existing_node_with_registry(registry, consumer, connection)
             .await
     }

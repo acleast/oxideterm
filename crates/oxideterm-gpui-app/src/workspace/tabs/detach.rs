@@ -1,6 +1,7 @@
 use super::navigation::TAB_DRAG_THRESHOLD_PX;
 use super::*;
 
+use oxideterm_gpui_ui::button::ButtonVariant;
 use oxideterm_gpui_ui::context_menu::{
     ContextMenuItemKind, context_menu_content, context_menu_event_boundary, context_menu_item,
     context_menu_separator,
@@ -10,7 +11,9 @@ use oxideterm_gpui_ui::modal::overlay_content_boundary;
 const TAB_CONTEXT_MENU_WIDTH: f32 = 228.0;
 const TAB_CONTEXT_MENU_HEIGHT: f32 = 136.0;
 const TAB_CONTEXT_MENU_COPY_SESSION_HEIGHT: f32 = 176.0;
+const TAB_CONTEXT_MENU_RENAME_HEIGHT: f32 = 168.0;
 const TAB_CONTEXT_MENU_MARGIN: f32 = 8.0;
+const TAB_RENAME_DIALOG_WIDTH: f32 = 420.0;
 const TAB_HANDOFF_PREVIEW_WIDTH_EXTRA: f32 = 96.0;
 const TAB_HANDOFF_PREVIEW_MIN_WIDTH: f32 = 220.0;
 const TAB_HANDOFF_PREVIEW_MAX_WIDTH: f32 = 360.0;
@@ -161,6 +164,222 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn close_tab_context_menu(&mut self) -> bool {
         self.main_window_tabs.context_menu.take().is_some()
+    }
+
+    pub(in crate::workspace) fn begin_tab_rename(
+        &mut self,
+        tab_id: TabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(title) = self.tab_by_id(tab_id, cx).and_then(|tab| {
+            matches!(
+                tab.kind,
+                TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+            )
+            .then(|| tab.title.clone())
+        }) else {
+            return false;
+        };
+        let title_len = title.encode_utf16().count();
+        // Keep the draft in window UI state; the canonical tab changes only on submit.
+        self.tab_rename_dialog = Some(TabRenameDialog {
+            tab_id,
+            draft: title,
+        });
+        self.close_tab_context_menu();
+        self.ime_marked_text = None;
+        self.set_ime_selection_from_anchor(WorkspaceImeTarget::TabRename, 0, title_len);
+        // Move key dispatch off the terminal pane before the platform text
+        // owner receives printable input for the rename field.
+        window.focus(&self.focus_handle, cx);
+        self.show_active_input_caret(cx);
+        cx.notify();
+        true
+    }
+
+    pub(in crate::workspace) fn cancel_tab_rename(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let closed = self.tab_rename_dialog.take().is_some();
+        if closed {
+            self.ime_marked_text = None;
+            self.clear_ime_selection();
+            // Restore the pane as the keyboard owner only after the blocking
+            // rename input has released its platform text handler.
+            self.focus_active_pane(window, cx);
+            cx.notify();
+        }
+        closed
+    }
+
+    pub(in crate::workspace) fn submit_tab_rename(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(dialog) = self.tab_rename_dialog.as_ref() else {
+            return false;
+        };
+        if dialog.draft.trim().is_empty() {
+            return false;
+        }
+        let tab_id = dialog.tab_id;
+        let draft = dialog.draft.clone();
+        let renamed = self.tab_host.update(cx, |tab_host, _cx| {
+            tab_host.rename_terminal_tab(tab_id, &draft)
+        });
+        // Renaming changes display metadata only; existing mounts and sessions stay live.
+        // If an asynchronous tab close won the race, dismiss the stale dialog as well.
+        self.tab_rename_dialog = None;
+        self.ime_marked_text = None;
+        self.clear_ime_selection();
+        self.focus_active_pane(window, cx);
+        cx.notify();
+        renamed
+    }
+
+    pub(in crate::workspace) fn handle_tab_rename_dialog_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.tab_rename_dialog.is_none() || event.keystroke.modifiers.platform {
+            return false;
+        }
+        match event.keystroke.key.as_str() {
+            "escape" => self.cancel_tab_rename(window, cx),
+            "enter" => {
+                self.submit_tab_rename(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub(in crate::workspace) fn render_tab_rename_dialog(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let dialog = self.tab_rename_dialog.as_ref()?;
+        let target = WorkspaceImeTarget::TabRename;
+        let submit_disabled = dialog.draft.trim().is_empty();
+        let input = text_input(
+            &self.tokens,
+            TextInputView {
+                value: dialog.draft.as_str(),
+                placeholder: self.i18n.t("tabbar.rename_tab_placeholder"),
+                focused: true,
+                caret_visible: self.input_caret.visible(),
+                secret: false,
+                selected_all: false,
+                selected_range: self.ime_selected_range_for_target(target, cx),
+                marked_text: self.marked_text_for_target(target, cx),
+            },
+        )
+        .h(px(34.0))
+        .cursor(CursorStyle::IBeam);
+        let workspace = cx.entity();
+        let input = text_input_anchor_probe(
+            target.anchor_id(),
+            input
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        this.ime_marked_text = None;
+                        this.show_active_input_caret(cx);
+                        window.focus(&this.focus_handle, cx);
+                        this.begin_ime_selection_from_mouse_down(target, event, window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                    this.update_ime_selection_drag_from_mouse_move(event, window, cx);
+                })),
+            move |anchor, _window, cx| {
+                let _ = workspace.update(cx, |this, cx| {
+                    this.update_text_input_anchor(anchor, cx);
+                });
+            },
+        );
+        let cancel_action = self.workspace_confirm_footer_action_button(
+            self.i18n.t("common.cancel"),
+            ButtonVariant::Secondary,
+            ConfirmDialogAction::Cancel,
+            false,
+            None,
+            |this, _event, window, cx| {
+                this.cancel_tab_rename(window, cx);
+            },
+            cx,
+        );
+        let rename_action = self.workspace_confirm_footer_action_button(
+            self.i18n.t("tabbar.rename_tab_action"),
+            ButtonVariant::Default,
+            ConfirmDialogAction::Confirm,
+            submit_disabled,
+            None,
+            |this, _event, window, cx| {
+                this.submit_tab_rename(window, cx);
+            },
+            cx,
+        );
+        let theme = self.tokens.ui;
+        let content = oxideterm_gpui_ui::modal::dialog_content(&self.tokens)
+            .w(px(TAB_RENAME_DIALOG_WIDTH))
+            .child(
+                div()
+                    .px_4()
+                    .py_3()
+                    .border_b_1()
+                    .border_color(rgb(theme.border))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(14.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(rgb(theme.text))
+                            .child(self.i18n.t("tabbar.rename_tab")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb(theme.text_muted))
+                            .child(self.i18n.t("tabbar.rename_tab_description")),
+                    ),
+            )
+            .child(div().px_4().py_4().child(input))
+            .child(
+                div()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(rgb(theme.border))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(cancel_action)
+                    .child(rename_action),
+            );
+
+        Some(
+            oxideterm_gpui_ui::modal::dismissible_dialog_backdrop()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, window, cx| {
+                        this.cancel_tab_rename(window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(oxideterm_gpui_ui::modal::overlay_content_boundary(content))
+                .into_any_element(),
+        )
     }
 
     pub(in crate::workspace) fn detach_tab_to_window(
@@ -342,22 +561,17 @@ impl WorkspaceApp {
         tab_id: TabId,
         mount_id: tabs::TabMountId,
         window_registration: window_registry::WindowRegistration,
-        window_id: gpui::WindowId,
+        current_window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let window_id = current_window.window_handle().window_id();
         self.release_workspace_window(window_registration, window_id, cx);
         let transition = self.tab_host.update(cx, |tab_host, _cx| {
-            tab_host.release_detached_window_and_select(tab_id, mount_id, window_id)
+            tab_host.remove_tab_for_detached_window_release(tab_id, mount_id, window_id)
         });
         if let Some(transition) = transition {
-            self.apply_main_window_active_tab_change(
-                transition.selection.previous,
-                transition.selection.current,
-                cx,
-            );
             self.detached_tab_return_drag = None;
-            self.sync_active_tab_surface(cx);
-            cx.notify();
+            self.finish_tab_removal(transition, None, current_window, cx);
         }
     }
 
@@ -380,9 +594,6 @@ impl WorkspaceApp {
         current_window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        if cleanup.reason == tabs::TabMountCloseReason::DetachedWindowReleased {
-            return;
-        }
         if let Some(handle) = cleanup.detached_window {
             if let Some(window) = current_window
                 && window.window_handle().window_id() == handle.window_id()
@@ -923,9 +1134,6 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let menu = self.main_window_tabs.context_menu?;
-        if self.tab_by_id(menu.tab_id, cx).is_none() {
-            return None;
-        }
         let copy_session = self.tab_by_id(menu.tab_id, cx).and_then(|tab| {
             if tab.kind != TabKind::SshTerminal {
                 return None;
@@ -938,9 +1146,21 @@ impl WorkspaceApp {
                 .ssh_terminal_node_id(session_id)?;
             Some((node_id, tab.title.clone()))
         });
+        let renamable = self.tab_by_id(menu.tab_id, cx).is_some_and(|tab| {
+            matches!(
+                tab.kind,
+                TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+            )
+        });
+        self.tab_by_id(menu.tab_id, cx)?;
         let viewport = window.viewport_size();
-        let menu_height = if copy_session.is_some() {
+        let menu_height = if copy_session.is_some() && renamable {
             TAB_CONTEXT_MENU_COPY_SESSION_HEIGHT
+                + (TAB_CONTEXT_MENU_RENAME_HEIGHT - TAB_CONTEXT_MENU_HEIGHT)
+        } else if copy_session.is_some() {
+            TAB_CONTEXT_MENU_COPY_SESSION_HEIGHT
+        } else if renamable {
+            TAB_CONTEXT_MENU_RENAME_HEIGHT
         } else {
             TAB_CONTEXT_MENU_HEIGHT
         };
@@ -954,14 +1174,50 @@ impl WorkspaceApp {
             TAB_CONTEXT_MENU_MARGIN,
         );
         let detached = self.tab_host.read(cx).is_detached(menu.tab_id);
-        let menu_content = context_menu_content(&self.tokens)
-            .w(px(TAB_CONTEXT_MENU_WIDTH))
-            .when_some(copy_session, |content, (node_id, title)| {
-                content
-                    .child(
+        let menu_body = context_menu_event_boundary(
+            context_menu_content(&self.tokens)
+                .w(px(TAB_CONTEXT_MENU_WIDTH))
+                .when_some(copy_session, |content, (node_id, title)| {
+                    content
+                        .child(
+                            context_menu_item(
+                                &self.tokens,
+                                self.i18n.t("tabbar.copy_session"),
+                                ContextMenuItemKind::Plain,
+                                false,
+                                false,
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _event, window, cx| {
+                                    this.close_tab_context_menu();
+                                    if this
+                                        .duplicate_ssh_terminal_tab_for_existing_node(
+                                            &node_id,
+                                            title.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                        .is_err()
+                                    {
+                                        this.push_command_palette_toast(
+                                            this.i18n.t("tabbar.copy_session_failed"),
+                                            None,
+                                            TerminalNoticeVariant::Error,
+                                            cx,
+                                        );
+                                    }
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                        )
+                        .child(context_menu_separator(&self.tokens))
+                })
+                .when(renamable, |content| {
+                    content.child(
                         context_menu_item(
                             &self.tokens,
-                            self.i18n.t("tabbar.copy_session"),
+                            self.i18n.t("tabbar.rename_tab"),
                             ContextMenuItemKind::Plain,
                             false,
                             false,
@@ -969,75 +1225,56 @@ impl WorkspaceApp {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _event, window, cx| {
-                                this.close_tab_context_menu();
-                                // The new pane registers a distinct terminal consumer while
-                                // NodeRouter continues to own the shared SSH node lifetime.
-                                if this
-                                    .duplicate_ssh_terminal_tab_for_existing_node(
-                                        &node_id,
-                                        title.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                    .is_err()
-                                {
-                                    this.push_command_palette_toast(
-                                        this.i18n.t("tabbar.copy_session_failed"),
-                                        None,
-                                        TerminalNoticeVariant::Error,
-                                        cx,
-                                    );
-                                }
+                                this.begin_tab_rename(menu.tab_id, window, cx);
                                 cx.stop_propagation();
                             }),
                         ),
                     )
-                    .child(context_menu_separator(&self.tokens))
-            })
-            .child(
-                context_menu_item(
-                    &self.tokens,
-                    if detached {
-                        self.i18n.t("tabbar.return_to_main_window")
-                    } else {
-                        self.i18n.t("tabbar.detach_to_window")
-                    },
-                    ContextMenuItemKind::Plain,
-                    false,
-                    false,
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _event, window, cx| {
-                        this.close_tab_context_menu();
+                })
+                .child(
+                    context_menu_item(
+                        &self.tokens,
                         if detached {
-                            this.return_detached_tab_to_main(menu.tab_id, window, cx);
+                            self.i18n.t("tabbar.return_to_main_window")
                         } else {
-                            this.detach_tab_to_window(menu.tab_id, None, window, cx);
-                        }
-                        cx.stop_propagation();
-                    }),
-                ),
-            )
-            .child(context_menu_separator(&self.tokens))
-            .child(
-                context_menu_item(
-                    &self.tokens,
-                    self.i18n.t("tabbar.close_tab"),
-                    ContextMenuItemKind::Plain,
-                    false,
-                    false,
+                            self.i18n.t("tabbar.detach_to_window")
+                        },
+                        ContextMenuItemKind::Plain,
+                        false,
+                        false,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, window, cx| {
+                            this.close_tab_context_menu();
+                            if detached {
+                                this.return_detached_tab_to_main(menu.tab_id, window, cx);
+                            } else {
+                                this.detach_tab_to_window(menu.tab_id, None, window, cx);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ),
                 )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _event, window, cx| {
-                        this.close_tab_context_menu();
-                        this.close_tab_by_id(menu.tab_id, window, cx);
-                        cx.stop_propagation();
-                    }),
+                .child(context_menu_separator(&self.tokens))
+                .child(
+                    context_menu_item(
+                        &self.tokens,
+                        self.i18n.t("tabbar.close_tab"),
+                        ContextMenuItemKind::Plain,
+                        false,
+                        false,
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, window, cx| {
+                            this.close_tab_context_menu();
+                            this.close_tab_by_id(menu.tab_id, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
                 ),
-            );
-        let menu_body = context_menu_event_boundary(menu_content);
+        );
         let menu_body = overlay_content_boundary(menu_body);
 
         Some(
@@ -1201,7 +1438,7 @@ impl WorkspaceApp {
             (TabKind::CloudSync, _) => self.render_cloud_sync_surface(cx),
             (TabKind::RemoteDesktop, _) => self.render_remote_desktop_surface(tab_id, window, cx),
             (_, Some(root_pane)) => self.render_detached_terminal_surface(tab_id, root_pane, cx),
-            _ => self.render_empty_workspace(cx),
+            _ => self.render_empty_workspace(f32::from(window.viewport_size().width), cx),
         }
     }
 
@@ -1233,26 +1470,34 @@ impl WorkspaceApp {
                     .flex()
                     .items_center()
                     .occlude()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            this.start_detached_tab_return_drag(tab_id, event, window, cx);
-                            window.start_window_move();
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_mouse_move(
-                        cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
-                            this.update_detached_tab_return_drag(tab_id, event, window, cx);
-                        }),
-                    )
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseUpEvent, window, cx| {
-                            this.finish_detached_tab_return_drag(tab_id, event, window, cx);
-                            cx.stop_propagation();
-                        }),
-                    )
+                    // Windows moves client-decorated windows through native
+                    // HTCAPTION handling; consuming mouse-down in GPUI blocks it.
+                    .when(cfg!(target_os = "windows"), |region| {
+                        region.window_control_area(gpui::WindowControlArea::Drag)
+                    })
+                    .when(!cfg!(target_os = "windows"), |region| {
+                        region
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    this.start_detached_tab_return_drag(tab_id, event, window, cx);
+                                    window.start_window_move();
+                                    cx.stop_propagation();
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(
+                                move |this, event: &MouseMoveEvent, window, cx| {
+                                    this.update_detached_tab_return_drag(tab_id, event, window, cx);
+                                },
+                            ))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseUpEvent, window, cx| {
+                                    this.finish_detached_tab_return_drag(tab_id, event, window, cx);
+                                    cx.stop_propagation();
+                                }),
+                            )
+                    })
                     .child(div().min_w(px(0.0)).truncate().child(title)),
             )
             .child(
@@ -1401,24 +1646,5 @@ mod tests {
             detached_tab_surface_route(tab_id, &TabKind::Forwards),
             DetachedTabSurfaceRoute::Forwards(tab_id)
         );
-    }
-
-    #[test]
-    fn detached_return_passes_the_source_window_to_mount_cleanup() {
-        let source = include_str!("detach.rs");
-        let return_start = source
-            .find("pub(in crate::workspace) fn return_detached_tab_to_main")
-            .expect("detached return function");
-        let return_tail = &source
-            [return_start + "pub(in crate::workspace) fn return_detached_tab_to_main".len()..];
-        let return_end = return_tail
-            .find("pub(in crate::workspace) fn release_detached_tab_window")
-            .expect("detached release function");
-        let return_source = &return_tail[..return_end];
-
-        assert!(return_source.contains("current_window: &mut Window"));
-        assert!(return_source.contains(
-            "self.apply_tab_mount_cleanup(transition.cleanup, Some(current_window), cx)"
-        ));
     }
 }

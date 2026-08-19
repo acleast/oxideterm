@@ -40,6 +40,10 @@ impl CloudSyncOperationService {
             selection.quick_commands && preview.quick_commands_snapshot_json.is_some();
         let apply_serial_profiles =
             selection.serial_profiles && preview.serial_profiles_snapshot.is_some();
+        let apply_telnet_profiles =
+            selection.telnet_profiles && preview.telnet_profiles_snapshot.is_some();
+        let apply_mosh_profiles =
+            selection.mosh_profiles && preview.mosh_profiles_snapshot.is_some();
         let apply_remote_desktop_profiles =
             selection.remote_desktop_profiles && preview.remote_desktop_profiles_snapshot.is_some();
         let apply_sensitive_credentials =
@@ -51,6 +55,10 @@ impl CloudSyncOperationService {
         } else {
             None
         };
+        let mut decryption_context = sync_password
+            .map(OxideBatchDecryptionContext::new)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         let total = (app_settings_entry_ids.len()
             + plugin_entry_ids.len()
@@ -58,6 +66,8 @@ impl CloudSyncOperationService {
             + usize::from(selection.forwards && preview.forwards_snapshot.is_some())
             + usize::from(apply_quick_commands)
             + usize::from(apply_serial_profiles)
+            + usize::from(apply_telnet_profiles)
+            + usize::from(apply_mosh_profiles)
             + usize::from(apply_remote_desktop_profiles)
             + usize::from(apply_sensitive_credentials))
         .max(1);
@@ -89,6 +99,16 @@ impl CloudSyncOperationService {
                 .as_ref()
                 .map(|snapshot| snapshot.records.len())
                 .unwrap_or(0),
+            telnet_profiles: preview
+                .telnet_profiles_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.records.len())
+                .unwrap_or(0),
+            mosh_profiles: preview
+                .mosh_profiles_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.records.len())
+                .unwrap_or(0),
             remote_desktop_profiles: preview
                 .remote_desktop_profiles_snapshot
                 .as_ref()
@@ -110,19 +130,21 @@ impl CloudSyncOperationService {
         let mut app_settings_snapshots = std::collections::BTreeMap::new();
         let mut plugin_settings_snapshot = Vec::new();
         let mut sensitive_credentials_envelope = None;
-        if let Some(password) = sync_password {
+        if let Some(decryption_context) = decryption_context.as_mut() {
             if apply_sensitive_credentials {
                 if let Some(bytes) = preview.sensitive_credentials_entry.as_ref() {
-                    let envelope = apply_oxide_import_with_options_with_progress(
+                    let envelope = apply_oxide_import_with_options_with_context_and_progress(
                         connection_store,
                         bytes,
-                        password,
+                        decryption_context,
                         OxideImportOptions {
                             selected_names: None,
                             selected_forward_ids: None,
                             conflict_strategy: ImportConflictStrategy::Merge,
                             import_forwards: false,
                             import_serial_profiles: false,
+                            import_telnet_profiles: false,
+                            import_mosh_profiles: false,
                             import_remote_desktop_profiles: false,
                             import_portable_secrets: true,
                             restore_managed_keys: true,
@@ -153,10 +175,10 @@ impl CloudSyncOperationService {
                 let Some(bytes) = preview.app_settings_entries.get(section_id) else {
                     continue;
                 };
-                let envelope = apply_oxide_import_with_options_with_progress(
+                let envelope = apply_oxide_import_with_options_with_context_and_progress(
                     connection_store,
                     bytes,
-                    password,
+                    decryption_context,
                     OxideImportOptions {
                         selected_names: Some(Vec::new()),
                         selected_forward_ids: None,
@@ -192,10 +214,10 @@ impl CloudSyncOperationService {
                 let Some(bytes) = preview.plugin_settings_entries.get(plugin_id) else {
                     continue;
                 };
-                let envelope = apply_oxide_import_with_options_with_progress(
+                let envelope = apply_oxide_import_with_options_with_context_and_progress(
                     connection_store,
                     bytes,
-                    password,
+                    decryption_context,
                     OxideImportOptions {
                         selected_names: Some(Vec::new()),
                         selected_forward_ids: None,
@@ -255,6 +277,16 @@ impl CloudSyncOperationService {
         } else {
             None
         };
+        let telnet_profiles_snapshot = if selection.telnet_profiles {
+            preview.telnet_profiles_snapshot
+        } else {
+            None
+        };
+        let mosh_profiles_snapshot = if selection.mosh_profiles {
+            preview.mosh_profiles_snapshot
+        } else {
+            None
+        };
         let mut remote_desktop_profiles_snapshot = if selection.remote_desktop_profiles {
             preview.remote_desktop_profiles_snapshot
         } else {
@@ -278,6 +310,8 @@ impl CloudSyncOperationService {
             forwards_snapshot,
             quick_commands_snapshot_json,
             serial_profiles_snapshot,
+            telnet_profiles_snapshot,
+            mosh_profiles_snapshot,
             remote_desktop_profiles_snapshot,
             app_settings_snapshots,
             plugin_settings_snapshot,
@@ -287,6 +321,8 @@ impl CloudSyncOperationService {
             + usize::from(applied.forwards.is_some())
             + usize::from(apply_quick_commands)
             + usize::from(apply_serial_profiles)
+            + usize::from(apply_telnet_profiles)
+            + usize::from(apply_mosh_profiles)
             + usize::from(apply_remote_desktop_profiles);
         report_progress(
             progress,
@@ -314,6 +350,8 @@ impl CloudSyncOperationService {
                 .is_some_and(|outcome| outcome.skipped == 0),
             quick_commands: apply_quick_commands,
             serial_profiles: apply_serial_profiles,
+            telnet_profiles: apply_telnet_profiles,
+            mosh_profiles: apply_mosh_profiles,
             remote_desktop_profiles: apply_remote_desktop_profiles,
             sensitive_credentials: apply_sensitive_credentials,
             app_settings_sections: app_settings_entry_ids,

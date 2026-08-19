@@ -1,4 +1,38 @@
 use super::*;
+use oxideterm_remote_desktop::{RemoteDesktopProtocol, RemoteDesktopSessionStatus};
+use oxideterm_terminal::TerminalSessionKind;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum StandaloneActiveSessionKind {
+    Mosh,
+    Telnet,
+    Serial,
+    Rdp,
+    Vnc,
+}
+
+impl StandaloneActiveSessionKind {
+    fn icon(self) -> LucideIcon {
+        match self {
+            Self::Mosh => LucideIcon::Wifi,
+            Self::Telnet => LucideIcon::Terminal,
+            Self::Serial => LucideIcon::Cable,
+            Self::Rdp | Self::Vnc => LucideIcon::Monitor,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum StandaloneActiveSessionTarget {
+    Terminal(TerminalSessionId),
+    RemoteDesktop(TabId),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct StandaloneActiveSession {
+    kind: StandaloneActiveSessionKind,
+    target: StandaloneActiveSessionTarget,
+}
 
 #[derive(Clone)]
 pub(in crate::workspace) struct ActiveSessionSidebarRow {
@@ -13,6 +47,48 @@ pub(in crate::workspace) struct ActiveSessionSidebarRow {
     depth: usize,
     is_last: bool,
     has_children: bool,
+    standalone_session: Option<StandaloneActiveSession>,
+}
+
+fn standalone_terminal_kind(kind: TerminalSessionKind) -> Option<StandaloneActiveSessionKind> {
+    match kind {
+        TerminalSessionKind::Mosh => Some(StandaloneActiveSessionKind::Mosh),
+        TerminalSessionKind::Telnet => Some(StandaloneActiveSessionKind::Telnet),
+        TerminalSessionKind::Serial => Some(StandaloneActiveSessionKind::Serial),
+        TerminalSessionKind::LocalPty | TerminalSessionKind::SshPty => None,
+    }
+}
+
+fn standalone_remote_desktop_kind(protocol: RemoteDesktopProtocol) -> StandaloneActiveSessionKind {
+    match protocol {
+        RemoteDesktopProtocol::Rdp => StandaloneActiveSessionKind::Rdp,
+        RemoteDesktopProtocol::Vnc => StandaloneActiveSessionKind::Vnc,
+    }
+}
+
+fn terminal_lifecycle_readiness(lifecycle: &TerminalLifecycle) -> ActiveSessionReadiness {
+    match lifecycle {
+        TerminalLifecycle::Running => ActiveSessionReadiness::Ready,
+        TerminalLifecycle::Exited(_) => ActiveSessionReadiness::Error,
+        TerminalLifecycle::Closed => ActiveSessionReadiness::Disconnected,
+    }
+}
+
+fn remote_desktop_readiness(status: RemoteDesktopSessionStatus) -> ActiveSessionReadiness {
+    match status {
+        RemoteDesktopSessionStatus::Connected => ActiveSessionReadiness::Ready,
+        RemoteDesktopSessionStatus::Connecting | RemoteDesktopSessionStatus::Reconnecting => {
+            ActiveSessionReadiness::Connecting
+        }
+        RemoteDesktopSessionStatus::Failed => ActiveSessionReadiness::Error,
+        RemoteDesktopSessionStatus::Idle | RemoteDesktopSessionStatus::Disconnected => {
+            ActiveSessionReadiness::Disconnected
+        }
+    }
+}
+
+fn standalone_session_click_should_focus(click_count: usize) -> bool {
+    click_count >= 2
 }
 
 fn session_status_can_remove_from_sidebar(status: ActiveSessionStatus) -> bool {
@@ -69,7 +145,7 @@ impl WorkspaceApp {
             return self.render_active_sessions_focus_sidebar_content(cx);
         }
 
-        let rows = self.active_session_sidebar_rows();
+        let rows = self.active_session_sidebar_rows(cx);
         if rows.is_empty() {
             return self.render_empty_sessions_sidebar_content(cx);
         }
@@ -100,7 +176,7 @@ impl WorkspaceApp {
         &mut self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let rows = self.active_session_sidebar_rows();
+        let rows = self.active_session_sidebar_rows(cx);
         let focused_node_id = self.effective_active_session_focus_node_id(&rows);
         self.active_session_sidebar_focused_node_id = focused_node_id.clone();
         let visible_rows = self.active_session_focus_rows(&rows, focused_node_id.as_ref());
@@ -149,7 +225,10 @@ impl WorkspaceApp {
             .into_any_element()
     }
 
-    pub(in crate::workspace) fn active_session_sidebar_rows(&self) -> Vec<ActiveSessionSidebarRow> {
+    pub(in crate::workspace) fn active_session_sidebar_rows(
+        &self,
+        cx: &App,
+    ) -> Vec<ActiveSessionSidebarRow> {
         let mut tree_nodes = self.node_router.flatten_tree();
         let flat_node_child_counts = tree_nodes
             .iter()
@@ -159,7 +238,7 @@ impl WorkspaceApp {
                 counts
             });
 
-        let rows = tree_nodes
+        let mut rows = tree_nodes
             .drain(..)
             .filter_map(|flat_node| {
                 let flat_node_id = flat_node.id.clone();
@@ -186,10 +265,108 @@ impl WorkspaceApp {
                     has_children: flat_node_child_counts
                         .get(&flat_node_id)
                         .is_some_and(|count| *count > 0),
+                    standalone_session: None,
                 })
             })
             .collect::<Vec<_>>();
+
+        // Standalone protocols own one connection row and never expose SSH capabilities.
+        rows.extend(
+            self.tabs(cx)
+                .iter()
+                .filter_map(|tab| self.standalone_active_session_sidebar_row(tab, cx)),
+        );
         rows
+    }
+
+    fn standalone_active_session_sidebar_row(
+        &self,
+        tab: &Tab,
+        cx: &App,
+    ) -> Option<ActiveSessionSidebarRow> {
+        let (standalone_session, readiness, terminal_ids, row_id) =
+            if tab.kind == TabKind::RemoteDesktop {
+                let session = self.remote_desktop.read(cx).session(tab.id)?;
+                let session = session.read(cx);
+                let protocol = session.active_session_protocol();
+                (
+                    StandaloneActiveSession {
+                        kind: standalone_remote_desktop_kind(protocol),
+                        target: StandaloneActiveSessionTarget::RemoteDesktop(tab.id),
+                    },
+                    remote_desktop_readiness(session.active_session_status()),
+                    Vec::new(),
+                    format!("remote-desktop-session-{}", tab.id.0),
+                )
+            } else {
+                let session_id = tab.active_pane_id.and_then(|pane_id| {
+                    tab.root_pane
+                        .as_ref()
+                        .and_then(|root| root.session_id_for_pane(pane_id))
+                })?;
+                let shared_session = self
+                    .tab_host
+                    .read(cx)
+                    .terminal_location(session_id)
+                    .and_then(|location| {
+                        self.tab_host
+                            .read(cx)
+                            .panes()
+                            .get(&location.pane_id)
+                            .map(|pane| pane.read(cx).shared_session())
+                    })?;
+                let terminal = shared_session.lock();
+                let kind = standalone_terminal_kind(terminal.kind())?;
+                let readiness = if kind == StandaloneActiveSessionKind::Mosh {
+                    terminal
+                        .mosh_connection_status()
+                        .map(|status| match status {
+                            oxideterm_terminal::MoshConnectionStatus::Connecting => {
+                                ActiveSessionReadiness::Connecting
+                            }
+                            oxideterm_terminal::MoshConnectionStatus::Connected => {
+                                ActiveSessionReadiness::Ready
+                            }
+                            oxideterm_terminal::MoshConnectionStatus::Interrupted => {
+                                ActiveSessionReadiness::Error
+                            }
+                        })
+                        .unwrap_or(ActiveSessionReadiness::Connecting)
+                } else {
+                    terminal_lifecycle_readiness(&terminal.lifecycle())
+                };
+                (
+                    StandaloneActiveSession {
+                        kind,
+                        target: StandaloneActiveSessionTarget::Terminal(session_id),
+                    },
+                    readiness,
+                    vec![session_id],
+                    format!("standalone-terminal-session-{}", session_id.0),
+                )
+            };
+
+        let node_id = NodeId::new(row_id.clone());
+        Some(ActiveSessionSidebarRow {
+            node_id,
+            parent_id: None,
+            saved_connection_id: None,
+            title: tab.title.clone(),
+            host: String::new(),
+            username: String::new(),
+            port: 0,
+            node_view: ActiveSessionNode {
+                id: row_id,
+                title: tab.title.clone(),
+                port: 0,
+                terminal_ids,
+                readiness,
+            },
+            depth: 0,
+            is_last: true,
+            has_children: false,
+            standalone_session: Some(standalone_session),
+        })
     }
 
     pub(in crate::workspace) fn sync_active_session_sidebar_list_state(
@@ -227,7 +404,7 @@ impl WorkspaceApp {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(row) = self.active_session_sidebar_rows().into_iter().nth(index) else {
+        let Some(row) = self.active_session_sidebar_rows(cx).into_iter().nth(index) else {
             return div().into_any_element();
         };
         div()
@@ -256,6 +433,7 @@ impl WorkspaceApp {
         row.depth.hash(&mut hasher);
         row.is_last.hash(&mut hasher);
         row.has_children.hash(&mut hasher);
+        row.standalone_session.hash(&mut hasher);
         self.expanded_ssh_nodes
             .contains(&row.node_id)
             .hash(&mut hasher);
@@ -323,7 +501,7 @@ impl WorkspaceApp {
         // selected node visible when entering focus mode, but fall back to root
         // if the selected node is stale or has disappeared.
         if self.active_session_sidebar_view_mode == ActiveSessionSidebarViewMode::Focus {
-            let rows = self.active_session_sidebar_rows();
+            let rows = self.active_session_sidebar_rows(cx);
             let selected = self
                 .active_ssh_node_id
                 .as_ref()
@@ -607,7 +785,7 @@ impl WorkspaceApp {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let rows = self.active_session_sidebar_rows();
+        let rows = self.active_session_sidebar_rows(cx);
         let focused_node_id = self.effective_active_session_focus_node_id(&rows);
         let Some(row) = self
             .active_session_focus_rows(&rows, focused_node_id.as_ref())
@@ -624,6 +802,9 @@ impl WorkspaceApp {
         row: ActiveSessionSidebarRow,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if row.standalone_session.is_some() {
+            return self.render_standalone_session_sidebar_row(row, cx);
+        }
         let theme = self.tokens.ui;
         let selected = self.active_ssh_node_id.as_ref() == Some(&row.node_id);
         let status = self.session_node_status(row.node_view.status());
@@ -1048,6 +1229,9 @@ impl WorkspaceApp {
         row: ActiveSessionSidebarRow,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if row.standalone_session.is_some() {
+            return self.render_standalone_session_sidebar_row(row, cx);
+        }
         let node_id = row.node_id;
         let node_view = row.node_view;
         let node_depth = row.depth;
@@ -1183,8 +1367,8 @@ impl WorkspaceApp {
                 }
                 let listener = cx.listener({
                     let node_id = node_id.clone();
-                    move |this, _event, _window, cx| {
-                        this.request_disconnect_ssh_node(&node_id, cx);
+                    move |this, _event, window, cx| {
+                        this.request_disconnect_ssh_node(&node_id, window, cx);
                         cx.stop_propagation();
                     }
                 });
@@ -1333,6 +1517,107 @@ impl WorkspaceApp {
             .into_any_element()
     }
 
+    fn render_standalone_session_sidebar_row(
+        &self,
+        row: ActiveSessionSidebarRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(session) = row.standalone_session else {
+            return div().into_any_element();
+        };
+        let theme = self.tokens.ui;
+        let active = match session.target {
+            StandaloneActiveSessionTarget::Terminal(session_id) => {
+                self.active_terminal_session_id(cx) == Some(session_id)
+            }
+            StandaloneActiveSessionTarget::RemoteDesktop(tab_id) => {
+                self.active_tab_id(cx) == Some(tab_id)
+            }
+        };
+        let status = self.session_node_status(row.node_view.status());
+        let background = if active {
+            rgba((theme.accent << 8) | SESSION_FOCUS_TERMINAL_ACTIVE_BG_ALPHA)
+        } else {
+            rgba(theme.bg << 8)
+        };
+
+        div()
+            .h(px(SESSION_TREE_NODE_HEIGHT))
+            .w_full()
+            .px_2()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .rounded(px(self.tokens.radii.md))
+            .bg(background)
+            .hover(move |surface| surface.bg(rgb(theme.bg_hover)))
+            .child(self.render_session_status_dot(status))
+            .child(Self::render_lucide_icon(
+                session.kind.icon(),
+                SESSION_TREE_ICON_SIZE,
+                rgb(status.text_color),
+            ))
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(SESSION_TREE_TEXT_SIZE))
+                    .text_color(rgb(status.text_color))
+                    .child(row.title),
+            )
+            .child(
+                div()
+                    .size(px(22.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(self.tokens.radii.md))
+                    .cursor_pointer()
+                    .hover(move |button| {
+                        button.bg(rgba((theme.error << 8) | SESSION_FOCUS_ACTION_HOVER_ALPHA))
+                    })
+                    .child(Self::render_lucide_icon(
+                        LucideIcon::X,
+                        13.0,
+                        rgb(theme.text_muted),
+                    ))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, window, cx| {
+                            match session.target {
+                                StandaloneActiveSessionTarget::Terminal(session_id) => {
+                                    this.close_terminal_session(session_id, window, cx);
+                                }
+                                StandaloneActiveSessionTarget::RemoteDesktop(tab_id) => {
+                                    this.request_close_tab_by_id(tab_id, window, cx);
+                                }
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if standalone_session_click_should_focus(event.click_count) {
+                        match session.target {
+                            StandaloneActiveSessionTarget::Terminal(session_id) => {
+                                this.focus_terminal_session(session_id, window, cx);
+                            }
+                            StandaloneActiveSessionTarget::RemoteDesktop(tab_id) => {
+                                this.set_active_tab(tab_id, window, cx);
+                            }
+                        }
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .into_any_element()
+    }
+
     pub(in crate::workspace) fn can_save_runtime_node_as_connection(
         &self,
         node_id: &NodeId,
@@ -1404,23 +1689,20 @@ impl WorkspaceApp {
                 12.0,
                 muted_text,
             ))
-            .child(
-                div()
-                    .ml_1()
-                    .mr_2()
-                    .child(if matches!(status.icon, LucideIcon::LoaderCircle) {
-                        self.render_loading_icon(
-                            (
-                                gpui::SharedString::from(format!("session-connecting-{node_id:?}")),
-                                0usize,
-                            ),
-                            SESSION_TREE_ICON_SIZE,
-                            row_text,
-                        )
-                    } else {
-                        Self::render_lucide_icon(status.icon, SESSION_TREE_ICON_SIZE, row_text)
-                    }),
-            )
+            .child(div().ml_1().mr(px(6.0)).child(
+                if matches!(status.icon, LucideIcon::LoaderCircle) {
+                    self.render_loading_icon(
+                        (
+                            gpui::SharedString::from(format!("session-connecting-{node_id:?}")),
+                            0usize,
+                        ),
+                        SESSION_TREE_ICON_SIZE,
+                        row_text,
+                    )
+                } else {
+                    Self::render_lucide_icon(status.icon, SESSION_TREE_ICON_SIZE, row_text)
+                },
+            ))
             .child(
                 div()
                     .min_w(px(0.0))
@@ -1509,7 +1791,7 @@ impl WorkspaceApp {
         status: SessionStatusStyle,
     ) -> AnyElement {
         div()
-            .ml_2()
+            .ml(px(6.0))
             .size(px(if status.ring { 12.0 } else { 8.0 }))
             .flex()
             .items_center()
@@ -1570,8 +1852,8 @@ impl WorkspaceApp {
                         div()
                             .absolute()
                             .left_0()
-                            .top(px(5.0))
-                            .bottom(px(5.0))
+                            .top(px(4.0))
+                            .bottom(px(4.0))
                             .w(px(2.0))
                             .rounded_full()
                             .bg(rgb(theme.accent)),
@@ -1585,7 +1867,7 @@ impl WorkspaceApp {
                 ))
                 .child(
                     div()
-                        .ml_2()
+                        .ml(px(6.0))
                         .min_w(px(0.0))
                         .flex_1()
                         .truncate()
@@ -1674,7 +1956,7 @@ impl WorkspaceApp {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(8.0))
+                .gap(px(6.0))
                 .rounded(px(self.tokens.radii.md))
                 .px_2()
                 .text_size(px(SESSION_TREE_TEXT_SIZE))
@@ -1783,5 +2065,53 @@ mod tests {
         assert!(!session_status_can_remove_from_sidebar(
             ActiveSessionStatus::Active
         ));
+    }
+
+    #[test]
+    fn standalone_connection_kinds_exclude_local_and_ssh_terminals() {
+        assert_eq!(
+            standalone_terminal_kind(TerminalSessionKind::Telnet),
+            Some(StandaloneActiveSessionKind::Telnet)
+        );
+        assert_eq!(
+            standalone_terminal_kind(TerminalSessionKind::Serial),
+            Some(StandaloneActiveSessionKind::Serial)
+        );
+        assert_eq!(
+            standalone_terminal_kind(TerminalSessionKind::Mosh),
+            Some(StandaloneActiveSessionKind::Mosh)
+        );
+        assert_eq!(
+            standalone_terminal_kind(TerminalSessionKind::LocalPty),
+            None
+        );
+        assert_eq!(standalone_terminal_kind(TerminalSessionKind::SshPty), None);
+    }
+
+    #[test]
+    fn standalone_connection_readiness_follows_its_backend_owner() {
+        assert_eq!(
+            terminal_lifecycle_readiness(&TerminalLifecycle::Running),
+            ActiveSessionReadiness::Ready
+        );
+        assert_eq!(
+            terminal_lifecycle_readiness(&TerminalLifecycle::Exited(Some(1))),
+            ActiveSessionReadiness::Error
+        );
+        assert_eq!(
+            remote_desktop_readiness(RemoteDesktopSessionStatus::Reconnecting),
+            ActiveSessionReadiness::Connecting
+        );
+        assert_eq!(
+            remote_desktop_readiness(RemoteDesktopSessionStatus::Disconnected),
+            ActiveSessionReadiness::Disconnected
+        );
+    }
+
+    #[test]
+    fn standalone_connection_row_focuses_only_on_double_click() {
+        assert!(!standalone_session_click_should_focus(1));
+        assert!(standalone_session_click_should_focus(2));
+        assert!(standalone_session_click_should_focus(3));
     }
 }

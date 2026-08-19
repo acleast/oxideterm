@@ -58,6 +58,7 @@ const TERMINAL_BEHAVIOR_KEYS: &[&str] = &[
     "renderer",
     "adaptiveRenderer",
     "showFpsOverlay",
+    "highlightTabOnNewOutput",
     "pasteProtection",
     "smartCopy",
     "osc52Clipboard",
@@ -128,6 +129,7 @@ const AI_KEYS: &[&str] = &[
     "agentRoles",
 ];
 const SFTP_KEYS: &[&str] = &[
+    "presentation",
     "maxConcurrentTransfers",
     "directoryParallelism",
     "speedLimitEnabled",
@@ -393,14 +395,17 @@ mod tests {
         let snapshot = json!({
             "format": OXIDE_SETTINGS_FORMAT,
             "version": OXIDE_SETTINGS_VERSION,
-            "sectionIds": ["general", "terminalAppearance", "ai"],
+            "sectionIds": ["general", "terminalAppearance", "terminalBehavior", "ai"],
             "settings": {
                 "general": { "language": "en" },
-                "terminal": { "fontSize": 18 },
+                "terminal": {
+                    "fontSize": 18,
+                    "highlightTabOnNewOutput": false
+                },
                 "ai": { "enabled": true, "enabledConfirmed": true }
             }
         });
-        let selected = ["general", "ai"]
+        let selected = ["general", "terminalBehavior", "ai"]
             .into_iter()
             .map(str::to_string)
             .collect::<HashSet<_>>();
@@ -411,6 +416,7 @@ mod tests {
 
         assert_eq!(merged.general.language, Language::En);
         assert_eq!(merged.terminal.font_size, current.terminal.font_size);
+        assert!(!merged.terminal.highlight_tab_on_new_output);
         assert!(merged.ai.enabled);
     }
 
@@ -441,6 +447,11 @@ mod tests {
                 .is_some()
         );
         assert!(parsed["settings"]["terminal"].get("commandMarks").is_some());
+        assert!(
+            parsed["settings"]["terminal"]
+                .get("highlightTabOnNewOutput")
+                .is_some()
+        );
         assert!(parsed["settings"]["terminal"].get("graphics").is_some());
         assert_eq!(
             parsed["settings"]["terminal"]["backgroundScope"],
@@ -461,6 +472,7 @@ mod tests {
             json!(DEFAULT_WINDOW_OPACITY)
         );
         assert!(parsed["settings"].get("network").is_some());
+        assert!(parsed["settings"].get("windowUI").is_none());
         assert!(parsed["settings"]["sftp"].get("speedLimitKBps").is_some());
         assert!(parsed["settings"]["sftp"].get("speedLimitKbps").is_none());
     }

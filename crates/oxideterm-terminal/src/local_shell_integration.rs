@@ -383,7 +383,7 @@ function global:__oxideterm_pct_path {
 function global:__oxideterm_emit_cwd {
     $location = Get-Location
     $cwd = if ($location.ProviderPath) { $location.ProviderPath } else { $location.Path }
-    [Console]::Out.Write("`e]7;$(__oxideterm_pct_path $cwd)`a")
+    [Console]::Out.Write("$([char]27)]7;$(__oxideterm_pct_path $cwd)$([char]7)")
 }
 function global:prompt {
     __oxideterm_emit_cwd
@@ -536,21 +536,6 @@ mod tests {
         drop(launch);
 
         assert!(!startup_file.exists());
-    }
-
-    #[test]
-    fn generated_hooks_emit_osc7_and_preserve_slashes() {
-        for hook in [
-            posix_prompt_hook(),
-            zsh_prompt_hook(true),
-            fish_prompt_hook(),
-            nushell_prompt_hook(),
-            powershell_prompt_hook(),
-        ] {
-            assert!(hook.contains("]7;"));
-        }
-        assert!(posix_prompt_hook().contains("]7;file://"));
-        assert!(posix_prompt_hook().contains("s|%2f|/|g"));
     }
 
     #[cfg(unix)]

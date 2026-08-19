@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    SshTransportError,
+    ProxyCommandConfig, SshTransportError,
     local_paths::default_ssh_dir,
+    transport::{BoxedSshForwardStream, dial_proxy_command},
     upstream_proxy::{UpstreamProxyConfig, dial_initial_tcp},
 };
 
@@ -507,23 +508,6 @@ fn known_hosts_path_from_ssh_dir(ssh_dir: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("~/.ssh/known_hosts"))
 }
 
-#[cfg(test)]
-fn retain_known_hosts_aliases(line: &str, host_pattern: &str) -> Option<String> {
-    let split = line.find(char::is_whitespace)?;
-    let hosts = &line[..split];
-    let rest = &line[split..];
-    let remaining = hosts
-        .split(',')
-        .filter(|pattern| *pattern != host_pattern)
-        .collect::<Vec<_>>();
-
-    if remaining.len() == hosts.split(',').count() || remaining.is_empty() {
-        return None;
-    }
-
-    Some(format!("{}{}", remaining.join(","), rest))
-}
-
 struct PreflightHandler {
     host: String,
     port: u16,
@@ -581,11 +565,32 @@ pub async fn check_host_key_with_upstream_proxy(
     timeout_secs: u64,
     upstream_proxy: Option<&UpstreamProxyConfig>,
 ) -> HostKeyStatus {
+    check_host_key_with_route(host, port, timeout_secs, upstream_proxy, None).await
+}
+
+pub async fn check_host_key_with_route(
+    host: &str,
+    port: u16,
+    timeout_secs: u64,
+    upstream_proxy: Option<&UpstreamProxyConfig>,
+    proxy_command: Option<&ProxyCommandConfig>,
+) -> HostKeyStatus {
     if HOST_KEY_CACHE.get_verified(host, port).is_some() {
         return HostKeyStatus::Verified;
     }
 
-    let stream = match dial_initial_tcp(host, port, timeout_secs, upstream_proxy).await {
+    let stream: Result<BoxedSshForwardStream, SshTransportError> = match proxy_command {
+        Some(_) if upstream_proxy.is_some() => Err(SshTransportError::ConnectionFailed(
+            "ProxyCommand cannot be combined with an upstream proxy".to_string(),
+        )),
+        Some(command) => dial_proxy_command(command)
+            .await
+            .map(|stream| Box::new(stream) as BoxedSshForwardStream),
+        None => dial_initial_tcp(host, port, timeout_secs, upstream_proxy)
+            .await
+            .map(|stream| Box::new(stream) as BoxedSshForwardStream),
+    };
+    let stream = match stream {
         Ok(stream) => stream,
         Err(error) => {
             return HostKeyStatus::Error {
@@ -704,23 +709,6 @@ mod tests {
     }
 
     #[test]
-    fn host_key_removal_preserves_other_aliases_on_same_line() {
-        let line = "example.com,alias.example.com ssh-ed25519 AAAAC3Nza comment";
-
-        assert_eq!(
-            retain_known_hosts_aliases(line, "example.com").as_deref(),
-            Some("alias.example.com ssh-ed25519 AAAAC3Nza comment")
-        );
-    }
-
-    #[test]
-    fn host_key_removal_drops_single_host_line() {
-        let line = "[example.com]:2222 ssh-ed25519 AAAAC3Nza";
-
-        assert_eq!(retain_known_hosts_aliases(line, "[example.com]:2222"), None);
-    }
-
-    #[test]
     fn known_hosts_store_skips_hashed_entries_like_tauri() {
         let path = temp_known_hosts_path("hashed");
         let key = sample_public_key();
@@ -822,6 +810,27 @@ mod tests {
         let status = runtime.block_on(check_host_key(host, 22, 1));
 
         assert_eq!(status, HostKeyStatus::Verified);
+        HOST_KEY_CACHE.clear();
+    }
+
+    #[test]
+    fn preflight_uses_proxy_command_route_before_direct_network() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        HOST_KEY_CACHE.clear();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
+        let status = runtime.block_on(check_host_key_with_route(
+            "proxy-command-only.invalid",
+            22,
+            1,
+            None,
+            Some(&ProxyCommandConfig::AuthorizationRequired),
+        ));
+
+        let HostKeyStatus::Error { message } = status else {
+            panic!("unauthorized ProxyCommand preflight should fail explicitly");
+        };
+        assert!(message.contains("requires explicit authorization"));
         HOST_KEY_CACHE.clear();
     }
 

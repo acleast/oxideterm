@@ -1,5 +1,13 @@
 use super::*;
 
+fn is_terminal_tab_kind(kind: &TabKind) -> bool {
+    // Terminal focus and display behavior is transport-neutral.
+    matches!(
+        kind,
+        TabKind::LocalTerminal | TabKind::SshTerminal | TabKind::MoshTerminal
+    )
+}
+
 fn tab_exit_visual_index(live_visual_index: usize, occupied_indices: &[usize]) -> usize {
     let mut visual_index = live_visual_index;
     for occupied in occupied_indices {
@@ -81,6 +89,7 @@ impl WorkspaceApp {
                     self.sync_active_terminal_recording_elapsed_tick(cx);
                 }
             }
+            WorkspaceTabHostEvent::TerminalOutputUnread => cx.notify(),
             WorkspaceTabHostEvent::TerminalPaneDelivery {
                 pane_id,
                 session_id,
@@ -121,7 +130,7 @@ impl WorkspaceApp {
         self.sync_active_tab_surface(cx);
         self.needs_active_pane_focus = self
             .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+            .is_some_and(|tab| is_terminal_tab_kind(&tab.kind));
         self.focus_active_tab_keyboard_owner(window, cx);
         self.reveal_active_tab(window, cx);
         cx.notify();
@@ -152,9 +161,9 @@ impl WorkspaceApp {
             self.set_main_window_active_tab(Some(tab_id), cx);
             self.resume_remote_desktop_frame_delivery(tab_id, cx);
             self.sync_active_tab_surface(cx);
-            self.needs_active_pane_focus = self.active_tab(cx).is_some_and(|tab| {
-                matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal)
-            });
+            self.needs_active_pane_focus = self
+                .active_tab(cx)
+                .is_some_and(|tab| is_terminal_tab_kind(&tab.kind));
             self.focus_active_tab_keyboard_owner(window, cx);
             self.reveal_active_tab(window, cx);
             cx.notify();
@@ -224,6 +233,11 @@ impl WorkspaceApp {
             Some(TabKind::RemoteDesktop) => {
                 self.active_surface = ActiveSurface::Terminal;
             }
+            Some(TabKind::MoshTerminal) => {
+                // Mosh tabs have no SSH node ownership and must not retain a stale host highlight.
+                self.active_surface = ActiveSurface::Terminal;
+                self.active_ssh_node_id = None;
+            }
             _ => {
                 self.active_surface = ActiveSurface::Terminal;
             }
@@ -237,23 +251,11 @@ impl WorkspaceApp {
             self.active_ssh_node_id = Some(node_id.clone());
             self.expanded_ssh_nodes.insert(node_id.clone());
         }
+        self.activate_embedded_sftp_sidebar_if_visible(cx);
     }
 
     pub(in crate::workspace) fn focus_active_pane(&mut self, window: &mut Window, cx: &mut App) {
         self.clear_ai_sidebar_keyboard_focus(cx);
-        let released_saved_search = self.session_manager.update(cx, |session_manager, cx| {
-            if session_manager.focused_input()
-                != Some(crate::workspace::session_manager::SessionManagerInput::SavedSearch)
-            {
-                return false;
-            }
-            // An explicit pane focus handoff must prevent a previously clicked
-            // sidebar search field from continuing to own terminal keystrokes.
-            session_manager.clear_input_focus(cx)
-        });
-        if released_saved_search {
-            self.ime_marked_text = None;
-        }
         if let Some(pane) = self.active_pane(cx) {
             // A hidden terminal can retain paint operations that reference atlas slots later
             // reused by another surface. Force one fresh frame when the pane becomes active so
@@ -319,7 +321,7 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn unregister_ssh_terminal_session(
         &mut self,
         session_id: TerminalSessionId,
-        cx: &mut App,
+        cx: &mut Context<Self>,
     ) {
         // This method is also the shared terminal-session close path for local
         // panes. Revoke only this session; NodeRouter remains the SSH owner.
@@ -356,6 +358,15 @@ impl WorkspaceApp {
         }
         if projection_changed {
             self.persist_session_tree_snapshot();
+        }
+        if let Some(node_id) = node_id
+            && self
+                .workspace_runtime
+                .read(cx)
+                .ssh_terminal_session_ids_for_node(&node_id)
+                .is_empty()
+        {
+            self.close_embedded_sftp_for_node(&node_id, cx);
         }
     }
 
@@ -424,19 +435,24 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn request_disconnect_ssh_node(
         &mut self,
         node_id: &NodeId,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(node) = self.ssh_nodes.get(node_id) else {
             return;
         };
+        if !self.ssh_close_confirmation_enabled() {
+            self.disconnect_ssh_node(node_id, window, cx);
+            return;
+        }
         let title = node.title.trim();
         let display_name = if title.is_empty() {
             format!("{}@{}", node.endpoint.username, node.endpoint.host)
         } else {
             title.to_string()
         };
-        // Tauri opens the confirmation from the tree action entrypoint, while
-        // disconnectNode itself remains the backend cleanup path.
+        // Keep the transient choice scoped to the confirmation that owns it.
+        self.skip_future_ssh_close_confirmations = false;
         self.overlay.update(cx, |overlay, cx| {
             overlay.open_confirm(
                 WorkspaceOverlayConfirmKind::NodeDisconnect {
@@ -450,6 +466,7 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn cancel_node_disconnect_confirm(&mut self, cx: &mut Context<Self>) {
         if self.begin_node_disconnect_confirm_exit(false, cx).0 {
+            self.skip_future_ssh_close_confirmations = false;
             cx.notify();
         }
     }
@@ -463,7 +480,12 @@ impl WorkspaceApp {
         if !started {
             return;
         }
+        let skip_future_confirmations = self.skip_future_ssh_close_confirmations;
+        self.skip_future_ssh_close_confirmations = false;
         if let Some(WorkspaceOverlayConfirmEffect::DisconnectNode { node_id }) = effect {
+            if skip_future_confirmations {
+                self.disable_future_ssh_close_confirmations(cx);
+            }
             self.disconnect_ssh_node(&node_id, window, cx);
         }
     }
@@ -488,6 +510,7 @@ impl WorkspaceApp {
                 "Connection closed".to_string(),
                 cx,
             );
+            self.close_embedded_sftp_for_node(affected_node_id, cx);
         }
         for affected_node_id in &nodes_to_disconnect {
             self.forwarding.update(cx, |forwarding, _cx| {
@@ -557,8 +580,12 @@ impl WorkspaceApp {
             return;
         };
         if self.tabs(cx)[index].kind == TabKind::SshTerminal {
-            // Tauri confirms user-initiated SSH terminal tab closes while
-            // still allowing backend/session cleanup paths to close directly.
+            if !self.ssh_close_confirmation_enabled() {
+                self.close_tab_at_index(index, window, cx);
+                return;
+            }
+            // Keep the transient choice scoped to the confirmation that owns it.
+            self.skip_future_ssh_close_confirmations = false;
             self.tab_host.update(cx, |tab_host, cx| {
                 tab_host.open_close_confirm(TabCloseConfirm::Single { tab_id }, cx);
             });
@@ -598,7 +625,7 @@ impl WorkspaceApp {
         };
         if self
             .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal))
+            .is_some_and(|tab| is_terminal_tab_kind(&tab.kind))
         {
             if self
                 .active_tab(cx)
@@ -620,6 +647,16 @@ impl WorkspaceApp {
             return;
         }
         if self.tab_close_ids_include_ssh_terminal(&tab_ids, cx) {
+            if !self.ssh_close_confirmation_enabled() {
+                self.request_local_terminal_close_check(
+                    LocalTerminalCloseCheck::Batch { tab_ids },
+                    window,
+                    cx,
+                );
+                return;
+            }
+            // Keep the transient choice scoped to the confirmation that owns it.
+            self.skip_future_ssh_close_confirmations = false;
             self.tab_host.update(cx, |tab_host, cx| {
                 tab_host.open_close_confirm(TabCloseConfirm::Other { tab_ids }, cx);
             });
@@ -744,6 +781,7 @@ impl WorkspaceApp {
 
     pub(in crate::workspace) fn cancel_tab_close_confirm(&mut self, cx: &mut Context<Self>) {
         if self.begin_tab_close_confirm_exit(false, cx).0 {
+            self.skip_future_ssh_close_confirmations = false;
             cx.notify();
         }
     }
@@ -758,7 +796,47 @@ impl WorkspaceApp {
             return;
         }
         if let Some(confirm) = effect {
+            if self.skip_future_ssh_close_confirmations
+                && matches!(
+                    &confirm,
+                    TabCloseConfirm::Single { .. } | TabCloseConfirm::Other { .. }
+                )
+            {
+                self.disable_future_ssh_close_confirmations(cx);
+            }
+            self.skip_future_ssh_close_confirmations = false;
             self.apply_tab_close_confirm_effect(confirm, window, cx);
+        }
+    }
+
+    pub(in crate::workspace) fn toggle_skip_future_ssh_close_confirmations(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        self.skip_future_ssh_close_confirmations = !self.skip_future_ssh_close_confirmations;
+        cx.notify();
+    }
+
+    fn ssh_close_confirmation_enabled(&self) -> bool {
+        self.settings_store
+            .settings()
+            .terminal
+            .confirm_before_closing_ssh
+    }
+
+    fn disable_future_ssh_close_confirmations(&mut self, cx: &mut Context<Self>) {
+        if !self.ssh_close_confirmation_enabled() {
+            return;
+        }
+        // Persist only after the user confirms the destructive action.
+        self.settings_store
+            .settings_mut()
+            .terminal
+            .confirm_before_closing_ssh = false;
+        if self.settings_store.save().is_ok() {
+            self.settings_workspace.update(cx, |settings, _cx| {
+                settings.acknowledge_external_store_state()
+            });
         }
     }
 
@@ -830,17 +908,28 @@ impl WorkspaceApp {
 
     fn close_tab_at_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let exiting_visual = self.tab_exit_visual(index, cx);
-        let Some(TabRemovalTransition {
-            tab,
-            mount_cleanup,
-            previous_active_tab_id,
-            next_active_tab_id,
-        }) = self
+        let Some(transition) = self
             .tab_host
             .update(cx, |tab_host, _cx| tab_host.remove_tab_at(index))
         else {
             return;
         };
+        self.finish_tab_removal(transition, exiting_visual, window, cx);
+    }
+
+    pub(super) fn finish_tab_removal(
+        &mut self,
+        transition: TabRemovalTransition,
+        exiting_visual: Option<ExitingTabVisual>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let TabRemovalTransition {
+            tab,
+            mount_cleanup,
+            previous_active_tab_id,
+            next_active_tab_id,
+        } = transition;
         // Final tab removal revokes focus authority before any deferred UI work
         // can observe a replacement tab with the same presentation kind.
         self.ai_runtime_context
@@ -887,7 +976,9 @@ impl WorkspaceApp {
             root_pane.collect_session_ids(&mut session_ids);
         }
         for session_id in session_ids {
+            self.release_public_mcp_terminal_for_closed_session(session_id, cx);
             self.serial_terminal_configs.remove(&session_id);
+            self.telnet_terminal_profile_ids.remove(&session_id);
             self.unregister_ssh_terminal_session(session_id, cx);
         }
         for pane_id in pane_ids {
@@ -900,7 +991,7 @@ impl WorkspaceApp {
         self.sync_active_tab_surface(cx);
         self.needs_active_pane_focus = self
             .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+            .is_some_and(|tab| is_terminal_tab_kind(&tab.kind));
         self.focus_active_pane(window, cx);
         self.reveal_active_tab(window, cx);
         if let Some(exiting_visual) = exiting_visual {
@@ -1044,7 +1135,7 @@ impl WorkspaceApp {
         self.sync_active_tab_surface(cx);
         self.needs_active_pane_focus = self
             .active_tab(cx)
-            .is_some_and(|tab| matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal));
+            .is_some_and(|tab| is_terminal_tab_kind(&tab.kind));
         self.focus_active_pane(window, cx);
         self.reveal_active_tab(window, cx);
         cx.notify();
@@ -1066,9 +1157,9 @@ impl WorkspaceApp {
         {
             self.set_main_window_active_tab(Some(tab_id), cx);
             self.sync_active_tab_surface(cx);
-            self.needs_active_pane_focus = self.active_tab(cx).is_some_and(|tab| {
-                matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal)
-            });
+            self.needs_active_pane_focus = self
+                .active_tab(cx)
+                .is_some_and(|tab| is_terminal_tab_kind(&tab.kind));
             self.focus_active_pane(window, cx);
             self.reveal_active_tab(window, cx);
             cx.notify();
@@ -1237,7 +1328,7 @@ impl WorkspaceApp {
             TabTitleSource::Static => tab.title.clone(),
             TabTitleSource::I18nKey(key) => self.i18n.t(key),
         };
-        if matches!(tab.kind, TabKind::LocalTerminal | TabKind::SshTerminal) {
+        if is_terminal_tab_kind(&tab.kind) {
             let pane_count = tab.root_pane.as_ref().map_or(1, PaneNode::pane_count);
             if pane_count > 1 {
                 return format!("{title} ({pane_count})");
@@ -1434,16 +1525,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tab_drag_reorder_requires_horizontal_browser_axis() {
+    fn tab_drag_axes_distinguish_reorder_and_detach() {
         assert!(!tab_drag_is_horizontal_reorder(9.0, 0.0));
         assert!(!tab_drag_is_horizontal_reorder(0.0, 18.0));
         assert!(!tab_drag_is_horizontal_reorder(12.0, 24.0));
         assert!(tab_drag_is_horizontal_reorder(12.0, 8.0));
         assert!(tab_drag_is_horizontal_reorder(-18.0, 4.0));
-    }
-
-    #[test]
-    fn tab_drag_detach_requires_downward_browser_axis() {
         assert!(!tab_drag_is_detach(4.0, 10.0, 36.0));
         assert!(!tab_drag_is_detach(36.0, 30.0, 36.0));
         assert!(!tab_drag_is_detach(4.0, -36.0, 36.0));
@@ -1480,14 +1567,10 @@ mod tests {
     }
 
     #[test]
-    fn tabbar_wheel_matches_tauri_delta_y_adapter() {
+    fn tabbar_wheel_delta_selects_the_browser_axis_and_clamps_scroll() {
         assert_eq!(tabbar_tauri_wheel_scroll_delta(0.0, 24.0), 24.0);
         assert_eq!(tabbar_tauri_wheel_scroll_delta(18.0, 24.0), 24.0);
         assert_eq!(tabbar_tauri_wheel_scroll_delta(-18.0, 0.0), -18.0);
-    }
-
-    #[test]
-    fn tabbar_wheel_delta_maps_to_gpui_negative_scroll_offset() {
         assert_eq!(tabbar_scroll_x_after_wheel(0.0, -24.0, 120.0), 24.0);
         assert_eq!(tabbar_scroll_x_after_wheel(0.0, 24.0, 120.0), 0.0);
         assert_eq!(tabbar_scroll_x_after_wheel(24.0, 24.0, 120.0), 0.0);
@@ -1496,12 +1579,8 @@ mod tests {
     }
 
     #[test]
-    fn tabbar_scrollbar_is_hidden_without_horizontal_overflow() {
+    fn tabbar_scrollbar_geometry_handles_visibility_position_and_drag_edges() {
         assert!(calculate_tabbar_scrollbar_geometry(20.0, 600.0, 0.0, 0.0).is_none());
-    }
-
-    #[test]
-    fn tabbar_scrollbar_thumb_tracks_horizontal_scroll() {
         let at_start = calculate_tabbar_scrollbar_geometry(20.0, 600.0, 600.0, 0.0)
             .expect("overflow should produce scrollbar geometry");
         let at_end = calculate_tabbar_scrollbar_geometry(20.0, 600.0, 600.0, 600.0)
@@ -1514,10 +1593,6 @@ mod tests {
             at_end.thumb_left,
             TABBAR_SCROLLBAR_HORIZONTAL_INSET + at_end.track_width - at_end.thumb_width
         );
-    }
-
-    #[test]
-    fn tabbar_scrollbar_drag_maps_track_edges_to_scroll_edges() {
         let geometry = calculate_tabbar_scrollbar_geometry(20.0, 600.0, 600.0, 0.0)
             .expect("overflow should produce scrollbar geometry");
         let track_start = TABBAR_SCROLLBAR_HORIZONTAL_INSET;

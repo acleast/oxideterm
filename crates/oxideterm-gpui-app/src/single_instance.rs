@@ -14,7 +14,8 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use fs2::FileExt;
-use oxideterm_ssh_launch::TemporarySshLaunch;
+use oxideterm_settings::is_prerelease_version;
+use oxideterm_ssh_launch::NativeSshLaunch;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -56,7 +57,7 @@ pub(crate) enum SingleInstanceOutcome {
 #[derive(Debug)]
 pub(crate) enum SingleInstanceEvent {
     ShowMainWindow,
-    OpenTemporarySsh(TemporarySshLaunch),
+    OpenNativeSsh(NativeSshLaunch),
 }
 
 pub(crate) struct SingleInstanceGuard {
@@ -136,13 +137,7 @@ fn instance_scope_for_build(version: &str, development: bool) -> &'static str {
     if development {
         return "development";
     }
-    if version.contains("gpui-preview")
-        || version.contains("native-preview")
-        || version.contains("rustnative-preview")
-    {
-        return "gpui-preview";
-    }
-    if version.contains("beta") {
+    if is_prerelease_version(version) {
         return "beta";
     }
     "stable"
@@ -346,7 +341,7 @@ fn events_from_stream(
     let mut events = vec![SingleInstanceEvent::ShowMainWindow];
     if let Some(path) = request.ssh_launch_file {
         match read_ssh_launch_file(Some(path)) {
-            Ok(Some(launch)) => events.push(SingleInstanceEvent::OpenTemporarySsh(launch)),
+            Ok(Some(launch)) => events.push(SingleInstanceEvent::OpenNativeSsh(launch)),
             Ok(None) => {}
             Err(error) => eprintln!("failed to read forwarded SSH launch request: {error}"),
         }
@@ -354,7 +349,7 @@ fn events_from_stream(
     Ok(events)
 }
 
-pub(crate) fn read_ssh_launch_file(path: Option<PathBuf>) -> Result<Option<TemporarySshLaunch>> {
+pub(crate) fn read_ssh_launch_file(path: Option<PathBuf>) -> Result<Option<NativeSshLaunch>> {
     let Some(path) = path else {
         return Ok(None);
     };
@@ -405,24 +400,21 @@ mod tests {
     fn installed_channels_and_development_use_distinct_instance_paths() {
         let data_dir = Path::new("/tmp/oxideterm-instance-scopes");
         let development = InstancePaths::for_data_dir(data_dir, "development");
-        let preview = InstancePaths::for_data_dir(data_dir, "gpui-preview");
+        let beta = InstancePaths::for_data_dir(data_dir, "beta");
         let stable = InstancePaths::for_data_dir(data_dir, "stable");
 
-        assert_ne!(development.lock_path, preview.lock_path);
-        assert_ne!(preview.lock_path, stable.lock_path);
+        assert_ne!(development.lock_path, beta.lock_path);
+        assert_ne!(beta.lock_path, stable.lock_path);
         assert_ne!(development.state_path, stable.state_path);
     }
 
     #[test]
     fn build_versions_map_to_stable_instance_scopes() {
         assert_eq!(instance_scope_for_build("2.0.0", false), "stable");
-        assert_eq!(
-            instance_scope_for_build("2.0.0-gpui-preview.16", false),
-            "gpui-preview"
-        );
         assert_eq!(instance_scope_for_build("2.0.0-beta.1", false), "beta");
+        assert_eq!(instance_scope_for_build("2.0.0-preview.1", false), "beta");
         assert_eq!(
-            instance_scope_for_build("2.0.0-gpui-preview.16", true),
+            instance_scope_for_build("2.0.0-beta.1", true),
             "development"
         );
     }
@@ -442,16 +434,16 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let application_receiver = Arc::new(Mutex::new(rx));
         let first_workspace_receiver = application_receiver.clone();
-        let ssh_launch = TemporarySshLaunch {
+        let ssh_launch = NativeSshLaunch::Temporary(oxideterm_ssh_launch::TemporarySshLaunch {
             username: "test-user".to_string(),
             host: "example.test".to_string(),
             port: 22,
             password: None,
-        };
+        });
 
         drop(first_workspace_receiver);
         tx.send(SingleInstanceEvent::ShowMainWindow).unwrap();
-        tx.send(SingleInstanceEvent::OpenTemporarySsh(ssh_launch))
+        tx.send(SingleInstanceEvent::OpenNativeSsh(ssh_launch))
             .unwrap();
 
         let receiver = application_receiver.lock().unwrap();
@@ -459,7 +451,8 @@ mod tests {
             receiver.try_recv().unwrap(),
             SingleInstanceEvent::ShowMainWindow
         ));
-        let SingleInstanceEvent::OpenTemporarySsh(received_launch) = receiver.try_recv().unwrap()
+        let SingleInstanceEvent::OpenNativeSsh(NativeSshLaunch::Temporary(received_launch)) =
+            receiver.try_recv().unwrap()
         else {
             panic!("second event should retain the forwarded SSH launch");
         };

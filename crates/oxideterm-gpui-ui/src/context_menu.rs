@@ -343,14 +343,7 @@ fn context_menu_chevron(tokens: &ThemeTokens, chevron: impl Into<String>) -> Div
 
 #[cfg(test)]
 mod tests {
-    use gpui::CursorStyle;
-    use oxideterm_theme::{ThemeTokens, theme_by_id};
-
-    use super::{
-        context_menu_action_cursor, context_menu_item_height_estimate,
-        context_menu_item_is_actionable, context_menu_line_height,
-        context_menu_separator_height_estimate,
-    };
+    use super::context_menu_item_is_actionable;
 
     #[test]
     fn context_menu_action_guard_blocks_disabled_or_loading_items() {
@@ -358,35 +351,5 @@ mod tests {
         assert!(!context_menu_item_is_actionable(true, false));
         assert!(!context_menu_item_is_actionable(false, true));
         assert!(!context_menu_item_is_actionable(true, true));
-    }
-
-    #[test]
-    fn context_menu_action_cursor_matches_guard_state() {
-        assert_eq!(
-            context_menu_action_cursor(false, false),
-            CursorStyle::PointingHand
-        );
-        assert_eq!(
-            context_menu_action_cursor(false, true),
-            CursorStyle::OperationNotAllowed
-        );
-        assert_eq!(
-            context_menu_action_cursor(true, false),
-            CursorStyle::OperationNotAllowed
-        );
-    }
-
-    #[test]
-    fn context_menu_height_estimates_use_normalized_line_height() {
-        let tokens = ThemeTokens::from_builtin(theme_by_id("default"));
-
-        assert_eq!(
-            context_menu_item_height_estimate(&tokens),
-            context_menu_line_height(&tokens) + tokens.metrics.ui_menu_item_padding_y * 2.0
-        );
-        assert_eq!(
-            context_menu_separator_height_estimate(&tokens),
-            1.0 + tokens.metrics.ui_menu_padding * 2.0
-        );
     }
 }

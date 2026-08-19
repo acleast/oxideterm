@@ -42,7 +42,8 @@ pub use connection_trace::{
     parse_algorithm_negotiation_error, server_offers_legacy_cipher, server_only_offers_ssh_rsa,
 };
 pub use host_key::{
-    HostKeyStatus, check_host_key, check_host_key_with_upstream_proxy, remove_host_key,
+    HostKeyStatus, check_host_key, check_host_key_with_route, check_host_key_with_upstream_proxy,
+    remove_host_key,
 };
 pub use oxideterm_connection_monitor::ConnectionPoolMonitorStats;
 pub use oxideterm_sftp::{
@@ -74,8 +75,8 @@ pub use transport::{
     BoxedSshForwardStream, KeyboardInteractivePrompt, KeyboardInteractivePromptRequest,
     KeyboardInteractiveResponses, ManagedKeyResolver, RemoteForwardHandler, RemoteForwardedTcpIp,
     SshCommandOutput, SshForwardStream, SshOutputChunk, SshPromptError, SshPromptHandler,
-    SshPtyHandle, SshShellChannel, SshTransportClient, SshTransportCommand, SshTransportError,
-    X11ForwardHandler, X11ForwardedChannel,
+    SshPtyHandle, SshSecretCommandOutput, SshShellChannel, SshTransportClient, SshTransportCommand,
+    SshTransportError, X11ForwardHandler, X11ForwardedChannel,
 };
 pub use upstream_proxy::{
     UpstreamProxyAuth, UpstreamProxyConfig, UpstreamProxyError, UpstreamProxyProtocol,

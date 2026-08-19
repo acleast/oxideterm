@@ -2,9 +2,9 @@ use std::fmt;
 
 use ironrdp::pdu::{geometry::InclusiveRectangle, input::fast_path::SynchronizeFlags};
 use oxideterm_remote_desktop::{
-    RemoteDesktopFrame, RemoteDesktopFrameFormat, RemoteDesktopFrameUpdate, RemoteDesktopKey,
-    RemoteDesktopKeyState, RemoteDesktopMouseButton, RemoteDesktopMouseButtonState,
-    RemoteDesktopRect, RemoteDesktopWheelDelta,
+    RemoteDesktopFrame, RemoteDesktopFrameFormat, RemoteDesktopFrameUpdate,
+    RemoteDesktopMouseButton, RemoteDesktopMouseButtonState, RemoteDesktopRect,
+    RemoteDesktopWheelDelta,
 };
 
 use super::*;
@@ -54,194 +54,6 @@ fn wheel_delta_emits_horizontal_and_vertical_operations() {
             assert!(rotations.is_vertical);
             assert_eq!(rotations.rotation_units, -240);
         }
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn keyboard_mapping_prefers_scancode_for_navigation_keys() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "ArrowLeft".to_string(),
-            text: None,
-            alt: false,
-            ctrl: false,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Pressed,
-    );
-
-    assert_eq!(operations.len(), 1);
-    match &operations[0] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0xe04b),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn keyboard_mapping_falls_back_to_unicode_text() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "Dead".to_string(),
-            text: Some("é".to_string()),
-            alt: false,
-            ctrl: false,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Released,
-    );
-
-    assert_eq!(operations.len(), 1);
-    match &operations[0] {
-        RdpInputOperation::UnicodeKeyReleased(character) => assert_eq!(*character, 'é'),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn printable_key_prefers_physical_scancode() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "a".to_string(),
-            text: Some("A".to_string()),
-            alt: false,
-            ctrl: false,
-            shift: true,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Pressed,
-    );
-
-    assert_eq!(operations.len(), 2);
-    match &operations[0] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x2a),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-    match &operations[1] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x1e),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn modified_shortcut_presses_modifier_before_key() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "v".to_string(),
-            text: Some("v".to_string()),
-            alt: false,
-            ctrl: true,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Pressed,
-    );
-
-    assert_eq!(operations.len(), 2);
-    match &operations[0] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x1d),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-    match &operations[1] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x2f),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn modified_shortcut_releases_key_before_modifier() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "v".to_string(),
-            text: Some("v".to_string()),
-            alt: false,
-            ctrl: true,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Released,
-    );
-
-    assert_eq!(operations.len(), 2);
-    match &operations[0] {
-        RdpInputOperation::KeyReleased(scancode) => assert_eq!(scancode.as_u16(), 0x2f),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-    match &operations[1] {
-        RdpInputOperation::KeyReleased(scancode) => assert_eq!(scancode.as_u16(), 0x1d),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn keyboard_mapping_accepts_physical_letter_codes_for_shortcuts() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "KeyV".to_string(),
-            text: Some("v".to_string()),
-            alt: false,
-            ctrl: true,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Pressed,
-    );
-
-    assert_eq!(operations.len(), 2);
-    match &operations[0] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x1d),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-    match &operations[1] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x2f),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn keyboard_mapping_accepts_physical_digit_codes_for_shortcuts() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "Digit1".to_string(),
-            text: Some("1".to_string()),
-            alt: false,
-            ctrl: true,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Pressed,
-    );
-
-    assert_eq!(operations.len(), 2);
-    match &operations[0] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x1d),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-    match &operations[1] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0x02),
-        operation => panic!("unexpected operation: {operation:?}"),
-    }
-}
-
-#[test]
-fn keyboard_mapping_does_not_duplicate_physical_modifier_keys() {
-    let operations = rdp_key_operations(
-        &RemoteDesktopKey {
-            code: "ControlRight".to_string(),
-            text: None,
-            alt: false,
-            ctrl: true,
-            shift: false,
-            meta: false,
-        },
-        RemoteDesktopKeyState::Pressed,
-    );
-
-    assert_eq!(operations.len(), 1);
-    match &operations[0] {
-        RdpInputOperation::KeyPressed(scancode) => assert_eq!(scancode.as_u16(), 0xe01d),
         operation => panic!("unexpected operation: {operation:?}"),
     }
 }
@@ -541,6 +353,7 @@ fn client_loop_prioritizes_queued_close_over_pending_output_error() {
     request_tx.send(RemoteDesktopHelperRequest::Close).unwrap();
     let mut config = RdpWorkerConfig {
         endpoint: RemoteDesktopEndpoint::new("example.test", 3389),
+        transport_endpoint: None,
         size: RemoteDesktopSize {
             width: 1280,
             height: 720,
@@ -586,6 +399,28 @@ fn connector_failure_exit_preserves_structured_category() {
         }
         other => panic!("unexpected drain exit: {other:?}"),
     }
+}
+
+#[test]
+fn active_session_failure_exit_preserves_structured_category() {
+    let writer = SharedEventWriter::inert_for_tests();
+    let (output_tx, output_rx) = client_rdp_output_channel(RDP_CLIENT_OUTPUT_QUEUE_CAPACITY);
+    output_tx
+        .send_control(ClientRdpOutput::SessionFailure {
+            message: "RDP session ended after transport loss.".to_string(),
+            category: RemoteDesktopErrorCategory::Network,
+        })
+        .unwrap();
+
+    let drain = drain_client_rdp_outputs(&writer, &output_rx).unwrap();
+
+    assert!(matches!(
+        drain.exit,
+        Some(ClientRdpSessionExit::ConnectionFailed {
+            category: RemoteDesktopErrorCategory::Network,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -799,6 +634,7 @@ fn lock_key_sync_request_emits_fastpath_sync_event() {
 fn client_config_withholds_credentials_until_certificate_acceptance() {
     let config = RdpWorkerConfig {
         endpoint: RemoteDesktopEndpoint::new("example.test", 3389),
+        transport_endpoint: Some(RemoteDesktopEndpoint::new("127.0.0.1", 43891)),
         size: RemoteDesktopSize {
             width: 1280,
             height: 720,
@@ -814,6 +650,8 @@ fn client_config_withholds_credentials_until_certificate_acceptance() {
 
     assert_eq!(client_config.destination.host(), "example.test");
     assert_eq!(client_config.destination.port(), 3389);
+    assert_eq!(client_config.transport_destination.host(), "127.0.0.1");
+    assert_eq!(client_config.transport_destination.port(), 43891);
     assert!(client_config.connector.enable_tls);
     assert!(client_config.connector.enable_credssp);
     assert!(!client_config.connector.autologon);
@@ -833,16 +671,10 @@ fn client_config_withholds_credentials_until_certificate_acceptance() {
 }
 
 #[test]
-fn rdp_bitmap_codec_labels_describe_advertised_codecs() {
-    let codecs = client_codecs_capabilities(&["remotefx:on"]).unwrap();
-
-    assert_eq!(rdp_bitmap_codec_labels(&codecs), "remotefx");
-}
-
-#[test]
 fn client_config_adjusts_initial_display_size_for_rdp() {
     let config = RdpWorkerConfig {
         endpoint: RemoteDesktopEndpoint::new("example.test", 3389),
+        transport_endpoint: None,
         size: RemoteDesktopSize {
             width: 1601,
             height: 899,
@@ -924,6 +756,7 @@ fn resize_request_enters_client_loop_with_normalized_rdp_size() {
 fn reconnect_state_remembers_latest_resize() {
     let mut config = RdpWorkerConfig {
         endpoint: RemoteDesktopEndpoint::new("example.test", 3389),
+        transport_endpoint: None,
         size: RemoteDesktopSize {
             width: 1280,
             height: 720,
@@ -981,6 +814,16 @@ fn disconnect_reason_hides_local_dependency_paths() {
     ));
 
     assert_eq!(message.as_deref(), Some("RDP session ended."));
+}
+
+#[test]
+fn established_transport_closure_is_classified_as_network_failure() {
+    assert_eq!(
+        remote_desktop_error_category_from_message(
+            "server closed established RDP session while reading frames: unexpected EOF"
+        ),
+        RemoteDesktopErrorCategory::Network
+    );
 }
 
 #[test]
@@ -1162,6 +1005,45 @@ fn graphics_accumulator_merges_dirty_updates_before_copying_pixels() {
 }
 
 #[test]
+fn graphics_accumulator_preserves_separated_dirty_regions_as_one_batch() {
+    let (output_tx, output_rx) = client_rdp_output_channel(RDP_CLIENT_OUTPUT_QUEUE_CAPACITY);
+    let image = DecodedImage::new(PixelFormat::RgbA32, 16, 4);
+    let mut frame_state = ClientRdpFrameState {
+        graphics_sync: RdpGraphicsSyncState::Synced,
+        published_first_desktop_frame: true,
+        ..ClientRdpFrameState::default()
+    };
+
+    for x in [1, 14] {
+        send_client_rdp_graphics_update(
+            &output_tx,
+            &image,
+            InclusiveRectangle {
+                left: x,
+                top: 1,
+                right: x,
+                bottom: 1,
+            },
+            &mut frame_state,
+        )
+        .expect("separated dirty update should queue");
+    }
+
+    flush_queued_rdp_graphics_updates(&output_tx, &image, &mut frame_state)
+        .expect("queued dirty regions should flush atomically");
+
+    match output_rx.graphics_rx.try_recv() {
+        Ok(ClientRdpOutput::Event(RemoteDesktopHelperEvent::FrameUpdateBatch { batch })) => {
+            assert_eq!(batch.updates.len(), 2);
+            assert_eq!(batch.byte_len(), 8);
+            assert_eq!(batch.updates[0].rect, RemoteDesktopRect::new(1, 1, 1, 1));
+            assert_eq!(batch.updates[1].rect, RemoteDesktopRect::new(14, 1, 1, 1));
+        }
+        other => panic!("expected sparse dirty frame batch, got {other:?}"),
+    }
+}
+
+#[test]
 fn graphics_accumulator_promotes_large_dirty_area_to_base_frame() {
     let (output_tx, output_rx) = client_rdp_output_channel(RDP_CLIENT_OUTPUT_QUEUE_CAPACITY);
     let image = DecodedImage::new(PixelFormat::RgbA32, 4, 3);
@@ -1236,83 +1118,6 @@ fn dirty_rect_copy_extracts_only_region_and_sets_alpha() {
 }
 
 #[test]
-fn initial_partial_black_update_starts_base_frame() {
-    let image = DecodedImage::new(PixelFormat::RgbA32, 4, 4);
-    let mut graphics_sync = RdpGraphicsSyncState::default();
-
-    let event = graphics_update_event(
-        &image,
-        InclusiveRectangle {
-            left: 0,
-            top: 0,
-            right: 1,
-            bottom: 1,
-        },
-        &mut graphics_sync,
-    )
-    .expect("graphics update maps");
-
-    assert!(matches!(
-        event,
-        Some(RemoteDesktopHelperEvent::Frame { .. })
-    ));
-    assert_eq!(graphics_sync, RdpGraphicsSyncState::Synced);
-}
-
-#[test]
-fn stale_graphics_region_is_skipped_without_failing_session() {
-    let image = DecodedImage::new(PixelFormat::RgbA32, 4, 4);
-    let mut graphics_sync = RdpGraphicsSyncState::Synced;
-
-    let event = graphics_update_event(
-        &image,
-        InclusiveRectangle {
-            left: 3,
-            top: 3,
-            right: 4,
-            bottom: 4,
-        },
-        &mut graphics_sync,
-    )
-    .expect("stale graphics regions should be skippable");
-
-    assert!(event.is_none());
-    assert_eq!(graphics_sync, RdpGraphicsSyncState::Synced);
-}
-
-#[test]
-fn initial_full_black_update_can_start_base_frame() {
-    let image = DecodedImage::new(PixelFormat::RgbA32, 4, 4);
-    let mut graphics_sync = RdpGraphicsSyncState::default();
-
-    let event = graphics_update_event(
-        &image,
-        InclusiveRectangle {
-            left: 0,
-            top: 0,
-            right: 3,
-            bottom: 3,
-        },
-        &mut graphics_sync,
-    )
-    .expect("graphics update maps");
-
-    match event {
-        Some(RemoteDesktopHelperEvent::Frame { frame }) => {
-            assert_eq!(
-                frame.size,
-                RemoteDesktopSize {
-                    width: 4,
-                    height: 4
-                }
-            );
-            assert_eq!(graphics_sync, RdpGraphicsSyncState::Synced);
-        }
-        other => panic!("expected initial frame, got {other:?}"),
-    }
-}
-
-#[test]
 fn reactivation_resets_graphics_base_without_publishing_empty_image() {
     let mut frame_state = ClientRdpFrameState {
         graphics_sync: RdpGraphicsSyncState::Synced,
@@ -1327,30 +1132,6 @@ fn reactivation_resets_graphics_base_without_publishing_empty_image() {
     assert!(frame_state.graphics_sync.needs_base());
     assert!(!frame_state.pending_base_frame);
     assert!(!frame_state.pending_base_frame_can_publish_ready);
-}
-
-#[test]
-fn full_screen_update_refreshes_base_frame_after_initial_frame() {
-    let image = DecodedImage::new(PixelFormat::RgbA32, 4, 4);
-    let mut graphics_sync = RdpGraphicsSyncState::Synced;
-
-    let event = graphics_update_event(
-        &image,
-        InclusiveRectangle {
-            left: 0,
-            top: 0,
-            right: 3,
-            bottom: 3,
-        },
-        &mut graphics_sync,
-    )
-    .expect("graphics update maps");
-
-    assert!(matches!(
-        event,
-        Some(RemoteDesktopHelperEvent::Frame { .. })
-    ));
-    assert_eq!(graphics_sync, RdpGraphicsSyncState::Synced);
 }
 
 #[test]

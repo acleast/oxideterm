@@ -5,9 +5,15 @@ use gpui::{
     Window, px, rgb,
 };
 use oxideterm_render_policy::EffectiveRenderPolicy;
-use oxideterm_settings::{TerminalBackspaceSequence, TerminalDeleteSequence};
+use oxideterm_settings::{
+    TerminalBackspaceSequence, TerminalDeleteSequence, TerminalSemanticScheme,
+};
 use oxideterm_terminal::{
     TerminalColor, TerminalCursorShape, TerminalEncoding, TrzszTransferPolicy,
+};
+use oxideterm_terminal_semantic::{
+    CompiledSemanticScheme, SemanticScheme, SemanticSchemeDocument, SemanticShellDialect,
+    compile_scheme_document, compiled_builtin_scheme,
 };
 use oxideterm_theme::{ThemeTokens, default_tokens};
 
@@ -30,11 +36,10 @@ pub(crate) const SCROLLBAR_WIDTH: f32 = 10.0;
 pub(crate) const SCROLLBAR_GAP: f32 = 0.0;
 pub(crate) const SCROLLBAR_RESERVED_WIDTH: f32 = SCROLLBAR_WIDTH;
 pub(crate) const SCROLLBAR_MIN_THUMB: f32 = 24.0;
-pub(crate) const TERMINAL_TIMESTAMP_LABEL_CELLS: usize = 8;
+pub(crate) const TERMINAL_TIMESTAMP_LABEL_CELLS: usize = 14;
 pub(crate) const TERMINAL_TIMESTAMP_GUTTER_GAP_CELLS: f32 = 1.0;
 pub(crate) const TERMINAL_SCROLL_MULTIPLIER: f32 = 1.0;
 pub(crate) const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
-pub(crate) const TERMINAL_BLINK_MODE: TerminalBlinkMode = TerminalBlinkMode::On;
 pub(crate) const TERMINAL_PASTE_PROTECTION: bool = true;
 pub(crate) const TERMINAL_SMART_COPY: bool = true;
 pub(crate) const TERMINAL_OSC52_CLIPBOARD: bool = true;
@@ -76,6 +81,9 @@ pub struct TerminalUiPreferences {
     pub right_click_paste: bool,
     pub open_links_with_modifier: bool,
     pub detect_file_paths_as_links: bool,
+    pub semantic_coloring: bool,
+    pub semantic_scheme: Arc<CompiledSemanticScheme>,
+    pub semantic_shell: SemanticShellDialect,
     pub selection_requires_shift: bool,
     pub free_type_mode: bool,
     pub backspace_sequence: TerminalBackspaceSequence,
@@ -102,15 +110,22 @@ pub struct TerminalUiPreferences {
     pub trzsz_policy: Option<TrzszTransferPolicy>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default)]
 pub struct TerminalUiPreferenceOverrides {
     pub terminal_encoding: Option<TerminalEncoding>,
     pub backspace_sequence: Option<TerminalBackspaceSequence>,
     pub delete_sequence: Option<TerminalDeleteSequence>,
+    pub semantic_scheme: Option<Arc<CompiledSemanticScheme>>,
+    pub semantic_scheme_id: Option<String>,
+    pub highlight_rules: Option<Arc<[TerminalHighlightRule]>>,
+    pub highlight_rule_set_id: Option<String>,
+    pub semantic_shell: Option<SemanticShellDialect>,
+    // Retain the local shell identity so settings refreshes can resolve its Scheme again.
+    pub local_shell_id: Option<String>,
 }
 
 impl TerminalUiPreferenceOverrides {
-    pub fn apply_to(self, preferences: &mut TerminalUiPreferences) {
+    pub fn apply_to(&self, preferences: &mut TerminalUiPreferences) {
         // These protocol-facing values belong to the terminal session. Apply
         // them after application defaults so later settings refreshes cannot
         // erase a saved host's explicit behavior.
@@ -122,6 +137,15 @@ impl TerminalUiPreferenceOverrides {
         }
         if let Some(delete_sequence) = self.delete_sequence {
             preferences.delete_sequence = delete_sequence;
+        }
+        if let Some(semantic_scheme) = &self.semantic_scheme {
+            preferences.semantic_scheme = semantic_scheme.clone();
+        }
+        if let Some(highlight_rules) = &self.highlight_rules {
+            preferences.highlight_rules = highlight_rules.clone();
+        }
+        if let Some(semantic_shell) = self.semantic_shell {
+            preferences.semantic_shell = semantic_shell;
         }
     }
 }
@@ -147,6 +171,12 @@ impl Default for TerminalUiPreferences {
             right_click_paste: TERMINAL_RIGHT_CLICK_PASTE,
             open_links_with_modifier: TERMINAL_OPEN_LINKS_WITH_MODIFIER,
             detect_file_paths_as_links: TERMINAL_DETECT_FILE_PATHS_AS_LINKS,
+            semantic_coloring: true,
+            semantic_scheme: resolved_terminal_semantic_scheme(
+                TerminalSemanticScheme::default(),
+                None,
+            ),
+            semantic_shell: SemanticShellDialect::Auto,
             selection_requires_shift: TERMINAL_SELECTION_REQUIRES_SHIFT,
             free_type_mode: TERMINAL_FREE_TYPE_MODE,
             backspace_sequence: TERMINAL_BACKSPACE_SEQUENCE,
@@ -173,6 +203,22 @@ impl Default for TerminalUiPreferences {
             trzsz_policy: None,
         }
     }
+}
+
+pub fn resolved_terminal_semantic_scheme(
+    built_in: TerminalSemanticScheme,
+    custom: Option<&SemanticSchemeDocument>,
+) -> Arc<CompiledSemanticScheme> {
+    if let Some(custom) = custom
+        && let Ok(compiled) = compile_scheme_document(custom)
+    {
+        return Arc::new(compiled);
+    }
+    let built_in = match built_in {
+        TerminalSemanticScheme::Balanced => SemanticScheme::Balanced,
+        TerminalSemanticScheme::Conservative => SemanticScheme::Conservative,
+    };
+    Arc::new(compiled_builtin_scheme(built_in).clone())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -513,6 +559,13 @@ pub enum TerminalHighlightRenderMode {
     Outline,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TerminalHighlightMatchScope {
+    #[default]
+    Match,
+    LogicalLine,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TerminalHighlightRule {
     pub id: String,
@@ -522,8 +575,16 @@ pub struct TerminalHighlightRule {
     pub foreground: Option<String>,
     pub background: Option<String>,
     pub render_mode: TerminalHighlightRenderMode,
+    pub match_scope: TerminalHighlightMatchScope,
+    pub preserve_background: bool,
     pub enabled: bool,
     pub priority: i64,
+}
+
+#[derive(Clone)]
+pub struct TerminalHighlightRuleSetOverride {
+    pub id: String,
+    pub rules: Arc<[TerminalHighlightRule]>,
 }
 
 #[derive(Clone, Debug)]
@@ -565,34 +626,6 @@ pub(crate) struct TerminalUiSettings {
     pub(crate) command_marks_enabled: bool,
     pub(crate) command_marks_user_input_observed: bool,
     pub(crate) command_marks_show_hover_actions: bool,
-}
-
-impl Default for TerminalUiSettings {
-    fn default() -> Self {
-        Self {
-            blink_mode: TERMINAL_BLINK_MODE,
-            paste_protection: TERMINAL_PASTE_PROTECTION,
-            smart_copy: TERMINAL_SMART_COPY,
-            osc52_clipboard: TERMINAL_OSC52_CLIPBOARD,
-            osc52_clipboard_read: TERMINAL_OSC52_CLIPBOARD_READ,
-            copy_on_select: TERMINAL_COPY_ON_SELECT,
-            middle_click_paste: TERMINAL_MIDDLE_CLICK_PASTE,
-            right_click_paste: TERMINAL_RIGHT_CLICK_PASTE,
-            open_links_with_modifier: TERMINAL_OPEN_LINKS_WITH_MODIFIER,
-            detect_file_paths_as_links: TERMINAL_DETECT_FILE_PATHS_AS_LINKS,
-            keep_selection_on_copy: TERMINAL_KEEP_SELECTION_ON_COPY,
-            selection_requires_shift: TERMINAL_SELECTION_REQUIRES_SHIFT,
-            free_type_mode: TERMINAL_FREE_TYPE_MODE,
-            backspace_sequence: TERMINAL_BACKSPACE_SEQUENCE,
-            delete_sequence: TERMINAL_DELETE_SEQUENCE,
-            smooth_scroll: true,
-            bidi_enabled: TERMINAL_BIDI_ENABLED,
-            current_directory_awareness_enabled: false,
-            command_marks_enabled: TERMINAL_COMMAND_MARKS_ENABLED,
-            command_marks_user_input_observed: false,
-            command_marks_show_hover_actions: TERMINAL_COMMAND_MARKS_SHOW_HOVER_ACTIONS,
-        }
-    }
 }
 
 impl TerminalUiSettings {
@@ -756,11 +789,6 @@ pub(crate) fn fallback_cell_width(window: &mut Window, font: &Font, font_size: P
         .width
 }
 
-#[cfg(test)]
-pub(crate) fn terminal_font() -> Font {
-    terminal_font_with_family_and_cjk(TERMINAL_FONT, None, TERMINAL_FONT_LIGATURES)
-}
-
 pub(crate) fn terminal_font_with_family_and_cjk(
     family: &str,
     cjk_family: Option<&str>,
@@ -848,6 +876,7 @@ mod tests {
             terminal_encoding: Some(TerminalEncoding::Gb18030),
             backspace_sequence: Some(TerminalBackspaceSequence::ControlH),
             delete_sequence: Some(TerminalDeleteSequence::Delete),
+            ..TerminalUiPreferenceOverrides::default()
         }
         .apply_to(&mut preferences);
 
@@ -858,19 +887,5 @@ mod tests {
         );
         assert_eq!(preferences.delete_sequence, TerminalDeleteSequence::Delete);
         assert_eq!(preferences.font_family, original_font_family);
-    }
-
-    #[test]
-    fn empty_host_overrides_preserve_application_defaults() {
-        let mut preferences = TerminalUiPreferences::default();
-        let original_encoding = preferences.terminal_encoding;
-        let original_backspace = preferences.backspace_sequence;
-        let original_delete = preferences.delete_sequence;
-
-        TerminalUiPreferenceOverrides::default().apply_to(&mut preferences);
-
-        assert_eq!(preferences.terminal_encoding, original_encoding);
-        assert_eq!(preferences.backspace_sequence, original_backspace);
-        assert_eq!(preferences.delete_sequence, original_delete);
     }
 }

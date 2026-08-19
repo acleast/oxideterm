@@ -37,7 +37,8 @@ use crate::workspace::{
 use gpui::Div;
 use oxideterm_connections::{
     ConnectionTerminalBackspaceSequence, ConnectionTerminalDeleteSequence,
-    ConnectionTerminalEncoding, ConnectionX11ForwardingMode, SavedUpstreamProxyProtocol,
+    ConnectionTerminalEncoding, ConnectionX11ForwardingMode, MoshIpFamily, MoshPredictionMode,
+    SavedUpstreamProxyProtocol,
 };
 use oxideterm_gpui_settings_view::{
     terminal_backspace_sequence_label, terminal_delete_sequence_label, terminal_encoding_label,
@@ -67,13 +68,13 @@ mod field_controls;
 mod form_modal;
 mod proxy_chain_view;
 
-use field_controls::{AuthSelectorContext, serial_port_display_label};
+use field_controls::{AuthSelectorContext, ConnectionFormSection, serial_port_display_label};
 
 const TAURI_EDIT_MODAL_WIDTH: f32 = 500.0; // Tauri sm:max-w-[500px]
 const TAURI_EDIT_COLOR_FALLBACK: u32 = 0x22d3ee;
 const TAURI_EDIT_COLOR_FALLBACK_TEXT: &str = "#22d3ee";
-const TAURI_PROMPT_ERROR_ALPHA: u32 = 0x1a; // Tailwind red-500/10
-const TAURI_PROMPT_ERROR_BORDER_ALPHA: u32 = 0x80; // Tailwind red-500/50
+const TAURI_PROMPT_FEEDBACK_ALPHA: u32 = 0x1a;
+const TAURI_PROMPT_FEEDBACK_BORDER_ALPHA: u32 = 0x80;
 const SECRET_VISIBILITY_BUTTON_SIZE: f32 = 28.0;
 const SECRET_VISIBILITY_BUTTON_OFFSET: f32 = 4.0;
 const SECRET_VISIBILITY_ICON_SIZE: f32 = 16.0;
@@ -87,7 +88,6 @@ const TAURI_PROXY_CHAIN_LINE_WIDTH: f32 = 32.0; // Tauri w-8
 const TAURI_PROXY_CHAIN_CONNECTOR_THICKNESS: f32 = 2.0; // Tauri w-0.5 h-0.5
 const TAURI_PROXY_CHAIN_CARD_PADDING: f32 = 12.0; // Tauri p-3
 const TAURI_SERIAL_GRID_GAP: f32 = 16.0; // Tauri serial grid gap-4
-const TAURI_CONNECTION_PANEL_BG_ALPHA: u32 = 0x66; // Tauri connection panel bg-theme-bg/40
 const NEW_CONNECTION_TYPE_SIDEBAR_WIDTH: f32 = 160.0;
 const CONNECTION_TERMINAL_CONTROL_MIN_WIDTH: f32 = 220.0;
 const CONNECTION_ICON_COLOR_CONTROL_MIN_WIDTH: f32 = 220.0;
@@ -205,9 +205,13 @@ impl WorkspaceApp {
                     | NewConnectionField::Host
                     | NewConnectionField::Username
                     | NewConnectionField::Group
+                    | NewConnectionField::ProxyCommand
                     | NewConnectionField::Color
                     | NewConnectionField::IdentityAgent
                     | NewConnectionField::TelnetProfileName
+                    | NewConnectionField::MoshServerExecutable
+                    | NewConnectionField::MoshUdpHost
+                    | NewConnectionField::MoshLocale
                     | NewConnectionField::JumpHost
                     | NewConnectionField::JumpUsername
                     | NewConnectionField::JumpIdentityAgent

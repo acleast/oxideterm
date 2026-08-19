@@ -1,5 +1,9 @@
 use super::*;
-use crate::workspace::new_connection::{NewConnectionTransport, form_from_remote_desktop_profile};
+use crate::workspace::new_connection::{
+    NewConnectionTransport, form_from_mosh_profile, form_from_remote_desktop_profile,
+    form_from_serial_profile, form_from_telnet_profile, terminal_serial_flow_from_profile,
+    terminal_serial_parity_from_profile,
+};
 use oxideterm_remote_desktop::{
     RemoteDesktopConnectionProfile, RemoteDesktopEndpoint, RemoteDesktopSecret,
 };
@@ -36,6 +40,16 @@ impl WorkspaceApp {
                 })
             })
             .count();
+        let mosh_count = self
+            .connection_store
+            .mosh_profiles()
+            .iter()
+            .filter(|profile| {
+                profile.group.as_deref().is_some_and(|candidate| {
+                    candidate == group || candidate.starts_with(&format!("{group}/"))
+                })
+            })
+            .count();
         let remote_desktop_count = self
             .connection_store
             .remote_desktop_profiles()
@@ -46,7 +60,7 @@ impl WorkspaceApp {
                 })
             })
             .count();
-        connection_count + serial_count + telnet_count + remote_desktop_count
+        connection_count + serial_count + telnet_count + mosh_count + remote_desktop_count
     }
 
     pub(super) fn session_group_tree(&self) -> (Vec<String>, HashMap<String, Vec<String>>) {
@@ -65,6 +79,11 @@ impl WorkspaceApp {
             }
         }
         for profile in self.connection_store.telnet_profiles() {
+            if let Some(group) = profile.group.as_deref() {
+                add_group_path_segments(group, &mut paths);
+            }
+        }
+        for profile in self.connection_store.mosh_profiles() {
             if let Some(group) = profile.group.as_deref() {
                 add_group_path_segments(group, &mut paths);
             }
@@ -584,6 +603,21 @@ impl WorkspaceApp {
         });
     }
 
+    pub(super) fn request_delete_mosh_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(profile) = self.connection_store.get_mosh_profile(id) else {
+            return;
+        };
+        let confirm = SessionManagerDeleteConfirm::MoshProfile {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+        };
+        self.session_manager.update(cx, |session_manager, cx| {
+            close_session_menu_state(session_manager);
+            session_manager.delete_confirm = Some(confirm);
+            cx.notify();
+        });
+    }
+
     pub(super) fn request_delete_remote_desktop_profile(
         &mut self,
         id: &str,
@@ -658,6 +692,9 @@ impl WorkspaceApp {
             SessionManagerDeleteConfirm::TelnetProfile { id, .. } => {
                 self.delete_telnet_profile(&id, cx)
             }
+            SessionManagerDeleteConfirm::MoshProfile { id, .. } => {
+                self.delete_mosh_profile(&id, cx)
+            }
             SessionManagerDeleteConfirm::RemoteDesktopProfile { id, .. } => {
                 self.delete_remote_desktop_profile(&id, cx)
             }
@@ -684,6 +721,11 @@ impl WorkspaceApp {
             ),
         };
         self.session_manager.update(cx, |session_manager, cx| {
+            if changed {
+                session_manager
+                    .selected_items
+                    .remove(&SessionManagerSelectionTarget::Serial(id.to_string()));
+            }
             session_manager.set_status(Some(status), cx)
         });
         if changed {
@@ -692,19 +734,60 @@ impl WorkspaceApp {
     }
 
     pub(super) fn delete_telnet_profile(&mut self, id: &str, cx: &mut Context<Self>) {
-        let status = match self.connection_store.delete_telnet_profile(id) {
-            Ok(true) => self.i18n.t("sessionManager.telnet_profiles.delete"),
-            Ok(false) => self.i18n.t("sessionManager.telnet_profiles.delete_failed"),
-            Err(error) => {
+        let (status, deleted) = match self.connection_store.delete_telnet_profile(id) {
+            Ok(true) => (self.i18n.t("sessionManager.telnet_profiles.delete"), true),
+            Ok(false) => (
+                self.i18n.t("sessionManager.telnet_profiles.delete_failed"),
+                false,
+            ),
+            Err(error) => (
                 format!(
                     "{}: {error}",
                     self.i18n.t("sessionManager.telnet_profiles.delete_failed")
-                )
-            }
+                ),
+                false,
+            ),
         };
         self.session_manager.update(cx, |session_manager, cx| {
+            if deleted {
+                session_manager
+                    .selected_items
+                    .remove(&SessionManagerSelectionTarget::Telnet(id.to_string()));
+            }
             session_manager.set_status(Some(status), cx)
         });
+        if deleted {
+            // Telnet profiles participate in the same Cloud Sync snapshot as other saved sessions.
+            self.queue_cloud_sync_dirty_refresh(cx);
+        }
+    }
+
+    pub(super) fn delete_mosh_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        let (status, changed) = match self.connection_store.delete_mosh_profile(id) {
+            Ok(true) => (self.i18n.t("sessionManager.mosh_profiles.delete"), true),
+            Ok(false) => (
+                self.i18n.t("sessionManager.mosh_profiles.delete_failed"),
+                false,
+            ),
+            Err(error) => (
+                format!(
+                    "{}: {error}",
+                    self.i18n.t("sessionManager.mosh_profiles.delete_failed")
+                ),
+                false,
+            ),
+        };
+        self.session_manager.update(cx, |session_manager, cx| {
+            if changed {
+                session_manager
+                    .selected_items
+                    .remove(&SessionManagerSelectionTarget::Mosh(id.to_string()));
+            }
+            session_manager.set_status(Some(status), cx)
+        });
+        if changed {
+            self.queue_cloud_sync_dirty_refresh(cx);
+        }
     }
 
     pub(super) fn delete_remote_desktop_profile(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -780,6 +863,29 @@ impl WorkspaceApp {
         }
     }
 
+    pub(super) fn open_saved_serial_profile_editor(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(saved) = self
+            .connection_store
+            .serial_profiles()
+            .iter()
+            .find(|profile| profile.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        self.open_new_connection_form(window, cx);
+        let form = form_from_serial_profile(&saved, self.i18n.t("ssh.form.ungrouped"));
+        self.update_connection_form_state(cx, |state| state.replace_with_new_form(form));
+        // Refresh discovery without replacing the persisted port selected by the editor.
+        self.refresh_serial_ports(cx);
+        cx.notify();
+    }
+
     pub(in crate::workspace) fn open_saved_telnet_profile(
         &mut self,
         id: &str,
@@ -800,7 +906,9 @@ impl WorkspaceApp {
             port: profile.port,
         };
         match self.create_telnet_terminal_tab(config, profile.terminal, window, cx) {
-            Ok(_) => {
+            Ok(session_id) => {
+                self.telnet_terminal_profile_ids
+                    .insert(session_id, profile.id.clone());
                 let _ = self.connection_store.mark_telnet_profile_used(id);
             }
             Err(error) => {
@@ -813,6 +921,27 @@ impl WorkspaceApp {
                 });
             }
         }
+    }
+
+    pub(super) fn open_saved_telnet_profile_editor(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(saved) = self
+            .connection_store
+            .telnet_profiles()
+            .iter()
+            .find(|profile| profile.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        self.open_new_connection_form(window, cx);
+        let form = form_from_telnet_profile(&saved, self.i18n.t("ssh.form.ungrouped"));
+        self.update_connection_form_state(cx, |state| state.replace_with_new_form(form));
+        cx.notify();
     }
 
     pub(in crate::workspace) fn open_saved_remote_desktop_profile(
@@ -862,6 +991,7 @@ impl WorkspaceApp {
                     form.username = saved.username.unwrap_or_default();
                     form.group = saved.group.unwrap_or_default();
                     form.remote_desktop_session_options = saved.session_options;
+                    form.remote_desktop_ssh_gateway_connection_id = saved.ssh_gateway_connection_id;
                     form.error = Some(password_required);
                     form.focused_field = NewConnectionField::Password;
                 }
@@ -873,13 +1003,20 @@ impl WorkspaceApp {
             label: saved.name,
             protocol: saved.protocol,
             endpoint: RemoteDesktopEndpoint::new(saved.host, saved.port),
+            transport_endpoint: None,
             username: saved.username,
             domain: saved.domain,
             credential_ref: saved.credential_ref,
             read_only: saved.read_only,
             session_options: saved.session_options,
         };
-        self.open_remote_desktop_connection_tab(profile, password, window, cx);
+        self.open_remote_desktop_connection_with_gateway(
+            profile,
+            password,
+            saved.ssh_gateway_connection_id,
+            window,
+            cx,
+        );
         let _ = self.connection_store.mark_remote_desktop_profile_used(id);
         self.queue_cloud_sync_dirty_refresh(cx);
     }
@@ -899,6 +1036,21 @@ impl WorkspaceApp {
         };
         self.open_new_connection_form(window, cx);
         let form = form_from_remote_desktop_profile(&saved, self.i18n.t("ssh.form.ungrouped"));
+        self.update_connection_form_state(cx, |state| state.replace_with_new_form(form));
+        cx.notify();
+    }
+
+    pub(in crate::workspace) fn open_saved_mosh_profile_editor(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(saved) = self.connection_store.get_mosh_profile(id).cloned() else {
+            return;
+        };
+        self.open_new_connection_form(window, cx);
+        let form = form_from_mosh_profile(&saved, self.i18n.t("ssh.form.ungrouped"));
         self.update_connection_form_state(cx, |state| state.replace_with_new_form(form));
         cx.notify();
     }
@@ -926,6 +1078,33 @@ impl WorkspaceApp {
                             return;
                         }
                         self.release_ide_runtime_for_saved_connection(&id, cx);
+                        deleted += 1;
+                    }
+                }
+                SessionManagerSelectionTarget::Serial(id) => {
+                    if self
+                        .connection_store
+                        .delete_serial_profile(&id)
+                        .unwrap_or(false)
+                    {
+                        deleted += 1;
+                    }
+                }
+                SessionManagerSelectionTarget::Telnet(id) => {
+                    if self
+                        .connection_store
+                        .delete_telnet_profile(&id)
+                        .unwrap_or(false)
+                    {
+                        deleted += 1;
+                    }
+                }
+                SessionManagerSelectionTarget::Mosh(id) => {
+                    if self
+                        .connection_store
+                        .delete_mosh_profile(&id)
+                        .unwrap_or(false)
+                    {
                         deleted += 1;
                     }
                 }
@@ -1030,15 +1209,24 @@ impl WorkspaceApp {
             .cloned()
             .collect::<Vec<_>>();
         let mut connection_ids = Vec::new();
+        let mut serial_profile_ids = Vec::new();
+        let mut telnet_profile_ids = Vec::new();
+        let mut mosh_profile_ids = Vec::new();
         let mut remote_desktop_ids = Vec::new();
         for target in targets {
             match target {
                 SessionManagerSelectionTarget::Connection(id) => connection_ids.push(id),
+                SessionManagerSelectionTarget::Serial(id) => serial_profile_ids.push(id),
+                SessionManagerSelectionTarget::Telnet(id) => telnet_profile_ids.push(id),
+                SessionManagerSelectionTarget::Mosh(id) => mosh_profile_ids.push(id),
                 SessionManagerSelectionTarget::RemoteDesktop(id) => remote_desktop_ids.push(id),
             }
         }
         match self.connection_store.move_session_assets_to_group(
             &connection_ids,
+            &serial_profile_ids,
+            &telnet_profile_ids,
+            &mosh_profile_ids,
             &remote_desktop_ids,
             group,
         ) {

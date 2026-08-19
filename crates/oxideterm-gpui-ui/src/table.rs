@@ -35,18 +35,6 @@ impl TauriTableMetrics {
     }
 }
 
-impl Default for TauriTableMetrics {
-    fn default() -> Self {
-        Self {
-            header_min_height: 35.0,
-            row_min_height: 36.0,
-            padding_x: 8.0,
-            padding_y: 6.0,
-            header_text_size: 12.0,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TauriTableCellStyle {
     Primary,
@@ -182,39 +170,4 @@ pub fn tauri_table_sort_header(
         .hover(move |cell| cell.text_color(rgb(tokens.ui.text)))
         .child(div().truncate().child(label.into()))
         .child(icon)
-}
-
-#[cfg(test)]
-mod tests {
-    use oxideterm_theme::{UiDensityProfile, default_tokens};
-
-    use super::*;
-
-    #[test]
-    fn table_metrics_follow_theme_density() {
-        let comfortable = default_tokens();
-        let mut compact = comfortable;
-        compact.apply_density(UiDensityProfile::Compact);
-
-        let comfortable_metrics = TauriTableMetrics::from_tokens(&comfortable);
-        let compact_metrics = TauriTableMetrics::from_tokens(&compact);
-
-        assert!(compact_metrics.row_min_height < comfortable_metrics.row_min_height);
-        assert!(compact_metrics.padding_x < comfortable_metrics.padding_x);
-        assert_eq!(
-            compact_metrics.header_text_size,
-            comfortable_metrics.header_text_size
-        );
-    }
-
-    #[test]
-    fn legacy_default_table_metrics_remain_compatible() {
-        let metrics = TauriTableMetrics::default();
-
-        assert_eq!(metrics.header_min_height, 35.0);
-        assert_eq!(metrics.row_min_height, 36.0);
-        assert_eq!(metrics.padding_x, 8.0);
-        assert_eq!(metrics.padding_y, 6.0);
-        assert_eq!(metrics.header_text_size, 12.0);
-    }
 }

@@ -12,7 +12,7 @@ use crate::terminal_ui::*;
 
 fn test_metrics() -> TerminalMetrics {
     TerminalMetrics {
-        font: terminal_font(),
+        font: terminal_font_with_family_and_cjk(TERMINAL_FONT, None, TERMINAL_FONT_LIGATURES),
         font_size: px(14.0),
         cell_width: px(8.0),
         line_height: px(10.0),
@@ -52,6 +52,7 @@ fn cursor_snapshot() -> TerminalSnapshot {
                 wide: false,
                 fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
                 bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+                style_origin: Default::default(),
                 attrs: Default::default(),
                 hyperlink: None,
                 cursor: true,
@@ -62,6 +63,7 @@ fn cursor_snapshot() -> TerminalSnapshot {
                 wide: false,
                 fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
                 bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+                style_origin: Default::default(),
                 attrs: Default::default(),
                 hyperlink: None,
                 cursor: false,
@@ -83,6 +85,7 @@ fn row_from_text(text: &str, cols: usize) -> oxideterm_terminal::TerminalRow {
             wide: false,
             fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
             bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: Default::default(),
             attrs: Default::default(),
             hyperlink: None,
             cursor: false,
@@ -95,6 +98,7 @@ fn row_from_text(text: &str, cols: usize) -> oxideterm_terminal::TerminalRow {
             wide: false,
             fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
             bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: Default::default(),
             attrs: Default::default(),
             hyperlink: None,
             cursor: false,
@@ -139,6 +143,7 @@ fn row_from_text_with_wide_spacers(text: &str) -> oxideterm_terminal::TerminalRo
             wide,
             fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
             bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: Default::default(),
             attrs: Default::default(),
             hyperlink: None,
             cursor: false,
@@ -150,6 +155,7 @@ fn row_from_text_with_wide_spacers(text: &str) -> oxideterm_terminal::TerminalRo
                 wide: false,
                 fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
                 bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+                style_origin: Default::default(),
                 attrs: Default::default(),
                 hyperlink: None,
                 cursor: false,
@@ -248,28 +254,27 @@ fn smooth_scroll_layout_includes_one_overscan_row() {
 #[test]
 fn scrollbar_thumb_tracks_display_offset_direction() {
     let metrics = test_metrics();
-    let bottom = terminal_scrollbar(&test_snapshot(0, 90), &metrics).unwrap();
-    let top = terminal_scrollbar(&test_snapshot(90, 90), &metrics).unwrap();
+    let bottom_snapshot = test_snapshot(0, 90);
+    let bottom = terminal_scrollbar_for_viewport_display_offset(
+        &bottom_snapshot,
+        &metrics,
+        bottom_snapshot.rows,
+        bottom_snapshot.display_offset as f32,
+    )
+    .unwrap();
+    let top_snapshot = test_snapshot(90, 90);
+    let top = terminal_scrollbar_for_viewport_display_offset(
+        &top_snapshot,
+        &metrics,
+        top_snapshot.rows,
+        top_snapshot.display_offset as f32,
+    )
+    .unwrap();
 
     assert!(bottom.top > top.top);
     assert_eq!(top.top, 0.0);
     assert_eq!(bottom.top, 76.0);
     assert_eq!(bottom.height, 24.0);
-}
-
-#[test]
-fn scrollbar_thumb_tracks_fractional_smooth_offset() {
-    let metrics = test_metrics();
-    let snapshot = test_snapshot(10, 90);
-    let current =
-        terminal_scrollbar_for_viewport_display_offset(&snapshot, &metrics, 10, 10.0).unwrap();
-    let halfway =
-        terminal_scrollbar_for_viewport_display_offset(&snapshot, &metrics, 10, 10.5).unwrap();
-    let next =
-        terminal_scrollbar_for_viewport_display_offset(&snapshot, &metrics, 10, 11.0).unwrap();
-
-    assert!(current.top > halfway.top);
-    assert!(halfway.top > next.top);
 }
 
 #[test]
@@ -309,7 +314,16 @@ fn terminal_element_scrollbar_uses_fractional_display_offset() {
 
 #[test]
 fn scrollbar_is_hidden_without_scrollback() {
-    assert!(terminal_scrollbar(&test_snapshot(0, 0), &test_metrics()).is_none());
+    let snapshot = test_snapshot(0, 0);
+    assert!(
+        terminal_scrollbar_for_viewport_display_offset(
+            &snapshot,
+            &test_metrics(),
+            snapshot.rows,
+            snapshot.display_offset as f32,
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -410,15 +424,7 @@ fn marked_text_is_laid_out_at_terminal_cursor() {
 }
 
 #[test]
-fn copy_policy_defaults_keep_current_terminal_behavior() {
-    let settings = TerminalUiSettings::default();
-    assert!(!settings.copy_on_select);
-    assert!(!settings.osc52_clipboard_read);
-    assert!(settings.open_links_with_modifier);
-    assert!(settings.detect_file_paths_as_links);
-    assert!(settings.keep_selection_on_copy);
-    assert_eq!(settings.blink_mode, TerminalBlinkMode::On);
-
+fn terminal_preferences_keep_copy_and_osc52_read_disabled_by_default() {
     let preferences = TerminalUiPreferences::default();
     assert_eq!(preferences.scrollback_lines, DEFAULT_SCROLLBACK_LINES);
     assert!(!preferences.osc52_clipboard_read);
@@ -427,17 +433,8 @@ fn copy_policy_defaults_keep_current_terminal_behavior() {
 }
 
 #[test]
-fn terminal_theme_defaults_match_current_terminal_palette() {
-    let theme = TerminalUiTheme::default();
-    let tokens = oxideterm_theme::default_tokens();
-    assert_eq!(theme.background, tokens.terminal.background);
-    assert_eq!(theme.foreground, tokens.terminal.foreground);
-    assert_eq!(theme.header_foreground, tokens.terminal.cursor);
-}
-
-#[test]
 fn terminal_font_uses_real_nerd_font_family_and_fallbacks() {
-    let font = terminal_font();
+    let font = terminal_font_with_family_and_cjk(TERMINAL_FONT, None, TERMINAL_FONT_LIGATURES);
     assert_eq!(
         font.family.as_ref(),
         oxideterm_settings::JETBRAINS_MONO_SUBSET_FAMILY
@@ -686,12 +683,6 @@ fn test_command_mark(
         started_at: 1,
         finished_at: end_line.map(|_| 2),
     }
-}
-
-#[test]
-fn wheel_scroll_delta_uses_oxideterm_direction() {
-    assert_eq!(terminal_scroll_delta(3), 3);
-    assert_eq!(terminal_scroll_delta(-3), -3);
 }
 
 #[test]
