@@ -163,13 +163,13 @@ impl WorkspaceApp {
     pub(in crate::workspace) fn effective_sidebar_panel_section(&self) -> SidebarSection {
         match self.active_sidebar_section {
             SidebarSection::Sessions
+            | SidebarSection::Connections
             | SidebarSection::Forwards
             | SidebarSection::Extensions
             | SidebarSection::CloudSync => self.active_sidebar_section,
             // Tauri separates activity-bar tab buttons from sidebar sections.
             // Keep tab-only entries from replacing the Sessions sidebar body.
-            SidebarSection::Connections
-            | SidebarSection::Terminal
+            SidebarSection::Terminal
             | SidebarSection::Runtime
             | SidebarSection::Network
             | SidebarSection::Assistant
@@ -188,6 +188,7 @@ mod activity;
 mod ai;
 mod helpers;
 mod region;
+mod saved;
 mod sessions;
 mod state;
 mod titlebar;

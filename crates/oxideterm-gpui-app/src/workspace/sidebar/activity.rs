@@ -358,20 +358,12 @@ impl WorkspaceApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {
-                    if section == SidebarSection::Sessions {
+                    if matches!(
+                        section,
+                        SidebarSection::Sessions | SidebarSection::Connections
+                    ) {
                         this.active_surface = ActiveSurface::Terminal;
-                        // Activity-bar panel entries are navigation controls:
-                        // a newly connected terminal selects Sessions, so
-                        // treating the next Sessions click as a toggle made
-                        // the panel flash then close.
-                        this.set_sidebar_section(section, cx);
-                    } else if section == SidebarSection::Connections {
-                        // Session Manager is a full workspace tab, unlike the
-                        // compact Active Sessions navigator in the sidebar.
-                        this.open_session_manager_tab(window, cx);
-                        this.set_sidebar_collapsed_with_motion(true, cx);
-                        this.persist_sidebar_settings(cx);
-                        cx.notify();
+                        this.toggle_sidebar_section(section, cx);
                     } else if section == SidebarSection::Settings {
                         this.open_settings(window, cx);
                     } else if section == SidebarSection::Terminal {

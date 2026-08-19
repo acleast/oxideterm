@@ -44,6 +44,14 @@ fn should_collapse_context_sidebar_panel(
     sidebar_visible && active_panel == requested_panel
 }
 
+pub(super) fn should_collapse_primary_sidebar_section(
+    sidebar_collapsed: bool,
+    visible_section: SidebarSection,
+    requested_section: SidebarSection,
+) -> bool {
+    !sidebar_collapsed && visible_section == requested_section
+}
+
 pub(in crate::workspace) fn context_sidebar_panel_visible(
     sidebar_collapsed: bool,
     zen_mode: bool,
@@ -63,6 +71,22 @@ pub(in crate::workspace) fn context_sidebar_panel_visible(
 }
 
 impl WorkspaceApp {
+    pub(in crate::workspace) fn toggle_sidebar_section(
+        &mut self,
+        section: SidebarSection,
+        cx: &mut Context<Self>,
+    ) {
+        if should_collapse_primary_sidebar_section(
+            self.sidebar_collapsed,
+            self.effective_sidebar_panel_section(),
+            section,
+        ) {
+            self.toggle_sidebar(cx);
+        } else {
+            self.set_sidebar_section(section, cx);
+        }
+    }
+
     pub(in crate::workspace) fn set_sidebar_collapsed_with_motion(
         &mut self,
         collapsed: bool,

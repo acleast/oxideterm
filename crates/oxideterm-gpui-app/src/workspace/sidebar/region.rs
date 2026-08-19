@@ -413,6 +413,7 @@ impl WorkspaceApp {
             })
             .flatten();
         let title_key = match panel_section {
+            SidebarSection::Connections => "sidebar.panels.saved_connections",
             SidebarSection::Forwards => "forwards.table.title",
             SidebarSection::Extensions => "sidebar.panels.plugins",
             SidebarSection::CloudSync => "plugin.cloud_sync.panel_title",
@@ -548,6 +549,9 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let panel_section = self.effective_sidebar_panel_section();
+        if panel_section == SidebarSection::Connections {
+            return self.render_saved_connections_sidebar_content(cx);
+        }
         if panel_section == SidebarSection::Sessions {
             let sessions = self.render_active_sessions_sidebar_content(cx);
             if self.embedded_sftp_node_id.is_none() {
